@@ -1,0 +1,12 @@
+fastapi
+uvicorn
+sqlalchemy
+playwright
+requests
+beautifulsoup4
+python-multipart
+libsql-client
+sqlalchemy-libsql
+# Optional but recommended for dev
+pytest
+httpx
