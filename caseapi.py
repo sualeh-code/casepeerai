@@ -241,8 +241,11 @@ def playwright_login() -> tuple[Optional[str], Optional[str], Optional[str]]:
 
     try:
         with sync_playwright() as p:
-            # Launch browser in non-headless mode for debugging
-            browser: Browser = p.chromium.launch(headless=False)
+            # Check for headless mode from environment variable
+            is_headless = os.getenv("PLAYWRIGHT_HEADLESS", "true").lower() == "true"
+            logger.info(f"Launching browser (headless={is_headless})...")
+            
+            browser: Browser = p.chromium.launch(headless=is_headless)
             context = browser.new_context(
                 user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36'
             )
