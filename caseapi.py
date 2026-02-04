@@ -16,13 +16,13 @@ import json
 from typing import Optional, Dict, Any
 from contextlib import asynccontextmanager
 from urllib.parse import urlparse
-from fastapi import FastAPI, HTTPException, Request, UploadFile, Form
+from fastapi import FastAPI, HTTPException, Request, UploadFile, Form, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from playwright.sync_api import sync_playwright, Browser, Page
 import requests
 from bs4 import BeautifulSoup
 from sqlalchemy.orm import Session
-from fastapi import Depends
 import models, schemas, crud
 from database import SessionLocal, engine, get_db
 
@@ -134,6 +134,15 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Mount Dashboard static files if the dist folder exists
+# This handles /dashboard and its assets
+dashboard_dist_path = os.path.join(os.getcwd(), "dashboard", "dist")
+if os.path.exists(dashboard_dist_path):
+    logger.info(f"Mounting dashboard from: {dashboard_dist_path}")
+    app.mount("/dashboard", StaticFiles(directory=dashboard_dist_path, html=True), name="dashboard")
+else:
+    logger.warning(f"Dashboard dist folder not found at {dashboard_dist_path}. Dashboard will not be available.")
 
 
 # ============================================================================
@@ -1371,13 +1380,35 @@ async def proxy_request(request: Request, path: str):
     Raises:
         HTTPException: On authentication or API errors
     """
+    # Reserved paths that should NOT be proxied
+    # "dashboard" is handled by the StaticFiles mount if path starts with dashboard/
+    # but the catch-all might still see it if not careful.
+    reserved_prefixes = ["dashboard", "api", "docs", "redoc", "openapi.json", "static"]
+    
+    # Check if the path starts with any reserved prefix
+    is_reserved = False
+    for reserved in reserved_prefixes:
+        if path.startswith(reserved):
+            is_reserved = True
+            break
+            
     # Health check for root path
     if not path or path == "":
         return {
             "status": "online",
             "service": "CasePeer API Proxy",
-            "authenticated": ACCESS_TOKEN is not None
+            "authenticated": ACCESS_TOKEN is not None,
+            "dashboard_available": os.path.exists(dashboard_dist_path)
         }
+
+    # If it's a reserved path and reached here, it means it wasn't caught by 
+    # specific routes or the static mount.
+    if is_reserved:
+        # Special case: If path is exactly "dashboard", redirect to "dashboard/" for the static mount
+        if path == "dashboard":
+             from fastapi.responses import RedirectResponse
+             return RedirectResponse(url="/dashboard/")
+        raise HTTPException(status_code=404, detail=f"Path '{path}' is not a valid CasePeer endpoint.")
 
     # Construct endpoint path
     endpoint = f"/{path}" if not path.startswith("/") else path
