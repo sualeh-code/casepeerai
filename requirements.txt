@@ -5,8 +5,8 @@ playwright
 requests
 beautifulsoup4
 python-multipart
-libsql-client
-sqlalchemy-libsql
+libsql-client>=0.6.0
+sqlalchemy-libsql>=0.2.0
 # Optional but recommended for dev
 pytest
 httpx
