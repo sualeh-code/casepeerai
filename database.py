@@ -7,27 +7,38 @@ import os
 # Database configuration
 # For Turso: libsql://...
 # For SQLite: sqlite:///./casepeer.db
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./casepeer.db")
-AUTH_TOKEN = os.getenv("TURSO_AUTH_TOKEN", "")
+# Database configuration
+# Enforce Turso/LibSQL usage
+DATABASE_URL = os.getenv("DATABASE_URL")
+AUTH_TOKEN = os.getenv("TURSO_AUTH_TOKEN")
 
-if DATABASE_URL.startswith("libsql://") or DATABASE_URL.startswith("https://"):
+if not DATABASE_URL:
+    raise ValueError("CRITICAL: DATABASE_URL environment variable is not set. You must configure a Turso/LibSQL database.")
+
+if "sqlite:///" in DATABASE_URL and "libsql" not in DATABASE_URL:
+     print("WARNING: You are configured to use a local SQLite file. This is NOT recommended for production/Render as data will be lost.")
+     SQLALCHEMY_DATABASE_URL = DATABASE_URL
+elif DATABASE_URL.startswith("libsql://") or DATABASE_URL.startswith("https://"):
     # Clear the prefix to get the base URL
     base_url = DATABASE_URL
     if base_url.startswith("libsql://"):
         base_url = base_url.replace("libsql://", "https://")
     
+    if not AUTH_TOKEN:
+         raise ValueError("CRITICAL: Turso URL provided but TURSO_AUTH_TOKEN is missing. Please set this environment variable.")
+
     # Using the 'url' parameter is often more reliable for Hrana redirects
-    if AUTH_TOKEN:
-        SQLALCHEMY_DATABASE_URL = f"sqlite+libsql://?url={base_url}&auth_token={AUTH_TOKEN}"
-    else:
-        SQLALCHEMY_DATABASE_URL = f"sqlite+libsql://?url={base_url}"
+    SQLALCHEMY_DATABASE_URL = f"sqlite+libsql://?url={base_url}&auth_token={AUTH_TOKEN}"
 else:
+    # Fallback for other postgres strings etc if user changes mind later
     SQLALCHEMY_DATABASE_URL = DATABASE_URL
+
+print(f"DEBUG: Connecting to Database: {SQLALCHEMY_DATABASE_URL.split('&auth_token')[0]}...")
 
 engine = create_engine(
     SQLALCHEMY_DATABASE_URL, 
     # The libsql dialect handles its own threading, but we keep this safe
-    connect_args={"check_same_thread": False} if not SQLALCHEMY_DATABASE_URL.startswith("sqlite+libsql") else {}
+    connect_args={"check_same_thread": False} if "sqlite" in SQLALCHEMY_DATABASE_URL else {}
 )
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 

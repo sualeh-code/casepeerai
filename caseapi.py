@@ -50,13 +50,13 @@ def get_config(db: Session, key: str, default: str = None) -> str:
 def seed_settings(db: Session):
     """Seed default settings if they don't exist."""
     defaults = {
-        "casepeer_username": DEFAULT_CASEPEER_USERNAME,
-        "casepeer_password": DEFAULT_CASEPEER_PASSWORD,
-        "casepeer_base_url": DEFAULT_CASEPEER_BASE_URL,
-        "gmail_email": DEFAULT_GMAIL_EMAIL,
-        "gmail_app_password": DEFAULT_GMAIL_APP_PASSWORD,
-        "otp_retry_count": "10",
-        "otp_retry_delay": "5",
+        "casepeer_username": os.getenv("CASEPEER_USERNAME", DEFAULT_CASEPEER_USERNAME),
+        "casepeer_password": os.getenv("CASEPEER_PASSWORD", DEFAULT_CASEPEER_PASSWORD),
+        "casepeer_base_url": os.getenv("CASEPEER_BASE_URL", DEFAULT_CASEPEER_BASE_URL),
+        "gmail_email": os.getenv("GMAIL_EMAIL", DEFAULT_GMAIL_EMAIL),
+        "gmail_app_password": os.getenv("GMAIL_APP_PASSWORD", DEFAULT_GMAIL_APP_PASSWORD),
+        "otp_retry_count": os.getenv("OTP_RETRY_COUNT", "10"),
+        "otp_retry_delay": os.getenv("OTP_RETRY_DELAY", "5"),
     }
     
     for key, value in defaults.items():
@@ -96,6 +96,11 @@ async def lifespan(app: FastAPI):
     with SessionLocal() as db:
         seed_settings(db)
 
+    # Debug: Check existing tables
+    from sqlalchemy import inspect
+    inspector = inspect(engine)
+    logger.info(f"Existing tables: {inspector.get_table_names()}")
+    
     logger.info("Performing authentication on startup...")
 
     # First attempt to restore from database
