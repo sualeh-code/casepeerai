@@ -17,7 +17,7 @@ const StatsOverview = () => {
     useEffect(() => {
         const fetchStats = async () => {
             try {
-                const response = await fetch('/api/cases/');
+                const response = await fetch('/api/cases');
                 if (response.ok) {
                     const data = await response.json();
 
