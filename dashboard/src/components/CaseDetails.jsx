@@ -17,14 +17,14 @@ const CaseDetails = ({ caseId, onBack }) => {
             setLoading(true);
             try {
                 // Fetch basic case info
-                const caseRes = await fetch(`http://localhost:8000/api/cases/${caseId}`);
+                const caseRes = await fetch(`/api/cases/${caseId}`);
                 if (caseRes.ok) setCaseData(await caseRes.json());
 
                 // Fetch related data
                 const [negRes, classRes, remRes] = await Promise.all([
-                    fetch(`http://localhost:8000/api/negotiations?case_id=${caseId}`),
-                    fetch(`http://localhost:8000/api/classifications?case_id=${caseId}`),
-                    fetch(`http://localhost:8000/api/reminders?case_id=${caseId}`)
+                    fetch(`/api/negotiations?case_id=${caseId}`),
+                    fetch(`/api/classifications?case_id=${caseId}`),
+                    fetch(`/api/reminders?case_id=${caseId}`)
                 ]);
 
                 if (negRes.ok) setNegotiations(await negRes.json());

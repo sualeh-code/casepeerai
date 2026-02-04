@@ -11,7 +11,7 @@ const SystemLogs = () => {
 
     const fetchLogs = async () => {
         try {
-            const response = await fetch('http://localhost:8000/api/logs?limit=500');
+            const response = await fetch('/api/logs?limit=500');
             if (response.ok) {
                 const data = await response.json();
                 setLogs(data.logs);

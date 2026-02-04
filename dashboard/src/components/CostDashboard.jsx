@@ -13,7 +13,7 @@ const CostDashboard = () => {
         setLoading(true);
         try {
             // Internal Token Usage
-            const usageRes = await fetch('http://localhost:8000/api/token_usage');
+            const usageRes = await fetch('/api/token_usage');
             if (usageRes.ok) {
                 const data = await usageRes.json();
                 setTokenUsage(data.map(item => ({
@@ -23,13 +23,13 @@ const CostDashboard = () => {
             }
 
             // OpenAI Stats
-            const openaiRes = await fetch('http://localhost:8000/api/integrations/openai/usage');
+            const openaiRes = await fetch('/api/integrations/openai/usage');
             if (openaiRes.ok) {
                 setOpenAiStats(await openaiRes.json());
             }
 
             // n8n Stats
-            const n8nRes = await fetch('http://localhost:8000/api/integrations/n8n/executions');
+            const n8nRes = await fetch('/api/integrations/n8n/executions');
             if (n8nRes.ok) {
                 setN8nStats(await n8nRes.json());
             }

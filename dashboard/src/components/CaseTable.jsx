@@ -20,7 +20,7 @@ const CaseTable = ({ onCaseSelect }) => {
 
     const fetchCases = async () => {
         try {
-            const response = await fetch('http://localhost:8000/api/cases');
+            const response = await fetch('/api/cases');
             if (response.ok) {
                 const data = await response.json();
                 setCases(data);

@@ -11,7 +11,7 @@ const SettingsForm = () => {
 
     const fetchSettings = async () => {
         try {
-            const response = await fetch('http://localhost:8000/api/settings/');
+            const response = await fetch('/api/settings/');
             if (response.ok) {
                 const data = await response.json();
                 // Convert array to object for easier form handling
@@ -32,7 +32,7 @@ const SettingsForm = () => {
 
     const handleSave = async (key, value) => {
         try {
-            const response = await fetch('http://localhost:8000/api/settings/', {
+            const response = await fetch('/api/settings/', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ key, value }),

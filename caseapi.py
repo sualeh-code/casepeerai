@@ -27,7 +27,8 @@ import models, schemas, crud
 from database import SessionLocal, engine, get_db
 
 # Create database tables
-models.Base.metadata.create_all(bind=engine)
+# Create database tables (Done in lifespan now for better logging)
+# models.Base.metadata.create_all(bind=engine)
 
 # Configure logging
 logging.basicConfig(
@@ -91,31 +92,60 @@ async def lifespan(app: FastAPI):
     """Handle application startup and shutdown events."""
     # Startup
     logger.info("Starting CasePeer API Wrapper...")
-    
-    # Seed settings
-    with SessionLocal() as db:
-        seed_settings(db)
 
-    # Debug: Check existing tables
-    from sqlalchemy import inspect
-    inspector = inspect(engine)
-    logger.info(f"Existing tables: {inspector.get_table_names()}")
-    
+    try:
+        # 1. Verify Database Connection
+        logger.info("Verifying database connection...")
+        try:
+             with engine.connect() as connection:
+                 logger.info("✓ Database connection successful")
+        except Exception as e:
+             logger.error(f"Failed to connect to database: {e}")
+             raise e
+
+        # 2. Ensure Schema Exists
+        logger.info("Ensuring database schema exists...")
+        models.Base.metadata.create_all(bind=engine)
+        
+        # 3. Debug: Check existing tables
+        from sqlalchemy import inspect
+        inspector = inspect(engine)
+        tables = inspector.get_table_names()
+        logger.info(f"Existing tables in DB: {tables}")
+        
+        if "app_settings" not in tables:
+            logger.error("CRITICAL: 'app_settings' table missing after create_all!")
+        else:
+            logger.info("✓ app_settings table found")
+
+        # 4. Seed settings
+        with SessionLocal() as db:
+            seed_settings(db)
+
+    except Exception as e:
+        logger.error(f"Startup Database/Schema Error: {e}", exc_info=True)
+        # We don't raise here to allow the app to start and show logs, 
+        # but functionality will be broken.
+
     logger.info("Performing authentication on startup...")
 
     # First attempt to restore from database
-    auth_success = await try_restore_session()
-    
-    if not auth_success:
-        logger.info("No valid session in database, performing fresh login...")
-        # Authenticate immediately on startup to ensure cookies are ready
-        auth_success = await refresh_authentication()
+    try:
+        auth_success = await try_restore_session()
+        
+        if not auth_success:
+            logger.info("No valid session in database, performing fresh login...")
+            # Authenticate immediately on startup to ensure cookies are ready
+            auth_success = await refresh_authentication()
 
-    if auth_success:
-        logger.info("✓ Startup authentication successful - proxy ready to use")
-    else:
-        logger.error("✗ Startup authentication failed - requests may fail")
-        logger.error("  The proxy will attempt to re-authenticate on first 401/403 error")
+        if auth_success:
+            logger.info("✓ Startup authentication successful - proxy ready to use")
+        else:
+            logger.error("✗ Startup authentication failed - requests may fail")
+            logger.error("  The proxy will attempt to re-authenticate on first 401/403 error")
+            
+    except Exception as e:
+        logger.error(f"Startup Authentication Error: {e}", exc_info=True)
 
     yield
 
