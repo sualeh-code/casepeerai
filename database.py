@@ -11,12 +11,13 @@ DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./casepeer.db")
 AUTH_TOKEN = os.getenv("TURSO_AUTH_TOKEN", "")
 
 if DATABASE_URL.startswith("libsql://"):
-    # Use https:// for the base URL to avoid WebSocket handshake issues on some systems
-    clean_url = DATABASE_URL.replace("libsql://", "https://")
+    # Extract the host and avoid double protocol (e.g., sqlite+libsql://https://...)
+    # SQLAlchemy expects: sqlite+libsql://[host]?auth_token=[token]
+    host = DATABASE_URL.replace("libsql://", "")
     if AUTH_TOKEN:
-        SQLALCHEMY_DATABASE_URL = f"sqlite+libsql://{clean_url}?auth_token={AUTH_TOKEN}"
+        SQLALCHEMY_DATABASE_URL = f"sqlite+libsql://{host}?auth_token={AUTH_TOKEN}"
     else:
-        SQLALCHEMY_DATABASE_URL = f"sqlite+libsql://{clean_url}"
+        SQLALCHEMY_DATABASE_URL = f"sqlite+libsql://{host}"
 else:
     SQLALCHEMY_DATABASE_URL = DATABASE_URL
 
