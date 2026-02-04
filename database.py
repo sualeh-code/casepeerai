@@ -10,10 +10,14 @@ import os
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./casepeer.db")
 AUTH_TOKEN = os.getenv("TURSO_AUTH_TOKEN", "")
 
-if DATABASE_URL.startswith("libsql://"):
-    # Extract the host and avoid double protocol (e.g., sqlite+libsql://https://...)
-    # SQLAlchemy expects: sqlite+libsql://[host]?auth_token=[token]
-    host = DATABASE_URL.replace("libsql://", "")
+if DATABASE_URL.startswith("libsql://") or DATABASE_URL.startswith("https://"):
+    # The driver needs the host part without any protocol prefix
+    # e.g., 'casepeerai-salehai.aws-us-east-2.turso.io'
+    host = DATABASE_URL
+    for prefix in ["libsql://", "https://", "http://"]:
+        if host.startswith(prefix):
+            host = host.replace(prefix, "")
+    
     if AUTH_TOKEN:
         SQLALCHEMY_DATABASE_URL = f"sqlite+libsql://{host}?auth_token={AUTH_TOKEN}"
     else:
