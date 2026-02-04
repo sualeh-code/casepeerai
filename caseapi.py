@@ -43,9 +43,26 @@ logger = logging.getLogger(__name__)
 
 # Helper to get settings with defaults
 def get_config(db: Session, key: str, default: str = None) -> str:
-    setting = crud.get_setting(db, key)
-    if setting:
-        return setting.value
+    """Get a setting from DB, with retry logic and silent fallback."""
+    retries = 3
+    for attempt in range(retries):
+        try:
+            setting = crud.get_setting(db, key)
+            if setting:
+                return setting.value
+            return default
+        except Exception as e:
+            msg = str(e)
+            if "no such table" in msg or "OperationalError" in msg:
+                if attempt < retries - 1:
+                    logger.warning(f"get_config failed (attempt {attempt+1}): {msg}. Retrying...")
+                    time.sleep(1)
+                    continue
+            logger.error(f"get_config critical error: {msg}")
+            # If DB is broken to the point of no tables, we MUST fallback to defaults 
+            # effectively ignoring the DB config, to let startup proceed (if possible).
+            # But authentication needs real credentials from somewhere.
+            return default
     return default
 
 def seed_settings(db: Session):
@@ -61,9 +78,14 @@ def seed_settings(db: Session):
     }
     
     for key, value in defaults.items():
-        if not crud.get_setting(db, key):
-            logger.info(f"Seeding default setting: {key}")
-            crud.set_setting(db, schemas.AppSettingCreate(key=key, value=value, description="Default value"))
+        try:
+            if not crud.get_setting(db, key):
+                logger.info(f"Seeding default setting: {key}")
+                crud.set_setting(db, schemas.AppSettingCreate(key=key, value=value, description="Default value"))
+        except Exception as e:
+             logger.error(f"Failed to seed setting {key}: {e}")
+    
+    logger.info("✓ Settings seeding completed")
 
 # Global session and token storage
 # TODO: Move to environment variables or secure storage in production
