@@ -127,39 +127,63 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("Starting CasePeer API Wrapper...")
 
-    try:
-        # 1. Verify Database Connection
-        logger.info("Verifying database connection...")
+    # Robust startup with retry logic - app MUST connect to database
+    MAX_RETRIES = 10
+    RETRY_DELAY = 3  # seconds
+    
+    db_ready = False
+    for attempt in range(1, MAX_RETRIES + 1):
         try:
-             with engine.connect() as connection:
-                 logger.info("✓ Database connection successful")
-        except Exception as e:
-             logger.error(f"Failed to connect to database: {e}")
-             raise e
-
-        # 2. Ensure Schema Exists
-        logger.info("Ensuring database schema exists...")
-        models.Base.metadata.create_all(bind=engine)
-        
-        # 3. Debug: Check existing tables
-        from sqlalchemy import inspect
-        inspector = inspect(engine)
-        tables = inspector.get_table_names()
-        logger.info(f"Existing tables in DB: {tables}")
-        
-        if "app_settings" not in tables:
-            logger.error("CRITICAL: 'app_settings' table missing after create_all!")
-        else:
+            logger.info(f"Database connection attempt {attempt}/{MAX_RETRIES}...")
+            
+            # 1. Verify Database Connection
+            with engine.connect() as connection:
+                from sqlalchemy import text
+                connection.execute(text("SELECT 1"))
+                logger.info("✓ Database connection successful")
+            
+            # 2. Ensure Schema Exists
+            logger.info("Ensuring database schema exists...")
+            models.Base.metadata.create_all(bind=engine)
+            
+            # 3. Check tables exist
+            from sqlalchemy import inspect
+            inspector = inspect(engine)
+            tables = inspector.get_table_names()
+            logger.info(f"Existing tables in DB: {tables}")
+            
+            if "app_settings" not in tables:
+                logger.warning(f"app_settings table not found yet, retrying...")
+                time.sleep(RETRY_DELAY)
+                continue
+            
             logger.info("✓ app_settings table found")
-
-        # 4. Seed settings
-        with SessionLocal() as db:
-            seed_settings(db)
-
-    except Exception as e:
-        logger.error(f"Startup Database/Schema Error: {e}", exc_info=True)
-        # We don't raise here to allow the app to start and show logs, 
-        # but functionality will be broken.
+            
+            # 4. Seed and verify settings
+            with SessionLocal() as db:
+                seed_settings(db)
+                
+                # Verify we can actually read settings
+                test_setting = get_config(db, "casepeer_username")
+                if test_setting:
+                    logger.info(f"✓ Settings verified (casepeer_username exists)")
+                    db_ready = True
+                    break
+                else:
+                    logger.warning("Settings not readable yet, retrying...")
+                    
+        except Exception as e:
+            logger.warning(f"Startup attempt {attempt} failed: {e}")
+        
+        if attempt < MAX_RETRIES:
+            logger.info(f"Retrying in {RETRY_DELAY} seconds...")
+            time.sleep(RETRY_DELAY)
+    
+    if not db_ready:
+        logger.error("CRITICAL: Failed to connect to database after all retries!")
+        logger.error("The app will start but functionality will be broken.")
+    else:
+        logger.info("✓ Database fully operational")
 
     logger.info("Performing authentication on startup...")
 
