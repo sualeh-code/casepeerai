@@ -146,10 +146,10 @@ async def lifespan(app: FastAPI):
             logger.info("Ensuring database schema exists...")
             models.Base.metadata.create_all(bind=engine)
             
-            # 3. Check tables exist
-            from sqlalchemy import inspect
-            inspector = inspect(engine)
-            tables = inspector.get_table_names()
+            # 3. Check tables exist using direct SQL (inspector doesn't work with libsql)
+            with engine.connect() as conn:
+                result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"))
+                tables = [row[0] for row in result.fetchall()]
             logger.info(f"Existing tables in DB: {tables}")
             
             if "app_settings" not in tables:
