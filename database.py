@@ -1,45 +1,17 @@
 from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
-
-import os
-from dotenv import load_dotenv
-
-# Load environment variables from .env file if it exists
-load_dotenv()
-
-# Database configuration
-# For Turso: libsql://...
-# For SQLite: sqlite:///./casepeer.db
-# Database configuration
-# Enforce Turso/LibSQL usage
-DATABASE_URL = os.getenv("DATABASE_URL")
-AUTH_TOKEN = os.getenv("TURSO_AUTH_TOKEN")
-
-if not DATABASE_URL:
-    raise ValueError("CRITICAL: DATABASE_URL environment variable is not set. You must configure a Turso/LibSQL database.")
-
-if "sqlite:///" in DATABASE_URL and "libsql" not in DATABASE_URL:
-     print("WARNING: You are configured to use a local SQLite file. This is NOT recommended for production/Render as data will be lost.")
-     SQLALCHEMY_DATABASE_URL = DATABASE_URL
-elif DATABASE_URL.startswith("libsql://") or DATABASE_URL.startswith("https://"):
-    # Clear the prefix to get the base URL
-    base_url = DATABASE_URL
-    if base_url.startswith("libsql://"):
-        base_url = base_url.replace("libsql://", "https://")
-    
-    if not AUTH_TOKEN:
-         raise ValueError("CRITICAL: Turso URL provided but TURSO_AUTH_TOKEN is missing. Please set this environment variable.")
-
-    # Using the 'url' parameter is often more reliable for Hrana redirects
-    SQLALCHEMY_DATABASE_URL = f"sqlite+libsql://?url={base_url}&auth_token={AUTH_TOKEN}"
-else:
-    # Fallback for other postgres strings etc if user changes mind later
-    SQLALCHEMY_DATABASE_URL = DATABASE_URL
-
-print(f"DEBUG: Connecting to Database: {SQLALCHEMY_DATABASE_URL.split('&auth_token')[0]}...")
-
 from sqlalchemy.pool import NullPool
+
+# HARDCODED Turso Database Credentials
+# All other settings (CasePeer, Gmail, etc.) are stored in the app_settings table
+DATABASE_URL = "https://casepeerai-salehai.aws-us-east-2.turso.io"
+AUTH_TOKEN = "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJhIjoicnciLCJpYXQiOjE3NzAyNTAwMzksImlkIjoiY2M5ZTE4NjctMGMwNi00MzcxLWIzZjMtMmM2MTRhOTllMTFlIiwicmlkIjoiYzgxOWZmNjYtNzViNi00NmQzLWJiZjQtMTRmNzMwNWMxOWFiIn0.lgyzL-ITZMts0H_eXBdC1d-UJ4xWDus5qQFTmND_1zZ1oOS2vEjfvUzao2jlYRVATH95hBW664nFS2h2AGkdBw"
+
+# Build SQLAlchemy connection URL for Turso/libsql
+SQLALCHEMY_DATABASE_URL = f"sqlite+libsql://?url={DATABASE_URL}&auth_token={AUTH_TOKEN}"
+
+print(f"DEBUG: Connecting to Database: {DATABASE_URL}...")
 
 engine = create_engine(
     SQLALCHEMY_DATABASE_URL, 
