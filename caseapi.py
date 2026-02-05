@@ -122,77 +122,39 @@ CASEPEER_API_BASE = f"{DEFAULT_CASEPEER_BASE_URL}"
 
 
 # ============================================================================
-# Application Lifespan
-# ============================================================================
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Handle application startup and shutdown events."""
-    # Startup
-    logger.info("Starting CasePeer API Wrapper...")
-
-    # Robust startup with retry logic - app MUST connect to database
-    MAX_RETRIES = 10
-    RETRY_DELAY = 3  # seconds
+    # 1. IMMEDIATE DATABASE INITIALIZATION
+    logger.info("Starting CasePeer API Wrapper - Initializing Database...")
     
-    db_ready = False
-    for attempt in range(1, MAX_RETRIES + 1):
-        try:
-            logger.info(f"Turso HTTP connection attempt {attempt}/{MAX_RETRIES}...")
-            
-            # 1. Verify Database Connection via HTTP
-            if turso.test_connection():
-                logger.info("✓ Turso HTTP connection successful")
-            else:
-                raise Exception("Turso HTTP test failed")
-            
-            # 2. Check tables exist using direct SQL
-            tables = turso.get_tables()
-            logger.info(f"Existing tables in DB: {tables}")
-            
-            # 3. Handle schema if missing (not usually needed for Turso if using migrations, 
-            # but we'll try to ensure core tables exist)
-            if "app_settings" not in tables:
-                logger.warning(f"app_settings table missing, trying to create all via SQLAlchemy (as fallback)...")
-                try:
-                    models.Base.metadata.create_all(bind=engine)
-                    tables = turso.get_tables()
-                except:
-                    pass
-            
-            if "app_settings" not in tables:
-                logger.warning(f"app_settings table not found yet, retrying...")
-                time.sleep(RETRY_DELAY)
-                continue
-            
-            logger.info("✓ app_settings table found")
-            
-            # 4. Seed and verify settings
-            with SessionLocal() as db:
-                seed_settings(db)
-                
-                # Verify we can actually read settings
-                test_setting = get_config(db, "casepeer_username")
-                if test_setting:
-                    logger.info(f"✓ Settings verified (casepeer_username exists)")
-                    db_ready = True
-                    break
-                else:
-                    logger.warning("Settings not readable yet, retrying...")
-                    
-        except Exception as e:
-            logger.warning(f"Startup attempt {attempt} failed: {e}")
+    try:
+        # Verify Turso HTTP connection
+        if turso.test_connection():
+            logger.info("✓ Turso HTTP connection established")
+        else:
+            logger.error("❌ Turso HTTP connection failed during startup")
+            # We continue but logs will show failures
         
-        if attempt < MAX_RETRIES:
-            logger.info(f"Retrying in {RETRY_DELAY} seconds...")
-            time.sleep(RETRY_DELAY)
-    
-    if not db_ready:
-        logger.error("CRITICAL: Failed to connect to database after all retries!")
-        logger.error("The app will start but functionality will be broken.")
-    else:
-        logger.info("✓ Database fully operational")
+        # Check and ensure tables/seed data
+        tables = turso.get_tables()
+        logger.info(f"Database tables checked: {tables}")
+        
+        if "app_settings" not in tables:
+            logger.warning("app_settings table missing, performing emergency schema creation...")
+            models.Base.metadata.create_all(bind=engine)
+            tables = turso.get_tables()
+            logger.info(f"Tables after creation: {tables}")
+        
+        # Synchronous seed with TursoClient-backed crud
+        with SessionLocal() as db:
+            seed_settings(db)
+            logger.info("✓ Database and settings initialized")
+            
+    except Exception as e:
+        logger.error(f"❌ Critical Database Initialization Error: {e}", exc_info=True)
 
+    # 2. PROCEED TO AUTHENTICATION
     logger.info("Performing authentication on startup...")
 
     # First attempt to restore from database

@@ -11,7 +11,7 @@ AUTH_TOKEN = "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJhIjoicnciLCJpYXQiOjE3NzAyN
 # Build SQLAlchemy connection URL for Turso/libsql
 SQLALCHEMY_DATABASE_URL = f"sqlite+libsql://?url={DATABASE_URL}&auth_token={AUTH_TOKEN}"
 
-print(f"DEBUG: Connecting to Database: {DATABASE_URL}...")
+# engine = ... (remains below)
 
 engine = create_engine(
     SQLALCHEMY_DATABASE_URL, 
