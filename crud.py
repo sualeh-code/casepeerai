@@ -1,143 +1,138 @@
-from sqlalchemy.orm import Session
-import models, schemas
+from typing import List, Optional, Dict, Any
+import schemas
+from turso_client import turso
 
-# CaseMetric CRUD
-def get_case(db: Session, case_id: int):
-    return db.query(models.CaseMetric).filter(models.CaseMetric.id == case_id).first()
-
-def get_cases(db: Session, skip: int = 0, limit: int = 100):
-    return db.query(models.CaseMetric).offset(skip).limit(limit).all()
-
-def create_case(db: Session, case: schemas.CaseMetricCreate):
-    db_case = models.CaseMetric(**case.dict())
-    db.add(db_case)
-    db.commit()
-    db.refresh(db_case)
-    return db_case
-
-def update_case(db: Session, case_id: int, case_update: schemas.CaseMetricUpdate):
-    db_case = get_case(db, case_id)
-    if not db_case:
+# APP SETTINGS CRUD
+def get_setting(db, key: str):
+    """Get a setting using TursoClient."""
+    row = turso.fetch_one("SELECT key, value, description FROM app_settings WHERE key = ?", [key])
+    if not row:
         return None
-    
-    update_data = case_update.dict(exclude_unset=True)
-    for key, value in update_data.items():
-        setattr(db_case, key, value)
-    
-    db.commit()
-    db.refresh(db_case)
-    return db_case
+    # Return an object-like structure for compatibility with existing code
+    class Setting:
+        def __init__(self, key, value, description):
+            self.key = key
+            self.value = value
+            self.description = description
+    return Setting(row["key"], row["value"], row["description"])
 
-def delete_case(db: Session, case_id: int):
-    db_case = get_case(db, case_id)
-    if db_case:
-        db.delete(db_case)
-        db.commit()
-    return db_case
-
-# AppSetting CRUD
-def get_setting(db: Session, key: str):
-    return db.query(models.AppSetting).filter(models.AppSetting.key == key).first()
-
-def get_settings(db: Session, skip: int = 0, limit: int = 100):
-    return db.query(models.AppSetting).offset(skip).limit(limit).all()
-
-def set_setting(db: Session, setting: schemas.AppSettingCreate):
-    db_setting = get_setting(db, setting.key)
-    if db_setting:
-        db_setting.value = setting.value
-        if setting.description:
-            db_setting.description = setting.description
+def set_setting(db, setting: schemas.AppSettingCreate):
+    """Set or update a setting using TursoClient."""
+    existing = turso.fetch_one("SELECT key FROM app_settings WHERE key = ?", [setting.key])
+    if existing:
+        turso.execute(
+            "UPDATE app_settings SET value = ?, description = ? WHERE key = ?",
+            [setting.value, setting.description or "", setting.key]
+        )
     else:
-        db_setting = models.AppSetting(**setting.dict())
-        db.add(db_setting)
+        turso.execute(
+            "INSERT INTO app_settings (key, value, description) VALUES (?, ?, ?)",
+            [setting.key, setting.value, setting.description or ""]
+        )
+    return get_setting(db, setting.key)
+
+# CASE CRUD (models.Case)
+def get_all_cases(db, skip: int = 0, limit: int = 100) -> List[Dict]:
+    """Get all cases."""
+    return turso.fetch_all("SELECT * FROM cases LIMIT ? OFFSET ?", [limit, skip])
+
+def get_case_by_id(db, case_id: str) -> Optional[Dict]:
+    """Get a case by ID."""
+    return turso.fetch_one("SELECT * FROM cases WHERE id = ?", [case_id])
+
+def create_new_case(db, case: schemas.CaseCreate):
+    """Create or update a case."""
+    existing = get_case_by_id(db, case.id)
+    case_dict = case.dict()
     
-    db.commit()
-    db.refresh(db_setting)
-    return db_setting
-
-# New Dashboard CRUD Operations
-
-# Case
-def create_new_case(db: Session, case: schemas.CaseCreate):
-    # Check if exists
-    db_case = db.query(models.Case).filter(models.Case.id == case.id).first()
-    if db_case:
-        # Update existing
-        for key, value in case.dict().items():
-            setattr(db_case, key, value)
+    # Generate SQL for dynamic columns
+    cols = ", ".join(case_dict.keys())
+    placeholders = ", ".join(["?" for _ in case_dict])
+    vals = list(case_dict.values())
+    
+    if existing:
+        # Update
+        updates = ", ".join([f"{k} = ?" for k in case_dict.keys()])
+        turso.execute(f"UPDATE cases SET {updates} WHERE id = ?", vals + [case.id])
     else:
-        # Create new
-        db_case = models.Case(**case.dict())
-        db.add(db_case)
+        # Insert
+        turso.execute(f"INSERT INTO cases ({cols}) VALUES ({placeholders})", vals)
     
-    db.commit()
-    db.refresh(db_case)
-    return db_case
+    return get_case_by_id(db, case.id)
 
-def get_all_cases(db: Session, skip: int = 0, limit: int = 100):
-    return db.query(models.Case).offset(skip).limit(limit).all()
+# CASE METRIC CRUD (Legacy/Migration compatibility)
+def get_case_metric(db, case_id: int):
+    return turso.fetch_one("SELECT * FROM case_metrics WHERE id = ?", [case_id])
 
-def get_case_by_id(db: Session, case_id: str):
-    return db.query(models.Case).filter(models.Case.id == case_id).first()
+def create_case_metric(db, case: schemas.CaseMetricCreate):
+    case_dict = case.dict()
+    cols = ", ".join(case_dict.keys())
+    placeholders = ", ".join(["?" for _ in case_dict])
+    vals = list(case_dict.values())
+    turso.execute(f"INSERT INTO case_metrics ({cols}) VALUES ({placeholders})", vals)
+    # Get last inserted id (Turso pipeline doesn't return it easily, so we query)
+    return turso.fetch_one("SELECT * FROM case_metrics ORDER BY id DESC LIMIT 1")
 
-# Negotiation
-def create_negotiation(db: Session, negotiation: schemas.NegotiationCreate):
-    db_negotiation = models.Negotiation(**negotiation.dict())
-    db.add(db_negotiation)
-    db.commit()
-    db.refresh(db_negotiation)
-    return db_negotiation
+# NEGOTIATION CRUD
+def create_negotiation(db, negotiation: schemas.NegotiationCreate):
+    neg_dict = negotiation.dict()
+    cols = ", ".join(neg_dict.keys())
+    placeholders = ", ".join(["?" for _ in neg_dict])
+    vals = list(neg_dict.values())
+    turso.execute(f"INSERT INTO negotiations ({cols}) VALUES ({placeholders})", vals)
+    return turso.fetch_one("SELECT * FROM negotiations WHERE case_id = ? ORDER BY id DESC LIMIT 1", [negotiation.case_id])
 
-def get_negotiations_by_case(db: Session, case_id: str):
-    return db.query(models.Negotiation).filter(models.Negotiation.case_id == case_id).all()
+def get_negotiations_by_case(db, case_id: str):
+    return turso.fetch_all("SELECT * FROM negotiations WHERE case_id = ?", [case_id])
 
-# Classification
-def create_classification(db: Session, classification: schemas.ClassificationCreate):
-    db_classification = models.Classification(**classification.dict())
-    db.add(db_classification)
-    db.commit()
-    db.refresh(db_classification)
-    return db_classification
+# CLASSIFICATION CRUD
+def create_classification(db, classification: schemas.ClassificationCreate):
+    cls_dict = classification.dict()
+    cols = ", ".join(cls_dict.keys())
+    placeholders = ", ".join(["?" for _ in cls_dict])
+    vals = list(cls_dict.values())
+    turso.execute(f"INSERT INTO classifications ({cols}) VALUES ({placeholders})", vals)
+    return turso.fetch_one("SELECT * FROM classifications WHERE case_id = ? ORDER BY id DESC LIMIT 1", [classification.case_id])
 
-def get_classifications_by_case(db: Session, case_id: str):
-    return db.query(models.Classification).filter(models.Classification.case_id == case_id).all()
+def get_classifications_by_case(db, case_id: str):
+    return turso.fetch_all("SELECT * FROM classifications WHERE case_id = ?", [case_id])
 
-# Reminder
-def create_reminder(db: Session, reminder: schemas.ReminderCreate):
-    db_reminder = models.Reminder(**reminder.dict())
-    db.add(db_reminder)
-    db.commit()
-    db.refresh(db_reminder)
-    return db_reminder
+# REMINDER CRUD
+def create_reminder(db, reminder: schemas.ReminderCreate):
+    rem_dict = reminder.dict()
+    cols = ", ".join(rem_dict.keys())
+    placeholders = ", ".join(["?" for _ in rem_dict])
+    vals = list(rem_dict.values())
+    turso.execute(f"INSERT INTO reminders ({cols}) VALUES ({placeholders})", vals)
+    return turso.fetch_one("SELECT * FROM reminders WHERE case_id = ? ORDER BY id DESC LIMIT 1", [reminder.case_id])
 
-def get_reminders_by_case(db: Session, case_id: str):
-    return db.query(models.Reminder).filter(models.Reminder.case_id == case_id).all()
+def get_reminders_by_case(db, case_id: str):
+    return turso.fetch_all("SELECT * FROM reminders WHERE case_id = ?", [case_id])
 
-# Token Usage
-def create_token_usage(db: Session, usage: schemas.TokenUsageCreate):
-    db_usage = models.TokenUsage(**usage.dict())
-    db.add(db_usage)
-    db.commit()
-    db.refresh(db_usage)
-    return db_usage
+# TOKEN USAGE CRUD
+def create_token_usage(db, usage: schemas.TokenUsageCreate):
+    usage_dict = usage.dict()
+    cols = ", ".join(usage_dict.keys())
+    placeholders = ", ".join(["?" for _ in usage_dict])
+    vals = list(usage_dict.values())
+    turso.execute(f"INSERT INTO token_usage ({cols}) VALUES ({placeholders})", vals)
+    return turso.fetch_one("SELECT * FROM token_usage ORDER BY id DESC LIMIT 1")
 
-def get_token_usage(db: Session, skip: int = 0, limit: int = 100):
-    return db.query(models.TokenUsage).offset(skip).limit(limit).all()
-
-# AppSession CRUD
-def save_session(db: Session, session_data: str):
-    # We only ever want one session stored (the latest one)
-    db_session = db.query(models.AppSession).first()
-    if db_session:
-        db_session.session_data = session_data
+# SESSION CRUD
+def save_session(db, session_data: str):
+    existing = turso.fetch_one("SELECT * FROM app_sessions WHERE name = 'default'")
+    if existing:
+        turso.execute(
+            "UPDATE app_sessions SET session_data = ?, updated_at = datetime('now') WHERE name = 'default'",
+            [session_data]
+        )
     else:
-        db_session = models.AppSession(session_data=session_data)
-        db.add(db_session)
-    
-    db.commit()
-    db.refresh(db_session)
-    return db_session
+        turso.execute(
+            "INSERT INTO app_sessions (name, session_data) VALUES ('default', ?)",
+            [session_data]
+        )
+    return turso.fetch_one("SELECT * FROM app_sessions WHERE name = 'default'")
 
-def get_latest_session(db: Session):
-    return db.query(models.AppSession).order_by(models.AppSession.updated_at.desc()).first()
+def get_latest_session(db):
+    return turso.fetch_one("SELECT * FROM app_sessions ORDER BY updated_at DESC LIMIT 1")
+

@@ -41,6 +41,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+from turso_client import turso
+
 # Helper to get settings with defaults
 def get_config(db: Session, key: str, default: str = None) -> str:
     """
@@ -59,6 +61,7 @@ def get_config(db: Session, key: str, default: str = None) -> str:
     retries = 3
     for attempt in range(retries):
         try:
+            # crud.get_setting now uses TursoClient internally
             setting = crud.get_setting(db, key)
             if setting:
                 return setting.value
@@ -91,6 +94,7 @@ def seed_settings(db: Session):
     
     for key, value in defaults.items():
         try:
+            # crud.get_setting and crud.set_setting now use TursoClient
             if not crud.get_setting(db, key):
                 logger.info(f"Seeding default setting: {key}")
                 crud.set_setting(db, schemas.AppSettingCreate(key=key, value=value, description="Default value"))
@@ -134,23 +138,27 @@ async def lifespan(app: FastAPI):
     db_ready = False
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            logger.info(f"Database connection attempt {attempt}/{MAX_RETRIES}...")
+            logger.info(f"Turso HTTP connection attempt {attempt}/{MAX_RETRIES}...")
             
-            # 1. Verify Database Connection
-            with engine.connect() as connection:
-                from sqlalchemy import text
-                connection.execute(text("SELECT 1"))
-                logger.info("✓ Database connection successful")
+            # 1. Verify Database Connection via HTTP
+            if turso.test_connection():
+                logger.info("✓ Turso HTTP connection successful")
+            else:
+                raise Exception("Turso HTTP test failed")
             
-            # 2. Ensure Schema Exists
-            logger.info("Ensuring database schema exists...")
-            models.Base.metadata.create_all(bind=engine)
-            
-            # 3. Check tables exist using direct SQL (inspector doesn't work with libsql)
-            with engine.connect() as conn:
-                result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"))
-                tables = [row[0] for row in result.fetchall()]
+            # 2. Check tables exist using direct SQL
+            tables = turso.get_tables()
             logger.info(f"Existing tables in DB: {tables}")
+            
+            # 3. Handle schema if missing (not usually needed for Turso if using migrations, 
+            # but we'll try to ensure core tables exist)
+            if "app_settings" not in tables:
+                logger.warning(f"app_settings table missing, trying to create all via SQLAlchemy (as fallback)...")
+                try:
+                    models.Base.metadata.create_all(bind=engine)
+                    tables = turso.get_tables()
+                except:
+                    pass
             
             if "app_settings" not in tables:
                 logger.warning(f"app_settings table not found yet, retrying...")
