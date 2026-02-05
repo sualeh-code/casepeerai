@@ -32,8 +32,7 @@ elif DATABASE_URL.startswith("libsql://") or DATABASE_URL.startswith("https://")
          raise ValueError("CRITICAL: Turso URL provided but TURSO_AUTH_TOKEN is missing. Please set this environment variable.")
 
     # Using the 'url' parameter is often more reliable for Hrana redirects
-    # Adding secure=true for proper SSL handling
-    SQLALCHEMY_DATABASE_URL = f"sqlite+libsql://?url={base_url}&auth_token={AUTH_TOKEN}&secure=true"
+    SQLALCHEMY_DATABASE_URL = f"sqlite+libsql://?url={base_url}&auth_token={AUTH_TOKEN}"
 else:
     # Fallback for other postgres strings etc if user changes mind later
     SQLALCHEMY_DATABASE_URL = DATABASE_URL
