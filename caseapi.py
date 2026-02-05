@@ -319,8 +319,8 @@ def playwright_login(username: str, password: str, base_url: str, otp_retry_coun
 
     try:
         with sync_playwright() as p:
-            # Check for headless mode from environment variable
-            is_headless = os.getenv("PLAYWRIGHT_HEADLESS", "true").lower() == "true"
+            # Hardcode headless mode for server deployment
+            is_headless = True
             logger.info(f"Launching browser (headless={is_headless})...")
             
             browser: Browser = p.chromium.launch(headless=is_headless)
