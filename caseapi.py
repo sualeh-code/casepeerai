@@ -43,7 +43,19 @@ logger = logging.getLogger(__name__)
 
 # Helper to get settings with defaults
 def get_config(db: Session, key: str, default: str = None) -> str:
-    """Get a setting from DB, with retry logic and silent fallback."""
+    """
+    Get a setting from Env Var (priority), then DB, with retry logic and silent fallback.
+    Rules:
+    1. Env Vars (uppercase) always take precedence.
+    2. DB settings are second.
+    3. Default value is last resort.
+    """
+    # 1. Check Environment Variable (uppercased key)
+    env_val = os.getenv(key.upper())
+    if env_val:
+        return env_val
+
+    # 2. Check Database with Retry Logic
     retries = 3
     for attempt in range(retries):
         try:
