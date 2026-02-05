@@ -39,10 +39,13 @@ else:
 
 print(f"DEBUG: Connecting to Database: {SQLALCHEMY_DATABASE_URL.split('&auth_token')[0]}...")
 
+from sqlalchemy.pool import NullPool
+
 engine = create_engine(
     SQLALCHEMY_DATABASE_URL, 
     # The libsql dialect handles its own threading, but we keep this safe
-    connect_args={"check_same_thread": False} if "sqlite" in SQLALCHEMY_DATABASE_URL else {}
+    connect_args={"check_same_thread": False} if "sqlite" in SQLALCHEMY_DATABASE_URL else {},
+    poolclass=NullPool
 )
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 

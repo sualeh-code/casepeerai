@@ -296,7 +296,7 @@ def fetch_otp_from_gmail(max_retries: int = 10, retry_delay: int = 5) -> Optiona
         return None
 
 
-def playwright_login() -> tuple[Optional[str], Optional[str], Optional[str]]:
+def playwright_login(username: str, password: str, base_url: str, otp_retry_count: int, otp_retry_delay: int) -> tuple[Optional[str], Optional[str], Optional[str]]:
     """
     Authenticate with CasePeer using Playwright and extract tokens.
 
@@ -317,13 +317,8 @@ def playwright_login() -> tuple[Optional[str], Optional[str], Optional[str]]:
             )
             page: Page = context.new_page()
 
-            # Fetch credentials from DB
-            with SessionLocal() as db:
-                username = get_config(db, "casepeer_username", DEFAULT_CASEPEER_USERNAME)
-                password = get_config(db, "casepeer_password", DEFAULT_CASEPEER_PASSWORD)
-                base_url = get_config(db, "casepeer_base_url", DEFAULT_CASEPEER_BASE_URL)
-                otp_retry_count = int(get_config(db, "otp_retry_count", "10"))
-                otp_retry_delay = int(get_config(db, "otp_retry_delay", "5"))
+            # (Credentials are now passed in as arguments)
+
 
             # Navigate to login page
             logger.info(f"Navigating to {base_url}...")
@@ -581,11 +576,26 @@ async def refresh_authentication() -> bool:
         return True
 
     # Run Playwright in a separate thread to avoid async loop issues
-    access_token, refresh_token, csrf_token = await asyncio.to_thread(playwright_login)
-
-    # Fetch base URL from DB for headers
+    # Fetch credentials in MAIN thread to avoid DB threading issues
     with SessionLocal() as db:
         casepeer_base_url = get_config(db, "casepeer_base_url", DEFAULT_CASEPEER_BASE_URL)
+        username = get_config(db, "casepeer_username", DEFAULT_CASEPEER_USERNAME)
+        password = get_config(db, "casepeer_password", DEFAULT_CASEPEER_PASSWORD)
+        otp_retry_count = int(get_config(db, "otp_retry_count", "10"))
+        otp_retry_delay = int(get_config(db, "otp_retry_delay", "5"))
+
+    # Pass credentials to the thread
+    access_token, refresh_token, csrf_token = await asyncio.to_thread(
+        playwright_login, 
+        username, 
+        password, 
+        casepeer_base_url, 
+        otp_retry_count, 
+        otp_retry_delay
+    )
+
+    # Re-fetch base URL if needed (though we have it) or just use the local var
+    # casepeer_base_url is already fetched above
 
     if csrf_token:
         ACCESS_TOKEN = access_token
