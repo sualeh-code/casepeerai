@@ -90,5 +90,6 @@ class AppSession(Base):
     __tablename__ = "app_sessions"
 
     id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, index=True, default="default")
     session_data = Column(String)  # JSON string of cookies and tokens
     updated_at = Column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())
