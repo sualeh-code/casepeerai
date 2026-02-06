@@ -51,6 +51,9 @@ class CaseBase(BaseModel):
     status: str
     fees_taken: float
     savings: float
+    revenue: float = 0.0
+    emails_received: int = 0
+    emails_sent: int = 0
 
 class CaseCreate(CaseBase):
     pass

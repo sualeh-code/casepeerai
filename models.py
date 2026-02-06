@@ -34,6 +34,9 @@ class Case(Base):
     status = Column(String)
     fees_taken = Column(Float, default=0.0)
     savings = Column(Float, default=0.0)
+    revenue = Column(Float, default=0.0)
+    emails_received = Column(Integer, default=0)
+    emails_sent = Column(Integer, default=0)
     
     negotiations = relationship("Negotiation", back_populates="case")
     classifications = relationship("Classification", back_populates="case")

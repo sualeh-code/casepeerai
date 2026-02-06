@@ -1456,14 +1456,25 @@ async def proxy_request(request: Request, path: str):
     # Reserved paths that should NOT be proxied
     # "dashboard" is handled by the StaticFiles mount if path starts with dashboard/
     # but the catch-all might still see it if not careful.
-    reserved_prefixes = ["dashboard", "api", "docs", "redoc", "openapi.json", "static"]
+    # Reserved paths that should NOT be proxied
+    # Internal API routes start with /api/ but we want to allow CasePeer's /api/v1/
+    # This check ensures that if the path starts with "api", it only blocks if it 
+    # doesn't look like a CasePeer API path (which usually starts with api/v1/).
+    reserved_prefixes = ["dashboard", "docs", "redoc", "openapi.json", "static"]
     
-    # Check if the path starts with any reserved prefix
+    # Check if the path starts with any specific reserved prefix
     is_reserved = False
     for reserved in reserved_prefixes:
         if path.startswith(reserved):
             is_reserved = True
             break
+    
+    # Special check for /api/ - only reserve it if it's an internal route
+    # (e.g., /api/cases, /api/settings) and not a CasePeer route (/api/v1/...)
+    if path.startswith("api/") and not path.startswith("api/v1/"):
+        is_reserved = True
+    elif path == "api":
+        is_reserved = True
             
     # Health check for root path
     if not path or path == "":

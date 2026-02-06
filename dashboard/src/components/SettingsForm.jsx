@@ -3,11 +3,13 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter }
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Eye, EyeOff } from 'lucide-react';
 
 const SettingsForm = () => {
     const [settings, setSettings] = useState({});
     const [loading, setLoading] = useState(true);
     const [message, setMessage] = useState(null);
+    const [visibleFields, setVisibleFields] = useState({});
 
     const fetchSettings = async () => {
         try {
@@ -50,6 +52,10 @@ const SettingsForm = () => {
         setSettings(prev => ({ ...prev, [key]: value }));
     };
 
+    const toggleVisibility = (key) => {
+        setVisibleFields(prev => ({ ...prev, [key]: !prev[key] }));
+    };
+
     const fields = [
         { key: 'casepeer_username', label: 'CasePeer Username', type: 'text' },
         { key: 'casepeer_password', label: 'CasePeer Password', type: 'password' },
@@ -79,12 +85,24 @@ const SettingsForm = () => {
                         <div key={field.key} className="grid w-full items-center gap-1.5">
                             <Label htmlFor={field.key}>{field.label}</Label>
                             <div className="flex gap-2">
-                                <Input
-                                    type={field.type}
-                                    id={field.key}
-                                    value={settings[field.key] || ''}
-                                    onChange={(e) => handleChange(field.key, e.target.value)}
-                                />
+                                <div className="relative flex-1">
+                                    <Input
+                                        type={field.type === 'password' && visibleFields[field.key] ? 'text' : field.type}
+                                        id={field.key}
+                                        value={settings[field.key] || ''}
+                                        onChange={(e) => handleChange(field.key, e.target.value)}
+                                        className={field.type === 'password' ? 'pr-10' : ''}
+                                    />
+                                    {field.type === 'password' && (
+                                        <button
+                                            type="button"
+                                            className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                                            onClick={() => toggleVisibility(field.key)}
+                                        >
+                                            {visibleFields[field.key] ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                                        </button>
+                                    )}
+                                </div>
                                 <Button variant="outline" onClick={() => handleSave(field.key, settings[field.key])}>
                                     Save
                                 </Button>

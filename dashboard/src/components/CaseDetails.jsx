@@ -3,7 +3,14 @@ import React, { useEffect, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { ArrowLeft, FileText, Bell, MessageSquare } from 'lucide-react';
+import { ArrowLeft, FileText, Bell, MessageSquare, Eye } from 'lucide-react';
+import {
+    Dialog,
+    DialogContent,
+    DialogHeader,
+    DialogTitle,
+    DialogTrigger,
+} from "@/components/ui/dialog"
 
 const CaseDetails = ({ caseId, onBack }) => {
     const [caseData, setCaseData] = useState(null);
@@ -11,6 +18,7 @@ const CaseDetails = ({ caseId, onBack }) => {
     const [classifications, setClassifications] = useState([]);
     const [reminders, setReminders] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [selectedEmail, setSelectedEmail] = useState(null);
 
     useEffect(() => {
         const fetchData = async () => {
@@ -87,7 +95,15 @@ const CaseDetails = ({ caseId, onBack }) => {
             {/* Negotiations */}
             <Card>
                 <CardHeader>
-                    <CardTitle className="flex items-center gap-2"><MessageSquare className="h-5 w-5" /> Negotiations</CardTitle>
+                    <CardTitle className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                            <MessageSquare className="h-5 w-5" />
+                            Negotiations
+                        </div>
+                        <span className="text-sm font-normal text-muted-foreground bg-muted px-2 py-0.5 rounded-full">
+                            {negotiations.length}
+                        </span>
+                    </CardTitle>
                 </CardHeader>
                 <CardContent>
                     <Table>
@@ -96,10 +112,11 @@ const CaseDetails = ({ caseId, onBack }) => {
                                 <TableHead>Type</TableHead>
                                 <TableHead>To</TableHead>
                                 <TableHead>Date</TableHead>
+                                <TableHead>Preview</TableHead>
                                 <TableHead>Actual Bill</TableHead>
                                 <TableHead>Offered</TableHead>
                                 <TableHead>Result</TableHead>
-                                <TableHead>Sent By Us</TableHead>
+                                <TableHead>Email</TableHead>
                             </TableRow>
                         </TableHeader>
                         <TableBody>
@@ -111,10 +128,31 @@ const CaseDetails = ({ caseId, onBack }) => {
                                         <TableCell>{n.negotiation_type}</TableCell>
                                         <TableCell>{n.to}</TableCell>
                                         <TableCell>{n.date}</TableCell>
+                                        <TableCell>
+                                            <div className="max-w-[200px] truncate text-xs text-muted-foreground">
+                                                {n.email_body || "No body"}
+                                            </div>
+                                        </TableCell>
                                         <TableCell>${n.actual_bill?.toFixed(2)}</TableCell>
                                         <TableCell>${n.offered_bill?.toFixed(2)}</TableCell>
                                         <TableCell>{n.result}</TableCell>
-                                        <TableCell>{n.sent_by_us ? "Yes" : "No"}</TableCell>
+                                        <TableCell>
+                                            <Dialog>
+                                                <DialogTrigger asChild>
+                                                    <Button variant="ghost" size="sm" className="h-8 w-8 p-0">
+                                                        <Eye className="h-4 w-4" />
+                                                    </Button>
+                                                </DialogTrigger>
+                                                <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+                                                    <DialogHeader>
+                                                        <DialogTitle>Negotiation Email Body</DialogTitle>
+                                                    </DialogHeader>
+                                                    <div className="mt-4 p-4 bg-muted rounded-md whitespace-pre-wrap font-mono text-sm">
+                                                        {n.email_body || "No email body recorded."}
+                                                    </div>
+                                                </DialogContent>
+                                            </Dialog>
+                                        </TableCell>
                                     </TableRow>
                                 ))
                             )}
@@ -157,7 +195,15 @@ const CaseDetails = ({ caseId, onBack }) => {
             {/* Reminders */}
             <Card>
                 <CardHeader>
-                    <CardTitle className="flex items-center gap-2"><Bell className="h-5 w-5" /> Reminders</CardTitle>
+                    <CardTitle className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                            <Bell className="h-5 w-5" />
+                            Reminders
+                        </div>
+                        <span className="text-sm font-normal text-muted-foreground bg-muted px-2 py-0.5 rounded-full">
+                            {reminders.length}
+                        </span>
+                    </CardTitle>
                 </CardHeader>
                 <CardContent>
                     <Table>
@@ -165,7 +211,7 @@ const CaseDetails = ({ caseId, onBack }) => {
                             <TableRow>
                                 <TableHead>#</TableHead>
                                 <TableHead>Date</TableHead>
-                                <TableHead>Message</TableHead>
+                                <TableHead>Message (Click eye to view)</TableHead>
                             </TableRow>
                         </TableHeader>
                         <TableBody>
@@ -176,7 +222,26 @@ const CaseDetails = ({ caseId, onBack }) => {
                                     <TableRow key={r.id}>
                                         <TableCell>{r.reminder_number}</TableCell>
                                         <TableCell>{r.reminder_date}</TableCell>
-                                        <TableCell className="max-w-md truncate" title={r.reminder_email_body}>{r.reminder_email_body}</TableCell>
+                                        <TableCell className="flex items-center gap-2">
+                                            <span className="max-w-md truncate" title={r.reminder_email_body}>
+                                                {r.reminder_email_body}
+                                            </span>
+                                            <Dialog>
+                                                <DialogTrigger asChild>
+                                                    <Button variant="ghost" size="sm" className="h-8 w-8 p-0">
+                                                        <Eye className="h-4 w-4" />
+                                                    </Button>
+                                                </DialogTrigger>
+                                                <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+                                                    <DialogHeader>
+                                                        <DialogTitle>Reminder Email Body</DialogTitle>
+                                                    </DialogHeader>
+                                                    <div className="mt-4 p-4 bg-muted rounded-md whitespace-pre-wrap font-mono text-sm">
+                                                        {r.reminder_email_body || "No email body recorded."}
+                                                    </div>
+                                                </DialogContent>
+                                            </Dialog>
+                                        </TableCell>
                                     </TableRow>
                                 ))
                             )}
