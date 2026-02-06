@@ -28,14 +28,14 @@ const CaseDetails = ({ caseId, onBack }) => {
             setLoading(true);
             try {
                 // Fetch basic case info
-                const caseRes = await fetch(`/dashboard/api/cases/${caseId}`);
+                const caseRes = await fetch(`/internal-api/cases/${caseId}`);
                 if (caseRes.ok) setCaseData(await caseRes.json());
 
                 // Fetch related data
                 const [negRes, classRes, remRes] = await Promise.all([
-                    fetch(`/dashboard/api/negotiations?case_id=${caseId}`),
-                    fetch(`/dashboard/api/classifications?case_id=${caseId}`),
-                    fetch(`/dashboard/api/reminders?case_id=${caseId}`)
+                    fetch(`/internal-api/negotiations?case_id=${caseId}`),
+                    fetch(`/internal-api/classifications?case_id=${caseId}`),
+                    fetch(`/internal-api/reminders?case_id=${caseId}`)
                 ]);
 
                 if (negRes.ok) setNegotiations(await negRes.json());
@@ -55,7 +55,7 @@ const CaseDetails = ({ caseId, onBack }) => {
     const fetchLiveData = async () => {
         setLoadingLive(true);
         try {
-            const response = await fetch(`/dashboard/api/live/cases/${caseId}/negotiations`);
+            const response = await fetch(`/internal-api/live/cases/${caseId}/negotiations`);
             if (response.ok) {
                 const data = await response.json();
                 setLiveNegotiations(data.negotiations || []);

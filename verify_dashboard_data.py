@@ -9,9 +9,9 @@ def verify_dashboard_data():
     print(f"Verifying dashboard data from {BASE_URL}...")
     
     # 1. Verify Cases Endpoint
-    print("\n1. Testing /dashboard/api/cases...")
+    print("\n1. Testing /internal-api/cases...")
     try:
-        response = requests.get(f"{BASE_URL}/dashboard/api/cases?limit=5")
+        response = requests.get(f"{BASE_URL}/internal-api/cases?limit=5")
         if response.status_code == 200:
             cases = response.json()
             print(f"   [OK] Fetched {len(cases)} cases")
@@ -29,9 +29,9 @@ def verify_dashboard_data():
         print(f"   [ERROR] Connection failed: {e}")
 
     # 2. Verify N8n Stats Endpoint
-    print("\n2. Testing /dashboard/api/integrations/n8n/executions...")
+    print("\n2. Testing /internal-api/integrations/n8n/executions...")
     try:
-        response = requests.get(f"{BASE_URL}/dashboard/api/integrations/n8n/executions")
+        response = requests.get(f"{BASE_URL}/internal-api/integrations/n8n/executions")
         if response.status_code == 200:
             stats = response.json()
             print(f"   [OK] Fetched n8n stats")

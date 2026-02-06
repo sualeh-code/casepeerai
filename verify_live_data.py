@@ -6,7 +6,7 @@ BASE_URL = "http://localhost:8000"
 def test_live_negotiations(case_id):
     print(f"Testing live negotiations for case {case_id}...")
     try:
-        response = requests.get(f"{BASE_URL}/dashboard/api/live/cases/{case_id}/negotiations")
+        response = requests.get(f"{BASE_URL}/internal-api/live/cases/{case_id}/negotiations")
         if response.status_code == 200:
             data = response.json()
             print("[OK] Success!")

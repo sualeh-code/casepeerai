@@ -33,7 +33,7 @@ const FileUpload = ({ caseId, onUploadComplete }) => {
         // We can add other fields if needed, like folder_id
 
         try {
-            const response = await fetch(`/dashboard/api/proxy_upload_file/${caseId}`, {
+            const response = await fetch(`/internal-api/proxy_upload_file/${caseId}`, {
                 method: 'POST',
                 body: formData,
             });

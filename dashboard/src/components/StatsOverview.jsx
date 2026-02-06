@@ -3,6 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { DollarSign, FileText, Mail, TrendingUp, Activity, Percent, Ban } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts';
 import N8nHealth from './N8nHealth';
+import DocumentFeed from './DocumentFeed';
 
 const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8'];
 
@@ -29,8 +30,8 @@ const StatsOverview = () => {
         const fetchData = async () => {
             try {
                 const [casesRes, n8nRes] = await Promise.all([
-                    fetch('/dashboard/api/cases'),
-                    fetch('/dashboard/api/integrations/n8n/executions')
+                    fetch('/internal-api/cases'),
+                    fetch('/internal-api/integrations/n8n/executions')
                 ]);
 
                 if (casesRes.ok) {
@@ -119,22 +120,77 @@ const StatsOverview = () => {
         <div className="space-y-6">
             <h2 className="text-3xl font-bold tracking-tight">Executive Dashboard</h2>
 
-            {/* KPI Grid */}
-            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
-                {kpiCards.map((card, index) => (
-                    <Card key={index}>
-                        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                            <CardTitle className="text-sm font-medium">{card.title}</CardTitle>
-                            <card.icon className={`h-4 w-4 ${card.color}`} />
-                        </CardHeader>
-                        <CardContent>
-                            <div className="text-2xl font-bold">{card.value}</div>
-                            <p className="text-xs text-muted-foreground mt-1">{card.desc}</p>
-                        </CardContent>
-                    </Card>
-                ))}
+            {/* Top Row: KPI Cards */}
+            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+                <Card>
+                    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                        <CardTitle className="text-sm font-medium">
+                            Total Cases
+                        </CardTitle>
+                        <Briefcase className="h-4 w-4 text-muted-foreground" />
+                    </CardHeader>
+                    <CardContent>
+                        <div className="text-2xl font-bold">{stats.totalCases}</div>
+                        <p className="text-xs text-muted-foreground">
+                            Active database records
+                        </p>
+                    </CardContent>
+                </Card>
+                <Card>
+                    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                        <CardTitle className="text-sm font-medium">
+                            Total Emails
+                        </CardTitle>
+                        <Mail className="h-4 w-4 text-muted-foreground" />
+                    </CardHeader>
+                    <CardContent>
+                        <div className="text-2xl font-bold">{stats.totalEmails}</div>
+                        <p className="text-xs text-muted-foreground">
+                            Sent and received
+                        </p>
+                    </CardContent>
+                </Card>
+                <Card>
+                    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                        <CardTitle className="text-sm font-medium">
+                            Total Savings
+                        </CardTitle>
+                        <TrendingUp className="h-4 w-4 text-muted-foreground" />
+                    </CardHeader>
+                    <CardContent>
+                        <div className="text-2xl font-bold">
+                            ${stats.totalSavings.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                            Negotiated reductions
+                        </p>
+                    </CardContent>
+                </Card>
+                <Card>
+                    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                        <CardTitle className="text-sm font-medium">
+                            Total Revenue
+                        </CardTitle>
+                        <DollarSign className="h-4 w-4 text-muted-foreground" />
+                    </CardHeader>
+                    <CardContent>
+                        <div className="text-2xl font-bold">
+                            ${stats.totalFees.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                            Fees collected
+                        </p>
+                    </CardContent>
+                </Card>
             </div>
 
+            {/* Middle Row: N8n Health & Document Feed */}
+            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+                <N8nHealth executions={n8nExecutions} loading={loading} />
+                <DocumentFeed />
+            </div>
+
+            {/* Bottom Row: Charts & Logs */}
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-7">
                 {/* Main Graph: Revenue Stacked */}
                 <Card className="col-span-4">
@@ -245,10 +301,7 @@ const StatsOverview = () => {
                 </Card>
             </div>
 
-            <div className="grid gap-4 grid-cols-1">
-                {/* N8N Health Component */}
-                <N8nHealth executions={n8nExecutions} loading={false} />
-            </div>
+
         </div>
     );
 };

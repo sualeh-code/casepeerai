@@ -41,6 +41,7 @@ class Case(Base):
     negotiations = relationship("Negotiation", back_populates="case")
     classifications = relationship("Classification", back_populates="case")
     reminders = relationship("Reminder", back_populates="case")
+    documents = relationship("Document", back_populates="case")
 
 class Negotiation(Base):
     __tablename__ = "negotiations"
@@ -96,3 +97,17 @@ class AppSession(Base):
     name = Column(String, index=True, default="default")
     session_data = Column(String)  # JSON string of cookies and tokens
     updated_at = Column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())
+
+class Document(Base):
+    __tablename__ = "documents"
+
+    id = Column(Integer, primary_key=True, index=True)
+    case_id = Column(String, ForeignKey("cases.id"))
+    file_name = Column(String)
+    category_id = Column(String)
+    extracted_text = Column(String)
+    confidence = Column(Float)
+    is_reviewed = Column(Boolean, default=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    case = relationship("Case", back_populates="documents")

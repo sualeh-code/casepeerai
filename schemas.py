@@ -60,6 +60,7 @@ class CaseCreate(CaseBase):
 
 class Case(CaseBase):
     negotiations: list["Negotiation"] = []
+    documents: list["Document"] = []
     class Config:
         orm_mode = True
 
@@ -138,5 +139,23 @@ class AppSessionCreate(AppSessionBase):
 class AppSession(AppSessionBase):
     id: int
     updated_at: datetime
+    class Config:
+        orm_mode = True
+
+# Document Schemas
+class DocumentBase(BaseModel):
+    case_id: str
+    file_name: str
+    category_id: str
+    extracted_text: Optional[str] = None
+    confidence: float
+    is_reviewed: bool = False
+
+class DocumentCreate(DocumentBase):
+    pass
+
+class Document(DocumentBase):
+    id: int
+    created_at: datetime
     class Config:
         orm_mode = True
