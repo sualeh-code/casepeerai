@@ -653,7 +653,7 @@ async def try_restore_session() -> bool:
                 logger.info("No saved session found in database")
                 return False
             
-            session_data = json.loads(db_session.session_data)
+            session_data = json.loads(db_session["session_data"])
             
             # Check if session is too old (e.g., > 30 days)
             # For now, we'll try to use it and let it fail naturally if expired
@@ -687,7 +687,7 @@ async def try_restore_session() -> bool:
             if ACCESS_TOKEN:
                 session.headers['Authorization'] = f'Bearer {ACCESS_TOKEN}'
                 
-            logger.info(f"✓ Session successfully restored from database (Updated: {db_session.updated_at})")
+            logger.info(f"✓ Session successfully restored from database (Updated: {db_session['updated_at']})")
             return True
             
     except Exception as e:
@@ -1105,7 +1105,7 @@ def read_token_usage(skip: int = 0, limit: int = 100, db: Session = Depends(get_
 
 @app.get("/api/settings/", response_model=list[schemas.AppSetting])
 def read_settings(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    return crud.get_settings(db, skip=skip, limit=limit)
+    return crud.get_all_settings(db, skip=skip, limit=limit)
 
 @app.post("/api/settings/", response_model=schemas.AppSetting)
 def create_or_update_setting(setting: schemas.AppSettingCreate, db: Session = Depends(get_db)):

@@ -31,6 +31,19 @@ def set_setting(db, setting: schemas.AppSettingCreate):
         )
     return get_setting(db, setting.key)
 
+def get_all_settings(db, skip: int = 0, limit: int = 100):
+    """Get all settings."""
+    rows = turso.fetch_all("SELECT key, value, description FROM app_settings LIMIT ? OFFSET ?", [limit, skip])
+    
+    # Return list of objects for Pydantic compatibility
+    class Setting:
+        def __init__(self, key, value, description):
+            self.key = key
+            self.value = value
+            self.description = description
+            
+    return [Setting(r["key"], r["value"], r["description"]) for r in rows]
+
 # CASE CRUD (models.Case)
 def get_all_cases(db, skip: int = 0, limit: int = 100) -> List[Dict]:
     """Get all cases."""
