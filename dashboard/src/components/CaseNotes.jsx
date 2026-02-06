@@ -15,23 +15,25 @@ const CaseNotes = ({ caseId }) => {
         setLoading(true);
         setError(null);
         try {
-            // Proxy request to CasePeer via our backend
-            // URL: /case/{caseId}/notes/api/case-notes-table/
-            const response = await fetch(`/case/${caseId}/notes/api/case-notes-table/`);
+            // Use internal API proxy for robust auth handling
+            const response = await fetch(`/internal-api/cases/${caseId}/notes`);
 
             if (!response.ok) {
                 if (response.status === 404) {
-                    throw new Error("Notes endpoint not found (404). Check proxy configuration.");
-                } else if (response.status === 401 || response.status === 403) {
-                    throw new Error("Authentication failed. Please check backend logs.");
+                    throw new Error("Notes endpoint not found (404).");
                 } else {
                     throw new Error(`Failed to fetch notes: ${response.statusText}`);
                 }
             }
 
             const data = await response.json();
-            // CasePeer API usually returns { results: [...] } or just [...]
-            // Let's handle both
+
+            if (data.error) {
+                console.warn("Backend reported error fetching notes:", data.error);
+                // Don't throw if it's just an upstream error, show empty state or partial data
+            }
+
+            // CasePeer API usually returns { results: [...] }
             const results = Array.isArray(data) ? data : (data.results || []);
             setNotes(results);
 

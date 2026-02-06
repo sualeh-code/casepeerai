@@ -131,8 +131,9 @@ async def lifespan(app: FastAPI):
     try:
         # Optional: Check Turso Connection
         try:
-            turso.connect()
-            logger.info("[OK] Turso HTTP connection established")
+            # turso.connect() # Removed: Method does not exist
+            # logger.info("[OK] Turso HTTP connection established")
+            pass
         except Exception as e:
             logger.error(f"Turso Connection Warning: {e}")
             # We continue but logs will show failures
@@ -1056,6 +1057,7 @@ def create_case(case: schemas.CaseCreate, db: Session = Depends(get_db)):
 
 @app.get("/internal-api/cases", response_model=list[schemas.Case])
 def read_cases(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+    logger.info("Handling request: GET /internal-api/cases (Internal Handler)")
     return crud.get_all_cases(db=db, skip=skip, limit=limit)
 
 @app.get("/internal-api/cases/{case_id}", response_model=schemas.Case)
@@ -1638,7 +1640,38 @@ async def get_live_negotiations(case_id: str):
     except Exception as e:
         logger.error(f"Live scrape failed: {e}")
         # Return empty list instead of 500 to prevent UI crash
-        return {"source": "error", "error": str(e), "negotiations": []}
+@app.get("/internal-api/cases/{case_id}/notes")
+async def get_case_notes(case_id: str):
+    """
+    Fetch case notes from CasePeer API via internal proxy.
+    Ensures authentication is handled correctly.
+    """
+    logger.info(f"Fetching notes for case {case_id}")
+    endpoint = f"/case/{case_id}/notes/api/case-notes-table/"
+    
+    try:
+        response = await make_api_request(endpoint, method="GET")
+        
+        if response.status_code != 200:
+             # Try refreshing auth once if 403/401
+            if response.status_code in (401, 403):
+                 logger.info("Auth failed for notes, refreshing...")
+                 if await refresh_authentication():
+                      response = await make_api_request(endpoint, method="GET")
+            
+            if response.status_code != 200:
+                logger.error(f"Failed to fetch notes: {response.status_code} - {response.text}")
+                return {"results": [], "error": f"CasePeer API returned {response.status_code}"}
+
+        try:
+            return response.json()
+        except Exception as e:
+            logger.error(f"Failed to parse notes JSON: {e}")
+            return {"results": [], "error": "Invalid JSON from CasePeer"}
+
+    except Exception as e:
+        logger.error(f"Error fetching notes: {e}")
+        return {"results": [], "error": str(e)}
 
 @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"])
 async def proxy_request(request: Request, path: str):
@@ -1675,11 +1708,14 @@ async def proxy_request(request: Request, path: str):
             break
     
     # Special check for /api/ - only reserve it if it's an internal route
+    # Special check for /api/ - only reserve it if it's an internal route
     # (e.g., /api/cases, /api/settings) and not a CasePeer route (/api/v1/...)
     if path.startswith("api/") and not path.startswith("api/v1/"):
         is_reserved = True
     elif path == "api":
         is_reserved = True
+            
+    logger.info(f"Proxy Request: path='{path}' | is_reserved={is_reserved}")
             
     # Health check for root path
     if not path or path == "":
