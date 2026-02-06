@@ -201,6 +201,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+from fastapi.responses import RedirectResponse
+
+@app.get("/")
+async def root():
+    return RedirectResponse(url="/dashboard/")
+
 # Mount Dashboard static files if the dist folder exists
 # This handles /dashboard and its assets
 dashboard_dist_path = os.path.join(os.getcwd(), "dashboard", "dist")
@@ -209,6 +215,7 @@ if os.path.exists(dashboard_dist_path):
     app.mount("/dashboard", StaticFiles(directory=dashboard_dist_path, html=True), name="dashboard")
 else:
     logger.warning(f"Dashboard dist folder not found at {dashboard_dist_path}. Dashboard will not be available.")
+
 
 
 # ============================================================================
