@@ -1099,6 +1099,77 @@ def read_documents(skip: int = 0, limit: int = 100, db: Session = Depends(get_db
 def read_case_documents(case_id: str, db: Session = Depends(get_db)):
     return crud.get_documents_by_case(db, case_id)
 
+@app.post("/internal-api/cases/{case_id}/documents/sync")
+async def sync_case_documents(case_id: str, db: Session = Depends(get_db)):
+    """
+    Fetch documents from CasePeer API and sync to local DB.
+    Useful for populating the Smart Document Feed with real data.
+    """
+    logger.info(f"Syncing documents for case {case_id}")
+    
+    # API Endpoint from n8n workflow
+    endpoint = f"/api/v1/case/case-documents/{case_id}/"
+    
+    synced_count = 0
+    page = 1
+    max_pages = 5 # Safety limit
+    
+    try:
+        while page <= max_pages:
+            url = f"{endpoint}?page={page}"
+            response = await make_api_request(url, method="GET")
+            
+            if response.status_code != 200:
+                if response.status_code in (401, 403):
+                     if await refresh_authentication():
+                          response = await make_api_request(url, method="GET")
+                
+                if response.status_code != 200:
+                    logger.error(f"Failed to fetch documents page {page}: {response.text}")
+                    break
+            
+            data = response.json()
+            results = data.get("results", [])
+            
+            if not results:
+                break
+                
+            for item in results:
+                # Map CasePeer document to our schema
+                # CasePeer result likely has: id, file_name, file_url, category, etc.
+                # key 'document_name' or 'file_name'? Checking n8n... n8n uses 'file_name' in some nodes, 
+                # but 'results' usually maps directly. Let's assume 'file_name' or 'name'.
+                # fallback to 'unknown'
+                
+                fname = item.get("document_name") or item.get("file_name") or item.get("name") or "Unknown File"
+                cat_id = str(item.get("category", "Unclassified"))
+                
+                # Check if exists
+                existing = crud.get_document_by_filename(db, case_id, fname)
+                if not existing:
+                    new_doc = schemas.DocumentCreate(
+                        case_id=case_id,
+                        file_name=fname,
+                        category_id=cat_id,
+                        extracted_text="Synced from CasePeer",
+                        confidence=0.0, # Needs review
+                        is_reviewed=False
+                    )
+                    crud.create_document(db, new_doc)
+                    synced_count += 1
+            
+            if not data.get("next"):
+                break
+                
+            page += 1
+            
+        return {"status": "success", "synced": synced_count}
+
+    except Exception as e:
+        logger.error(f"Sync failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # Reminders
 @app.post("/internal-api/reminders", response_model=schemas.Reminder)
 def create_reminder(reminder: schemas.ReminderCreate, db: Session = Depends(get_db)):

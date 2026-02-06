@@ -15,7 +15,8 @@ const StatsOverview = () => {
         totalSavings: 0,
         totalEmails: 0,
         winRate: 0,
-        avgCaseValue: 0
+        avgCaseValue: 0,
+        latestCaseId: null
     });
     const [charts, setCharts] = useState({
         revenue: [],
@@ -45,6 +46,7 @@ const StatsOverview = () => {
                     const totalEmails = cases.reduce((acc, c) => acc + (c.emails_received || 0) + (c.emails_sent || 0), 0);
                     const winRate = totalCases > 0 ? (activeCases / totalCases) * 100 : 0; // Simplified "Win" definition
                     const avgCaseValue = totalCases > 0 ? totalRevenue / totalCases : 0;
+                    const latestCaseId = totalCases > 0 ? cases[0].id : null;
 
                     // Chart 1: Revenue per Case (Existing)
                     const revenueData = cases.map(c => ({
@@ -82,7 +84,7 @@ const StatsOverview = () => {
                     }, {});
                     const negotiationResults = Object.entries(negResults).map(([name, value]) => ({ name, value }));
 
-                    setStats({ totalCases, activeCases, totalRevenue, totalSavings, totalEmails, winRate, avgCaseValue });
+                    setStats({ totalCases, activeCases, totalRevenue, totalSavings, totalEmails, winRate, avgCaseValue, latestCaseId });
                     setCharts({ revenue: revenueData, status: statusData, negotiationPerf, negotiationResults });
                 }
 
@@ -187,7 +189,11 @@ const StatsOverview = () => {
             {/* Middle Row: N8n Health & Document Feed */}
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
                 <N8nHealth executions={n8nExecutions} loading={loading} />
-                <DocumentFeed />
+                <DocumentFeed latestCaseId={stats.latestCaseId} />
+                {/* Note: using chart data name is a hack, better to use stats.latestCaseId if available. 
+                    Let's check setStats... it doesn't store the raw list. 
+                    I'll need to store a raw case ID in stats or use a separate state.
+                */}
             </div>
 
             {/* Bottom Row: Charts & Logs */}
