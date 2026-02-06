@@ -1,0 +1,1227 @@
+{
+  "name": "Get Mail Sub",
+  "nodes": [
+    {
+      "parameters": {
+        "url": "=https://fissureless-arline-creepily.ngrok-free.dev/case/1850882/medical/treatment/",
+        "options": {}
+      },
+      "id": "81163c54-cbc4-49f0-bd92-8c918065f69f",
+      "name": "Scrape Website",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        -4560,
+        1264
+      ],
+      "typeVersion": 4.2
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are the best Web scrapper in the country—a world-class expert in scrapping websites to rank on Google. In this task, you will analyze the provider's there Email and Phone number  and patient's name from a webpage and perform a detailed and structured scrapping. This data is really crutial make sure you provide acurate and complete data without any assumptions. \n\nhint \"class \"MuiTypography-root sc-dSCufp lfDujM MuiTypography-body1\" contains provider name \" \n\nhint \"class \"panel-title\" contains patient name\"\n\n\n\n\nAudit Structure You will review all the providers in the page.\n\nOnce completed, you will present your findings in clear, organized bullet points, into each json Item:\n\n4. **Data Output**\n   - Return clean, structured JSON like this:\n     ```json\n     [\n       {\n         \"Provider Name\": \"Provider ABC\",\n         \"Email\": \"abc@email.com\",\n         \"patient Name\": \"ABC\",\n         \"Phone Number\": \"(555) 123-4567\",\n       },\n       {\n         \"Provider Name\": \"Provider XYZ\",\n         \"Email\": \"not available\",\n         \"patient Name\": \"ABC\",\n         \"Phone Number\": \"not available\",\n       }\n     ]\n\nHere is the content of my landing page: {{ $json.response }} ",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        -4336,
+        1264
+      ],
+      "id": "ee289ce3-ca63-4614-985f-5dc190275f54",
+      "name": "AI Agent"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get the raw text output from the previous node\nconst raw = $json[\"output\"];\n\n// Extract the JSON array inside the text\nconst match = raw.match(/\\[\\s*{[\\s\\S]*}\\s*\\]/);\nif (!match) {\n  throw new Error(\"No JSON array found in 'output'.\");\n}\n\n// Parse it into an array\nconst data = JSON.parse(match[0]);\n\n// Build one combined object like provider1, provider2, etc.\nconst combined = {};\n\ndata.forEach((provider, index) => {\n  combined[`provider${index + 1}`] = {\n    \"Provider Name\": provider[\"Provider Name\"],\n    \"Email\": provider[\"Email\"],\n    \"Phone Number\": provider[\"Phone Number\"],\n    \"Balance\": provider[\"Balance\"]\n  };\n});\n\n// Wrap all providers under a single key\nconst output = {\n  providers: combined\n};\n\n// Return as a single item\nreturn [{ json: output }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -3984,
+        1264
+      ],
+      "id": "55af99a3-ff84-4b83-82f7-e77e9df4119e",
+      "name": "Code1"
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "providers",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        -3760,
+        1264
+      ],
+      "id": "c8c76d0e-2e66-4222-9d94-29bf67a973f7",
+      "name": "Split Out2"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "6fa70f46-92d5-416f-94c8-c270289ebe3a",
+              "leftValue": "={{ $json.Email }}",
+              "rightValue": "not",
+              "operator": {
+                "type": "string",
+                "operation": "contains"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -3536,
+        1264
+      ],
+      "id": "d63c1a4b-92be-4b5f-9892-1938be014a92",
+      "name": "If5"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "714e1dc1-3a31-4dc1-80d1-e4d71f2c6483",
+              "name": "AssistandID",
+              "value": "22181ab2-d9ef-4201-92b9-7855a696b157",
+              "type": "string"
+            },
+            {
+              "id": "83c5e8a2-1c25-4b86-b5ad-f0bbf16041eb",
+              "name": "PhoneID",
+              "value": "8fb04d49-73db-41d3-bb2e-ad339823aca5",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -3088,
+        1264
+      ],
+      "id": "61b53ec5-21d0-497e-ab0c-f1810f5030de",
+      "name": "Edit Fields",
+      "executeOnce": true
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.limit",
+      "typeVersion": 1,
+      "position": [
+        -2640,
+        1264
+      ],
+      "id": "ae1130bc-f44a-4f96-b84c-1c535856e620",
+      "name": "Limit"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        -3312,
+        1264
+      ],
+      "id": "7755c13c-d7c2-4ca7-8dd6-05e10bbd0d13",
+      "name": "Loop Over Items"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.vapi.ai/call",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"phoneNumberId\": \"{{ $('Edit Fields').item.json.PhoneID }}\",\n  \"assistantId\": \"{{ $('Edit Fields').item.json.AssistandID }}\",\n  \"customer\": {\n    \"number\": \"+16199431024\"\n  },\n  \"assistantOverrides\": {\n    \"variableValues\": {\n      \"name\": \"{{ $('Split Out2').item.json['Provider Name'] }}\"\n    }\n  }\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -2416,
+        1264
+      ],
+      "id": "8ff5ee13-57d2-490c-81fa-6ee52d018e70",
+      "name": "Make Call",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "I0GnxhulAp1ynpsg",
+          "name": "Header Auth account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "=https://api.vapi.ai/call/{{ $json.id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -2192,
+        1264
+      ],
+      "id": "dbb77a0b-1e28-478e-ab9c-e0e21f5c5254",
+      "name": "Get Call Summary",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "I0GnxhulAp1ynpsg",
+          "name": "Header Auth account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "01066800-a4ef-41b4-b5be-8f5e97094cc9",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "ended",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -1968,
+        1216
+      ],
+      "id": "4e8f95f4-12e1-46e8-8e53-6acfd9ee84d0",
+      "name": "If"
+    },
+    {
+      "parameters": {
+        "amount": 15
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        -1680,
+        1216
+      ],
+      "id": "6f385584-e2cc-41b5-a455-fa2ead7a1446",
+      "name": "Wait",
+      "webhookId": "c0a19fa4-cf67-42d9-b76f-8bb36071ed11"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "o4-mini",
+          "mode": "list",
+          "cachedResultName": "O4-MINI"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "=You are the best information extractor and here your job is to extract email address from this conversation.\n{{ $json.transcript }}\n\nresult should be as \n\nabs@gmail.com\nno additional information or dialogue or anything"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [
+        -1728,
+        1424
+      ],
+      "id": "382011f3-cb13-48fe-b6e1-06d1e0604655",
+      "name": "Message a model",
+      "credentials": {
+        "openAiApi": {
+          "id": "7fbCuNCbBrhyTPqW",
+          "name": "OpenAi account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $(\"If5\").all();\nconst updatedItems = items.map((item) => {\n  const providerName = item?.json[\"Provider Name\"];\n  const updatedProviderName = providerName.replace(\" \", \"+\");\n  item.json[\"P_F\"] = updatedProviderName;\n  return item;\n});\nreturn updatedItems;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1392,
+        1408
+      ],
+      "id": "c5335b40-e810-4d81-98e0-8db32bc88b21",
+      "name": "Code"
+    },
+    {
+      "parameters": {
+        "url": "=https://fissureless-arline-creepily.ngrok-free.dev/contact-directory/?contact_type_id=4&draw=2&columns%5B0%5D%5Bdata%5D=0&columns%5B0%5D%5Bname%5D=&columns%5B0%5D%5Bsearchable%5D=true&columns%5B0%5D%5Borderable%5D=false&columns%5B0%5D%5Bsearch%5D%5Bvalue%5D=&columns%5B0%5D%5Bsearch%5D%5Bregex%5D=false&columns%5B1%5D%5Bdata%5D=1&columns%5B1%5D%5Bname%5D=&columns%5B1%5D%5Bsearchable%5D=true&columns%5B1%5D%5Borderable%5D=true&columns%5B1%5D%5Bsearch%5D%5Bvalue%5D=&columns%5B1%5D%5Bsearch%5D%5Bregex%5D=false&columns%5B2%5D%5Bdata%5D=2&columns%5B2%5D%5Bname%5D=&columns%5B2%5D%5Bsearchable%5D=true&columns%5B2%5D%5Borderable%5D=true&columns%5B2%5D%5Bsearch%5D%5Bvalue%5D=&columns%5B2%5D%5Bsearch%5D%5Bregex%5D=false&columns%5B3%5D%5Bdata%5D=3&columns%5B3%5D%5Bname%5D=&columns%5B3%5D%5Bsearchable%5D=true&columns%5B3%5D%5Borderable%5D=true&columns%5B3%5D%5Bsearch%5D%5Bvalue%5D=&columns%5B3%5D%5Bsearch%5D%5Bregex%5D=false&columns%5B4%5D%5Bdata%5D=4&columns%5B4%5D%5Bname%5D=&columns%5B4%5D%5Bsearchable%5D=true&columns%5B4%5D%5Borderable%5D=true&columns%5B4%5D%5Bsearch%5D%5Bvalue%5D=&columns%5B4%5D%5Bsearch%5D%5Bregex%5D=false&columns%5B5%5D%5Bdata%5D=5&columns%5B5%5D%5Bname%5D=&columns%5B5%5D%5Bsearchable%5D=true&columns%5B5%5D%5Borderable%5D=false&columns%5B5%5D%5Bsearch%5D%5Bvalue%5D=&columns%5B5%5D%5Bsearch%5D%5Bregex%5D=false&columns%5B6%5D%5Bdata%5D=6&columns%5B6%5D%5Bname%5D=&columns%5B6%5D%5Bsearchable%5D=true&columns%5B6%5D%5Borderable%5D=false&columns%5B6%5D%5Bsearch%5D%5Bvalue%5D=&columns%5B6%5D%5Bsearch%5D%5Bregex%5D=false&order%5B0%5D%5Bcolumn%5D=0&order%5B0%5D%5Bdir%5D=asc&start=0&length=25&search%5Bvalue%5D={{ $json.P_F }}&search%5Bregex%5D=false&_=1760655718955",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -1168,
+        1408
+      ],
+      "id": "6d78d10c-dffd-4124-a425-f6aebd1fa2e0",
+      "name": "GPID"
+    },
+    {
+      "parameters": {
+        "jsCode": "return items.flatMap(item => {\n  const data = item.json.data || [];\n\n  return data.map(entry => {\n    const html = entry[entry.length - 1] || '';\n    const match = html.match(/health-provider\\/(\\d+)\\//);\n    const providerId = match ? match[1] : null;\n\n    // Return clean structured object (no HTML)\n    return {\n      json: {\n        id: entry[0],\n        name: entry[1],\n        email: entry[2],\n        phone1: entry[3],\n        phone2: entry[4],\n        address: entry[5],\n        providerId\n      }\n    };\n  });\n});\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -944,
+        1408
+      ],
+      "id": "920e4b4e-79f1-4a44-adeb-48fd9d041bc3",
+      "name": "Code2"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-5-mini",
+          "mode": "list",
+          "cachedResultName": "gpt-5-mini"
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        -4272,
+        1488
+      ],
+      "id": "34477f21-9c05-4034-998c-aae2f5631495",
+      "name": "OpenAI Chat Model",
+      "credentials": {
+        "openAiApi": {
+          "id": "7fbCuNCbBrhyTPqW",
+          "name": "OpenAi account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get all phone numbers from \"Code\" node\nconst codePhones = $('Code').all().map(item => item.json[\"Phone Number\"].replace(/\\D/g, ''));\n\n// Get all items from \"Code2\"\nconst code2Items = $('Code2').all();\n\n// Prepare a clean number function to compare consistently\nconst clean = num => (num || '').replace(/\\D/g, ''); // removes all non-digits\n\n// Compare\nconst matched = code2Items.filter(item => {\n  const phone1 = clean(item.json.phone1);\n  const phone2 = clean(item.json.phone2);\n  return codePhones.includes(phone1) || codePhones.includes(phone2);\n});\n\n// Return results\nif (matched.length > 0) {\n  return matched.map(item => ({ json: { match: true, ...item.json } }));\n} else {\n  return [{ json: { match: false, message: \"No matching phone numbers found\" } }];\n}\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -720,
+        1408
+      ],
+      "id": "23ba5efa-6c54-45bb-a7c8-941f2f579068",
+      "name": "Check_correct_provider"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get items from both nodes\nconst loopItems = $('Loop Over Items').all();\nconst compareItems = $('Check_correct_provider').all();\n\n// Normalize function to ignore case and trim spaces\nconst normalize = str => (str || '').toLowerCase().trim();\n\n// Compare by name\nconst merged = loopItems.flatMap(loopItem => {\n  const loopName = normalize(loopItem.json[\"Provider Name\"]);\n\n  // Find matching entries in Compare Phones node\n  const matches = compareItems.filter(compareItem =>\n    normalize(compareItem.json.name) === loopName\n  );\n\n  // Merge matched records\n  return matches.map(match => ({\n    json: {\n      ...loopItem.json,\n      ...match.json\n    }\n  }));\n});\n\n// Return results (or message if none found)\nreturn merged.length > 0\n  ? merged\n  : [{ json: { match: false, message: \"No matching provider names found\" } }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -496,
+        1408
+      ],
+      "id": "10b92326-294d-4229-828b-fa7c9884b25a",
+      "name": "Code3"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://fissureless-arline-creepily.ngrok-free.dev/case/0/contact/provider/{{ $('Code3').item.json.providerId }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "content-type",
+              "value": "application/x-www-form-urlencoded"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "csrfmiddlewaretoken",
+              "value": "={{ $json.csrfmiddlewaretoken }}"
+            },
+            {
+              "name": "contact-company",
+              "value": "={{ $json[\"contact-company\"] }}"
+            },
+            {
+              "name": "=address-payee",
+              "value": "={{ $json[\"address-payee\"] }}"
+            },
+            {
+              "name": "address-tags",
+              "value": "={{ $json[\"address-tags\"] }}"
+            },
+            {
+              "name": "address-street1",
+              "value": "={{ $json[\"address-street1\"] }}"
+            },
+            {
+              "name": "address-street2",
+              "value": "={{ $json[\"address-street2\"] }}"
+            },
+            {
+              "name": "address-city",
+              "value": "={{ $json[\"address-city\"] }}"
+            },
+            {
+              "name": "address-zipcode",
+              "value": "={{ $json[\"address-zipcode\"] }}"
+            },
+            {
+              "name": "phone-phone",
+              "value": "={{ $json[\"phone-phone\"] }}"
+            },
+            {
+              "name": "phone-phoneext",
+              "value": "={{ $json[\"phone-phoneext\"] }}"
+            },
+            {
+              "name": "phone-tags",
+              "value": "={{ $json[\"phone-tags\"] }}"
+            },
+            {
+              "name": "phone-phone_type",
+              "value": "={{ $json[\"phone-phone_type\"] }}"
+            },
+            {
+              "name": "=email-email"
+            },
+            {
+              "name": "email-tags",
+              "value": "={{ $json[\"email-tags\"] }}"
+            },
+            {
+              "name": "contact-tax_id",
+              "value": "={{ $json[\"contact-tax_id\"] }}"
+            },
+            {
+              "name": "cell-phone",
+              "value": "={{ $json[\"cell-phone\"] }}"
+            },
+            {
+              "name": "cell-phone_type",
+              "value": "={{ $json[\"cell-phone_type\"] }}"
+            },
+            {
+              "name": "cell-tags",
+              "value": "={{ $json[\"cell-tags\"] }}"
+            },
+            {
+              "name": "fax-phone",
+              "value": "={{ $json[\"fax-phone\"] }}"
+            },
+            {
+              "name": "fax-phone_type",
+              "value": "={{ $json[\"fax-phone_type\"] }}"
+            },
+            {
+              "name": "fax-tags",
+              "value": "={{ $json[\"fax-tags\"] }}"
+            },
+            {
+              "name": "website-website",
+              "value": "={{ $json[\"website-website\"] }}"
+            },
+            {
+              "name": "website-tags",
+              "value": "={{ $json[\"website-tags\"] }}"
+            },
+            {
+              "name": "billing_address-location_name",
+              "value": "={{ $json[\"billing_address-location_name\"] }}"
+            },
+            {
+              "name": "billing_address-payee",
+              "value": "={{ $json[\"billing_address-payee\"] }}"
+            },
+            {
+              "name": "billing_address-tags",
+              "value": "={{ $json[\"billing_address-tags\"] }}"
+            },
+            {
+              "name": "billing_address-street1",
+              "value": "={{ $json[\"billing_address-street1\"] }}"
+            },
+            {
+              "name": "billing_address-street2",
+              "value": "={{ $json[\"billing_address-street2\"] }}"
+            },
+            {
+              "name": "=billing_address-city",
+              "value": "={{ $json[\"billing_address-city\"] }}"
+            },
+            {
+              "name": "billing_address-zipcode",
+              "value": "={{ $json[\"billing_address-zipcode\"] }}"
+            },
+            {
+              "name": "billing_phone-phone",
+              "value": "={{ $json[\"billing_phone-phone\"] }}"
+            },
+            {
+              "name": "billing_phone-phoneext",
+              "value": "={{ $json[\"billing_phone-phoneext\"] }}"
+            },
+            {
+              "name": "billing_phone-tags",
+              "value": "={{ $json[\"billing_phone-tags\"] }}"
+            },
+            {
+              "name": "billing_phone-phone_type",
+              "value": "={{ $json[\"billing_phone-phone_type\"] }}"
+            },
+            {
+              "name": "billing_email-email",
+              "value": "={{ $json[\"billing_email-email\"] }}"
+            },
+            {
+              "name": "billing_email-tags",
+              "value": "={{ $json[\"billing_email-tags\"] }}"
+            },
+            {
+              "name": "billing_fax-phone",
+              "value": "={{ $json[\"billing_fax-phone\"] }}"
+            },
+            {
+              "name": "=billing_fax-phone_type",
+              "value": "={{ $json[\"billing_fax-phone_type\"] }}"
+            },
+            {
+              "name": "billing_fax-tags",
+              "value": "={{ $json[\"billing_fax-tags\"] }}"
+            },
+            {
+              "name": "billing_website-website",
+              "value": "={{ $json[\"billing_website-website\"] }}"
+            },
+            {
+              "name": "billing_website-tags",
+              "value": "={{ $json[\"billing_website-tags\"] }}"
+            },
+            {
+              "name": "records_address-location_name",
+              "value": "={{ $json[\"records_address-location_name\"] }}"
+            },
+            {
+              "name": "records_address-payee",
+              "value": "={{ $json[\"records_address-payee\"] }}"
+            },
+            {
+              "name": "records_address-tags",
+              "value": "={{ $json[\"records_address-tags\"] }}"
+            },
+            {
+              "name": "records_address-street1",
+              "value": "={{ $json[\"records_address-street1\"] }}"
+            },
+            {
+              "name": "records_address-street2",
+              "value": "={{ $json[\"records_address-street2\"] }}"
+            },
+            {
+              "name": "records_address-city",
+              "value": "={{ $json[\"records_address-city\"] }}"
+            },
+            {
+              "name": "records_address-zipcode",
+              "value": "={{ $json[\"records_address-zipcode\"] }}"
+            },
+            {
+              "name": "records_phone-phone",
+              "value": "={{ $json[\"records_phone-phone\"] }}"
+            },
+            {
+              "name": "records_phone-phoneext",
+              "value": "={{ $json[\"records_phone-phoneext\"] }}"
+            },
+            {
+              "name": "records_phone-tags",
+              "value": "={{ $json[\"records_phone-tags\"] }}"
+            },
+            {
+              "name": "records_phone-phone_type",
+              "value": "={{ $json[\"records_phone-phone_type\"] }}"
+            },
+            {
+              "name": "=records_email-email",
+              "value": "={{ $json[\"records_email-email\"] }}"
+            },
+            {
+              "name": "records_email-tags",
+              "value": "={{ $json[\"records_email-tags\"] }}"
+            },
+            {
+              "name": "records_fax-phone",
+              "value": "={{ $json[\"records_fax-phone\"] }}"
+            },
+            {
+              "name": "=records_fax-phone_type",
+              "value": "={{ $json[\"records_fax-phone_type\"] }}"
+            },
+            {
+              "name": "records_fax-tags",
+              "value": "={{ $json[\"records_fax-tags\"] }}"
+            },
+            {
+              "name": "records_website-website",
+              "value": "={{ $json[\"records_website-website\"] }}"
+            },
+            {
+              "name": "records_website-tags",
+              "value": "={{ $json[\"records_website-tags\"] }}"
+            },
+            {
+              "name": "contact-chartsquad",
+              "value": "={{ $json[\"contact-chartsquad\"] }}"
+            },
+            {
+              "name": "contact-blacklisted",
+              "value": "={{ $json[\"contact-blacklisted\"] }}"
+            },
+            {
+              "name": "address-state",
+              "value": "={{ $json[\"address-state\"] }}"
+            },
+            {
+              "name": "billing_address-state",
+              "value": "={{ $json[\"billing_address-state\"] }}"
+            },
+            {
+              "name": "records_address-state",
+              "value": "={{ $json[\"records_address-state\"] }}"
+            },
+            {
+              "name": "contact-contact_specialties",
+              "value": "={{ $json[\"contact-contact_specialties\"] }}"
+            },
+            {
+              "name": "contact-accepts_lien",
+              "value": "={{ $json[\"contact-accepts_lien\"] }}"
+            },
+            {
+              "name": "contact-contactnote",
+              "value": "={{ $json[\"contact-contactnote\"] }}"
+            },
+            {
+              "name": "submitButton",
+              "value": "={{ $json.submitButton }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        576,
+        1488
+      ],
+      "id": "2056e6ba-e284-4e83-9b53-3fd5081988cc",
+      "name": "HTTP Request"
+    },
+    {
+      "parameters": {
+        "url": "=https://fissureless-arline-creepily.ngrok-free.dev//case/0/contact/provider/{{ $json.providerId }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "content-type",
+              "value": "application/x-www-form-urlencoded"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -272,
+        1408
+      ],
+      "id": "28775cef-f47f-4272-92c4-7914e018ff73",
+      "name": "HTTP Request2"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract form fields and their values from HTML\n// Use this in a Code node in n8n (pure string manipulation)\n\n// Get the response data\nlet data = $input.first().json;\n\n// The HTML is in the 'response' key and might be JSON stringified\nlet html = data.response || data.html || data.body || data.data;\n\n// If it's a JSON string, parse it\nif (typeof html === 'string' && html.startsWith('{')) {\n  try {\n    const parsed = JSON.parse(html);\n    html = parsed.response || parsed;\n  } catch (e) {\n    // Already a string, continue\n  }\n}\n\n// If html is still an object, try to get response property\nif (typeof html === 'object' && html.response) {\n  html = html.response;\n}\n\n// Debug: log what we're getting\nconsole.log('HTML type:', typeof html);\nconsole.log('HTML length:', html ? html.length : 0);\n\nconst formData = [];\nlet csrfToken = null;\n\n// Extract CSRF token first\nconst csrfRegex = /<input[^>]*name=[\"']csrfmiddlewaretoken[\"'][^>]*value=[\"']([^\"']+)[\"'][^>]*>/i;\nconst csrfMatch = html.match(csrfRegex);\nif (csrfMatch) {\n  csrfToken = csrfMatch[1];\n}\n\n// Helper function to extract attribute value\nfunction getAttr(tag, attrName) {\n  const regex = new RegExp(`${attrName}=[\"']([^\"']*)[\"']`, 'i');\n  const match = tag.match(regex);\n  return match ? match[1] : null;\n}\n\n// Helper function to check if option is selected\nfunction getSelectedOption(selectTag) {\n  const optionRegex = /<option[^>]*selected[^>]*value=[\"']([^\"']*)[\"'][^>]*>([^<]*)<\\/option>/gi;\n  const match = optionRegex.exec(selectTag);\n  return match ? { value: match[1], text: match[2].trim() } : null;\n}\n\n// Extract all input fields\nconst inputRegex = /<input[^>]*name=[\"']([^\"']+)[\"'][^>]*>/gi;\nlet match;\n\nwhile ((match = inputRegex.exec(html)) !== null) {\n  const tag = match[0];\n  const name = match[1];\n  const value = getAttr(tag, 'value');\n  const type = getAttr(tag, 'type') || 'text';\n  const id = getAttr(tag, 'id');\n  const checked = tag.includes('checked');\n  \n  // Skip CSRF tokens\n  if (name === 'csrfmiddlewaretoken') continue;\n  \n  // Skip empty hidden fields\n  if (type === 'hidden' && !value) continue;\n  \n  // Handle checkboxes\n  if (type === 'checkbox') {\n    formData.push({\n      fieldName: name,\n      fieldId: id,\n      fieldType: 'checkbox',\n      value: checked,\n      hasData: checked\n    });\n  } else {\n    formData.push({\n      fieldName: name,\n      fieldId: id,\n      fieldType: type,\n      value: value || null,\n      hasData: !!value\n    });\n  }\n}\n\n// Extract all select fields\nconst selectRegex = /<select[^>]*name=[\"']([^\"']+)[\"'][^>]*>[\\s\\S]*?<\\/select>/gi;\n\nwhile ((match = selectRegex.exec(html)) !== null) {\n  const selectTag = match[0];\n  const name = match[1];\n  const id = getAttr(selectTag, 'id');\n  const selected = getSelectedOption(selectTag);\n  \n  formData.push({\n    fieldName: name,\n    fieldId: id,\n    fieldType: 'select',\n    value: selected ? selected.value : '',\n    selectedText: selected ? selected.text : '',\n    hasData: !!(selected && selected.value && selected.value !== '')\n  });\n}\n\n// Extract all textarea fields\nconst textareaRegex = /<textarea[^>]*name=[\"']([^\"']+)[\"'][^>]*>([\\s\\S]*?)<\\/textarea>/gi;\n\nwhile ((match = textareaRegex.exec(html)) !== null) {\n  const name = match[1];\n  const value = match[2].trim();\n  const tag = match[0];\n  const id = getAttr(tag, 'id');\n  \n  formData.push({\n    fieldName: name,\n    fieldId: id,\n    fieldType: 'textarea',\n    value: value || '',\n    hasData: !!value\n  });\n}\n\n// Extract hidden input for Trix editor (contact-contactnote)\nconst trixRegex = /<input[^>]*type=[\"']hidden[\"'][^>]*name=[\"']([^\"']+)[\"'][^>]*id=[\"']([^\"']+)[\"'][^>]*>/gi;\nconst trixEditorRegex = /<trix-editor[^>]*input=[\"']([^\"']+)[\"'][^>]*>([\\s\\S]*?)<\\/trix-editor>/gi;\n\n// Build a map of trix editor content by input id\nconst trixContentMap = {};\nwhile ((match = trixEditorRegex.exec(html)) !== null) {\n  const inputId = match[1];\n  const content = match[2].trim();\n  trixContentMap[inputId] = content;\n}\n\n// Match hidden inputs with trix content\nhtml.match(trixRegex)?.forEach(tag => {\n  const name = getAttr(tag, 'name');\n  const id = getAttr(tag, 'id');\n  const value = trixContentMap[id] || '';\n  \n  // Only add if not already added and if it has content or is a note field\n  if (!formData.find(f => f.fieldName === name) && (value || name.includes('note'))) {\n    formData.push({\n      fieldName: name,\n      fieldId: id,\n      fieldType: 'textarea',\n      value: value,\n      hasData: !!value\n    });\n  }\n});\n\n// Extract submit button\nconst submitRegex = /<button[^>]*name=[\"']submitButton[\"'][^>]*value=[\"']([^\"']+)[\"'][^>]*>([^<]*)<\\/button>/gi;\nconst submitMatch = html.match(submitRegex);\nif (submitMatch && submitMatch[0]) {\n  const buttonTag = submitMatch[0];\n  const value = getAttr(buttonTag, 'value') || buttonTag.match(/>([^<]+)</)?.[1]?.trim() || 'Submit';\n  \n  formData.push({\n    fieldName: 'submitButton',\n    fieldId: getAttr(buttonTag, 'id'),\n    fieldType: 'submit',\n    value: value,\n    hasData: true\n  });\n}\n\n// Debug: log results\nconsole.log('Total fields found:', formData.length);\nconsole.log('CSRF Token found:', csrfToken ? 'Yes' : 'No');\n\n// If no data found, return debug info\nif (formData.length === 0) {\n  return [{\n    json: {\n      error: 'No form fields found',\n      csrfToken: csrfToken,\n      htmlPreview: html ? html.substring(0, 500) : 'HTML is null/undefined',\n      inputKeys: Object.keys($input.first().json)\n    }\n  }];\n}\n\n// Create a single object with all fields\nconst output = {\n  csrfmiddlewaretoken: csrfToken || ''\n};\n\n// Add all form fields to the object\nformData.forEach(item => {\n  // Ensure all values are strings, never null or undefined\n  let value = item.value;\n  \n  // Convert to string and handle null/undefined\n  if (value === null || value === undefined) {\n    value = '';\n  } else if (typeof value === 'boolean') {\n    value = value ? 'on' : '';\n  } else if (typeof value !== 'string') {\n    value = String(value);\n  }\n  \n  output[item.fieldName] = value;\n});\n\n// Return as single item\nreturn [{ json: output }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -96,
+        1408
+      ],
+      "id": "cd801ef0-efd6-4c38-8dab-226871c16d57",
+      "name": "Code5"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract form fields and their values from HTML\n// Use this in a Code node in n8n (pure string manipulation)\n\n// Get the response data\nlet input = $input.first().json;\n\n// Handle the nested structure: data -> JSON string -> response property\nlet html;\nif (input.data) {\n  // Parse the JSON string in the 'data' field\n  const parsedData = JSON.parse(input.data);\n  html = parsedData.response;\n} else if (input.response) {\n  html = input.response;\n} else if (input.body) {\n  html = input.body;\n} else {\n  html = input;\n}\n\n// Debug: log what we're getting\nconsole.log('HTML type:', typeof html);\nconsole.log('HTML length:', html ? html.length : 0);\n\nconst formData = [];\nlet csrfToken = null;\n\n// Extract CSRF token first\nconst csrfRegex = /<input[^>]*name=[\"']csrfmiddlewaretoken[\"'][^>]*value=[\"']([^\"']+)[\"'][^>]*>/i;\nconst csrfMatch = html.match(csrfRegex);\nif (csrfMatch) {\n  csrfToken = csrfMatch[1];\n}\n\n// Helper function to extract attribute value\nfunction getAttr(tag, attrName) {\n  const regex = new RegExp(`${attrName}=[\"']([^\"']*)[\"']`, 'i');\n  const match = tag.match(regex);\n  return match ? match[1] : null;\n}\n\n// Helper function to check if option is selected\nfunction getSelectedOption(selectTag) {\n  const optionRegex = /<option[^>]*selected[^>]*value=[\"']([^\"']*)[\"'][^>]*>([^<]*)<\\/option>/gi;\n  const match = optionRegex.exec(selectTag);\n  return match ? { value: match[1], text: match[2].trim() } : null;\n}\n\n// Extract all input fields\nconst inputRegex = /<input[^>]*name=[\"']([^\"']+)[\"'][^>]*>/gi;\nlet match;\n\nwhile ((match = inputRegex.exec(html)) !== null) {\n  const tag = match[0];\n  const name = match[1];\n  const value = getAttr(tag, 'value');\n  const type = getAttr(tag, 'type') || 'text';\n  const id = getAttr(tag, 'id');\n  const checked = tag.includes('checked');\n  \n  // Skip CSRF tokens\n  if (name === 'csrfmiddlewaretoken') continue;\n  \n  // Skip empty hidden fields\n  if (type === 'hidden' && !value) continue;\n  \n  // Handle checkboxes\n  if (type === 'checkbox') {\n    formData.push({\n      fieldName: name,\n      fieldId: id,\n      fieldType: 'checkbox',\n      value: checked,\n      hasData: checked\n    });\n  } else {\n    formData.push({\n      fieldName: name,\n      fieldId: id,\n      fieldType: type,\n      value: value || null,\n      hasData: !!value\n    });\n  }\n}\n\n// Extract all select fields\nconst selectRegex = /<select[^>]*name=[\"']([^\"']+)[\"'][^>]*>[\\s\\S]*?<\\/select>/gi;\n\nwhile ((match = selectRegex.exec(html)) !== null) {\n  const selectTag = match[0];\n  const name = match[1];\n  const id = getAttr(selectTag, 'id');\n  const selected = getSelectedOption(selectTag);\n  \n  formData.push({\n    fieldName: name,\n    fieldId: id,\n    fieldType: 'select',\n    value: selected ? selected.value : '',\n    selectedText: selected ? selected.text : '',\n    hasData: !!(selected && selected.value && selected.value !== '')\n  });\n}\n\n// Extract all textarea fields\nconst textareaRegex = /<textarea[^>]*name=[\"']([^\"']+)[\"'][^>]*>([\\s\\S]*?)<\\/textarea>/gi;\n\nwhile ((match = textareaRegex.exec(html)) !== null) {\n  const name = match[1];\n  const value = match[2].trim();\n  const tag = match[0];\n  const id = getAttr(tag, 'id');\n  \n  formData.push({\n    fieldName: name,\n    fieldId: id,\n    fieldType: 'textarea',\n    value: value || '',\n    hasData: !!value\n  });\n}\n\n// Extract hidden input for Trix editor (contact-contactnote)\nconst trixRegex = /<input[^>]*type=[\"']hidden[\"'][^>]*name=[\"']([^\"']+)[\"'][^>]*id=[\"']([^\"']+)[\"'][^>]*>/gi;\nconst trixEditorRegex = /<trix-editor[^>]*input=[\"']([^\"']+)[\"'][^>]*>([\\s\\S]*?)<\\/trix-editor>/gi;\n\n// Build a map of trix editor content by input id\nconst trixContentMap = {};\nwhile ((match = trixEditorRegex.exec(html)) !== null) {\n  const inputId = match[1];\n  const content = match[2].trim();\n  trixContentMap[inputId] = content;\n}\n\n// Match hidden inputs with trix content\nhtml.match(trixRegex)?.forEach(tag => {\n  const name = getAttr(tag, 'name');\n  const id = getAttr(tag, 'id');\n  const value = trixContentMap[id] || '';\n  \n  // Only add if not already added and if it has content or is a note field\n  if (!formData.find(f => f.fieldName === name) && (value || name.includes('note'))) {\n    formData.push({\n      fieldName: name,\n      fieldId: id,\n      fieldType: 'textarea',\n      value: value,\n      hasData: !!value\n    });\n  }\n});\n\n// Extract submit button\nconst submitRegex = /<button[^>]*name=[\"']submitButton[\"'][^>]*value=[\"']([^\"']+)[\"'][^>]*>([^<]*)<\\/button>/gi;\nconst submitMatch = html.match(submitRegex);\nif (submitMatch && submitMatch[0]) {\n  const buttonTag = submitMatch[0];\n  const value = getAttr(buttonTag, 'value') || buttonTag.match(/>([^<]+)</)?.[1]?.trim() || 'Submit';\n  \n  formData.push({\n    fieldName: 'submitButton',\n    fieldId: getAttr(buttonTag, 'id'),\n    fieldType: 'submit',\n    value: value,\n    hasData: true\n  });\n}\n\n// Debug: log results\nconsole.log('Total fields found:', formData.length);\nconsole.log('CSRF Token found:', csrfToken ? 'Yes' : 'No');\n\n// If no data found, return debug info\nif (formData.length === 0) {\n  return [{\n    json: {\n      error: 'No form fields found',\n      csrfToken: csrfToken,\n      htmlPreview: html ? html.substring(0, 500) : 'HTML is null/undefined',\n      inputKeys: Object.keys($input.first().json)\n    }\n  }];\n}\n\n// Create a single object with all fields\nconst output = {\n  csrfmiddlewaretoken: csrfToken || ''\n};\n\n// Add all form fields to the object\nformData.forEach(item => {\n  // Ensure all values are strings, never null or undefined\n  let value = item.value;\n  \n  // Convert to string and handle null/undefined\n  if (value === null || value === undefined) {\n    value = '';\n  } else if (typeof value === 'boolean') {\n    value = value ? 'on' : '';\n  } else if (typeof value !== 'string') {\n    value = String(value);\n  }\n  \n  output[item.fieldName] = value;\n});\n\n// Return as single item\nreturn [{ json: output }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        272,
+        256
+      ],
+      "id": "3f7979a5-32f7-4eb3-b544-6c12954af240",
+      "name": "Code6"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://fissureless-arline-creepily.ngrok-free.dev/case/0/contact/provider/{{ $('Code3').item.json.providerId }}/",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "content-type",
+              "value": "application/x-www-form-urlencoded"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "email-email",
+              "value": "={{ $('Message a model').first().json.message.content }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        128,
+        1616
+      ],
+      "id": "ace7e31d-f1bd-416a-aff1-04e05d11cbe1",
+      "name": "HTTP Request3"
+    },
+    {
+      "parameters": {
+        "url": "=https://api.vapi.ai/assistant/{{ $json.AssistandID }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -2864,
+        1264
+      ],
+      "id": "4d0bb552-fc3d-4002-b96b-7274bad3b065",
+      "name": "HTTP Request7",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "I0GnxhulAp1ynpsg",
+          "name": "Header Auth account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## Scrapping Medical Treatment page of specific case\n"
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -4624,
+        1136
+      ],
+      "typeVersion": 1,
+      "id": "d07a5f90-3fb0-4a63-a019-16f80d902908",
+      "name": "Sticky Note"
+    },
+    {
+      "parameters": {
+        "content": "## AI agent to process the scrapped data\n",
+        "width": 256
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -4352,
+        1136
+      ],
+      "typeVersion": 1,
+      "id": "f51ff4ac-0d2d-46a8-b6b6-d0fe0673742a",
+      "name": "Sticky Note1"
+    },
+    {
+      "parameters": {
+        "content": "## Code Node which translates AI's data into useable format",
+        "width": 224
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -4048,
+        1136
+      ],
+      "typeVersion": 1,
+      "id": "1e2642ce-b751-4203-9ca2-55d7ca972a41",
+      "name": "Sticky Note2"
+    },
+    {
+      "parameters": {
+        "content": "## Splitting providers into seprate Items",
+        "width": 224
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -3808,
+        1136
+      ],
+      "typeVersion": 1,
+      "id": "7e466df8-b941-48c9-ae82-b2667db54a66",
+      "name": "Sticky Note3"
+    },
+    {
+      "parameters": {
+        "content": "## Filtering providers with no Email",
+        "width": 224
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -3568,
+        1136
+      ],
+      "typeVersion": 1,
+      "id": "c81c2a64-fcd6-4ac2-a6f8-0261080a08ff",
+      "name": "Sticky Note4"
+    },
+    {
+      "parameters": {
+        "content": "## Requesting VAPIs Model",
+        "width": 224
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -2928,
+        1136
+      ],
+      "typeVersion": 1,
+      "id": "70b3b748-8a92-485d-aa86-087c9fe29ab2",
+      "name": "Sticky Note5"
+    },
+    {
+      "parameters": {
+        "content": "## Requesting VAPIs Agent",
+        "width": 224
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -2480,
+        1136
+      ],
+      "typeVersion": 1,
+      "id": "f8619c7f-9c0b-4ce9-8f94-f570bb5d4bdf",
+      "name": "Sticky Note6"
+    },
+    {
+      "parameters": {
+        "content": "## Ai Extracting the Email From Call"
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -1904,
+        1360
+      ],
+      "typeVersion": 1,
+      "id": "0d968125-88a8-4854-b973-290571b3d1fb",
+      "name": "Sticky Note7"
+    },
+    {
+      "parameters": {
+        "content": "## Ai Extracting the Email From Call"
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -1456,
+        1296
+      ],
+      "typeVersion": 1,
+      "id": "7cfabc84-6d3c-463d-95b8-6a7ff4ce405d",
+      "name": "Sticky Note8"
+    },
+    {
+      "parameters": {
+        "content": "## Getting Case ID which will be used to update the Email"
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -1200,
+        1264
+      ],
+      "typeVersion": 1,
+      "id": "aefe1a97-8656-4c7d-8377-b21d1bc19835",
+      "name": "Sticky Note9"
+    },
+    {
+      "parameters": {
+        "content": "\n\n\n\n\n\n\n## Searching Provider by Name",
+        "height": 208,
+        "width": 208
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -992,
+        1456
+      ],
+      "typeVersion": 1,
+      "id": "da3aafb5-c922-465c-91e8-cbfb4a79d2bc",
+      "name": "Sticky Note10"
+    },
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "CaseID"
+            }
+          ]
+        }
+      },
+      "id": "a3e6f1ab-4722-4ea0-b6f3-5be9d6697779",
+      "typeVersion": 1.1,
+      "name": "When Executed by Another Workflow",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "position": [
+        -4848,
+        1264
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Scrape Website": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Code1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code1": {
+      "main": [
+        [
+          {
+            "node": "Split Out2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Out2": {
+      "main": [
+        [
+          {
+            "node": "If5",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If5": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit Fields": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request7",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Limit": {
+      "main": [
+        [
+          {
+            "node": "Make Call",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Items": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Edit Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Make Call": {
+      "main": [
+        [
+          {
+            "node": "Get Call Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Call Summary": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "Message a model",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Wait",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait": {
+      "main": [
+        [
+          {
+            "node": "Get Call Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Message a model": {
+      "main": [
+        [
+          {
+            "node": "Code",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code": {
+      "main": [
+        [
+          {
+            "node": "GPID",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GPID": {
+      "main": [
+        [
+          {
+            "node": "Code2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code2": {
+      "main": [
+        [
+          {
+            "node": "Check_correct_provider",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check_correct_provider": {
+      "main": [
+        [
+          {
+            "node": "Code3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code3": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request2": {
+      "main": [
+        [
+          {
+            "node": "Code5",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code5": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request3": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request7": {
+      "main": [
+        [
+          {
+            "node": "Limit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "When Executed by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "Scrape Website",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "c298855c-ddee-4b37-a99e-ec79bf8c4df2",
+  "meta": {
+    "instanceId": "e82d4abdd6eb816597dc8f426c7e69508cc13d63a41073edf573e73f22416c1b"
+  },
+  "id": "3y1pMl7LLoPpAuj0",
+  "tags": []
+}

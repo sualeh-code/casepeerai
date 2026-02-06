@@ -1,0 +1,1430 @@
+{
+  "name": "Thirdpartysubf",
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "CaseID"
+            }
+          ]
+        }
+      },
+      "id": "15916d09-1798-4d30-86b6-bd65e3bb31ef",
+      "typeVersion": 1.1,
+      "name": "When Executed by Another Workflow",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "position": [
+        -3408,
+        736
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=https://casepeerai.onrender.com/case/{{ $json.CaseID }}/defendant/defendant/",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": " text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -3184,
+        736
+      ],
+      "id": "48026ad3-a950-42cd-b195-9b781093b658",
+      "name": "HTTP Request"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get the HTML content from the previous node\nconst html = $input.item.json.body || \n             $input.item.json.data || \n             $input.item.json.html ||\n             $input.item.json.response ||\n             JSON.stringify($input.item.json);\n\n// Check if html is a string\nif (typeof html !== 'string') {\n  throw new Error('HTML content not found. Available keys: ' + Object.keys($input.item.json).join(', '));\n}\n\n// ========== EXTRACT NAME ==========\nfunction extractName(html) {\n  // Pattern 1: From title tag\n  let match = html.match(/<title>\\s*([^<]+?)\\s+-\\s+Defendant\\s*<\\/title>/i);\n  if (match && match[1]) return match[1].trim();\n  \n  // Pattern 2: From panel heading with green circle\n  match = html.match(/<div\\s+class=\"circle\\s+green\"[^>]*>\\s*([^<]+?)\\s+-\\s+DOL/i);\n  if (match && match[1]) return match[1].trim();\n  \n  // Pattern 3: From h4 panel-title\n  match = html.match(/<h4[^>]*class=\"panel-title\"[^>]*>[\\s\\S]*?<div[^>]*class=\"circle\\s+green\"[^>]*>[\\s\\S]*?([A-Za-zÀ-ÿ\\s]+,\\s*[A-Za-zÀ-ÿ\\s]+)\\s+-\\s+DOL/i);\n  if (match && match[1]) return match[1].trim();\n  \n  return null;\n}\n\n// ========== EXTRACT INSURANCE ID ==========\nfunction extractInsuranceId(html) {\n  // Pattern: /case/{case_id}/defendant/insurance/{insurance_id}/No/\n  const pattern = /\\/case\\/\\d+\\/defendant\\/insurance\\/(\\d+)\\/No\\//;\n  const match = html.match(pattern);\n  return match ? match[1] : null;\n}\n\n// ========== EXTRACT DEPOSITED AMOUNT ==========\nfunction extractDepositedAmount(html) {\n  const amounts = [];\n  \n  // Pattern 1: \"check 35k\" or \"Check Deposited 35k\"\n  let matches = html.matchAll(/(?:check\\s+deposited?|insurance\\s+check)[^<]{0,100}?(\\$?\\d{1,3}(?:,\\d{3})*(?:\\.\\d{2})?k?)/gi);\n  for (const match of matches) {\n    amounts.push(parseAmount(match[1]));\n  }\n  \n  // Pattern 2: \"Signed BI release 35k\"\n  matches = html.matchAll(/signed\\s+bi\\s+release[^<]{0,50}?(\\$?\\d{1,3}(?:,\\d{3})*(?:\\.\\d{2})?k?)/gi);\n  for (const match of matches) {\n    amounts.push(parseAmount(match[1]));\n  }\n  \n  // Pattern 3: Look in pinned notes section\n  const pinnedNotesMatch = html.match(/<div id=\"wrap-pres\">([\\s\\S]*?)<\\/div>/g);\n  if (pinnedNotesMatch) {\n    for (const note of pinnedNotesMatch) {\n      const amountMatch = note.match(/(?:check|deposited?)[^<]{0,100}?(\\$?\\d{1,3}(?:,\\d{3})*(?:\\.\\d{2})?k?)/i);\n      if (amountMatch) {\n        amounts.push(parseAmount(amountMatch[1]));\n      }\n    }\n  }\n  \n  // Return the largest amount found\n  return amounts.length > 0 ? Math.max(...amounts) : null;\n}\n\n// ========== PARSE AMOUNT HELPER ==========\nfunction parseAmount(amountStr) {\n  let cleaned = amountStr.replace(/[$,]/g, '');\n  \n  if (cleaned.toLowerCase().includes('k')) {\n    const num = parseFloat(cleaned.replace(/k/i, ''));\n    return num * 1000;\n  }\n  \n  return parseFloat(cleaned);\n}\n\n// ========== EXTRACT ALL DATA ==========\nconst fullName = extractName(html);\nconst insuranceId = extractInsuranceId(html);\nconst depositedAmount = extractDepositedAmount(html);\n\n// Process name\nlet nameData = {};\nif (fullName) {\n  const nameParts = fullName.split(',').map(s => s.trim());\n  nameData = {\n    fullName: fullName,\n    lastName: nameParts[0] || '',\n    firstName: nameParts[1] || '',\n  };\n} else {\n  nameData = {\n    fullName: \"\",\n    lastName: \"\",\n    firstName: \"\",\n  };\n}\n\n// Return all extracted data\nreturn {\n  ...nameData,\n  insurance_id: insuranceId,\n  depositedAmount: depositedAmount,\n  depositedAmountFormatted: depositedAmount ? `$${depositedAmount.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}` : null,\n  success: {\n    name: fullName !== null,\n    insuranceId: insuranceId !== null,\n    depositedAmount: depositedAmount !== null,\n    allFound: fullName !== null && insuranceId !== null && depositedAmount !== null\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2960,
+        736
+      ],
+      "id": "af1ef1b2-3486-4c6a-ae55-93af3540c2de",
+      "name": "Code"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://casepeerai.onrender.com/case/{{ $('When Executed by Another Workflow').first().json.CaseID }}/settlement/third-party-demand/",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "defendant_insurance",
+              "value": "={{ $('Code').item.json.insurance_id }}"
+            },
+            {
+              "name": "=datesent",
+              "value": "={{ $now.format('yyyy-MM-dd') }}"
+            },
+            {
+              "name": "amount",
+              "value": "={{ $('Merge1').item.json.amount }}"
+            },
+            {
+              "name": "submitButton",
+              "value": "Submit"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -1632,
+        640
+      ],
+      "id": "13175588-c634-4951-a8ae-3644b784eada",
+      "name": "HTTP Request1"
+    },
+    {
+      "parameters": {
+        "url": "=https://casepeerai.onrender.com/case/{{ $('When Executed by Another Workflow').first().json.CaseID }}/settlement/negotiations/",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": " text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -1408,
+        640
+      ],
+      "id": "b2d13e59-c664-4129-8281-8b732a71b0e4",
+      "name": "HTTP Request3"
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.all().map(item => {\n  try {\n    // 1️⃣ Parse the inner JSON\n    const raw = item.json.data ? JSON.parse(item.json.data) : {};\n    const html = raw.response || \"\";\n\n    // 2️⃣ Unescape backslashes and quotes\n    const cleanHtml = html.replace(/\\\\+/g, \"\\\\\");\n\n    // 3️⃣ Extract the numeric ID after settlement/offer/\n    const match = cleanHtml.match(/settlement\\/offer\\/(\\d+)/);\n\n    // 4️⃣ Return proper n8n output format\n    return {\n      json: {\n        offerId: match ? match[1] : null\n      }\n    };\n  } catch (error) {\n    return {\n      json: {\n        offerId: null,\n        error: error.message\n      }\n    };\n  }\n});\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1184,
+        640
+      ],
+      "id": "1e863c4a-c261-42df-85b0-9529a02c6638",
+      "name": "Code1"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://casepeerai.onrender.com/case/{{ $('When Executed by Another Workflow').first().json.CaseID }}/settlement/offer/{{ $json.offerId }}/",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "offer_date",
+              "value": "={{ $now.format('yyyy-MM-dd') }}"
+            },
+            {
+              "name": "=offer",
+              "value": "={{ $('Code in JavaScript1').item.json.deposited_amount }}"
+            },
+            {
+              "name": "description",
+              "value": "={{ $('Merge1').item.json.amount }}"
+            },
+            {
+              "name": "submitButton",
+              "value": "Submit"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -736,
+        640
+      ],
+      "id": "0d8f7593-4a84-43e0-9ef4-d7f072aaa162",
+      "name": "HTTP Request5"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://casepeerai.onrender.com/{{ $('When Executed by Another Workflow').first().json.CaseID }}}/settlement/edit-settlement-fees/{{ $('Edit Fields').item.json.offerId }}/",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "take_dollar_amount",
+              "value": "=false"
+            },
+            {
+              "name": "=fee_percentage",
+              "value": "={{ $('Merge1').item.json.fees }}"
+            },
+            {
+              "name": "dollar_amount"
+            },
+            {
+              "name": "submitButton",
+              "value": "Submit"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -512,
+        640
+      ],
+      "id": "eca35a39-64dd-4e54-b2c9-8d2bb2b17863",
+      "name": "HTTP Request6"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "b78b3f2e-98c3-4444-8c84-ef1e1c7a8b0b",
+              "name": "offerId",
+              "value": "={{ $json.offerId }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -960,
+        640
+      ],
+      "id": "0689a3c0-ad30-4072-a994-e718757e022e",
+      "name": "Edit Fields"
+    },
+    {
+      "parameters": {
+        "url": "=https://casepeerai.onrender.com/case/{{ $('When Executed by Another Workflow').first().json.CaseID }}/settlement/negotiations/",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": " text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -288,
+        640
+      ],
+      "id": "2f17b8bf-6477-4446-87d2-7b99be9f1a8a",
+      "name": "HTTP Request7"
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.all().map(item => {\n  try {\n    // 1️⃣ Parse nested JSON from 'data' field\n    const raw = item.json.data ? JSON.parse(item.json.data) : {};\n    const html = raw.response || \"\";\n\n    // 2️⃣ Unescape escaped backslashes and quotes\n    const cleanHtml = html.replace(/\\\\+/g, \"\\\\\");\n\n    // 3️⃣ Find the FIRST match of settlement/offer/accept/<digits>/\n    const match = cleanHtml.match(/settlement\\/offer\\/accept\\/(\\d+)/);\n\n    // 4️⃣ Return in correct n8n output format\n    return {\n      json: {\n        offerId: match ? match[1] : null\n      }\n    };\n  } catch (error) {\n    return {\n      json: {\n        offerId: null,\n        error: error.message\n      }\n    };\n  }\n});\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -64,
+        640
+      ],
+      "id": "58ddae0c-af93-4f66-bf90-64fb3683b4c0",
+      "name": "Code2"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://casepeerai.onrender.com/case/{{ $('When Executed by Another Workflow').first().json.CaseID }}/settlement/offer/accept/{{ $json.offerId }}/",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "case_stage",
+              "value": "=litigation"
+            },
+            {
+              "name": "=accepteddate",
+              "value": "="
+            },
+            {
+              "name": "offerstatus",
+              "value": "2"
+            },
+            {
+              "name": "acceptednote"
+            },
+            {
+              "name": "submitButton",
+              "value": "Submit"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        160,
+        640
+      ],
+      "id": "45123b60-de6f-444b-81fa-65d47d13c1ef",
+      "name": "HTTP Request8"
+    },
+    {
+      "parameters": {
+        "content": "## Get Sattelment\n",
+        "height": 144,
+        "width": 150
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -3264,
+        512
+      ],
+      "typeVersion": 1,
+      "id": "4d2f390b-7694-4844-9dcf-412da147247c",
+      "name": "Sticky Note"
+    },
+    {
+      "parameters": {
+        "content": "## Add Thirdparty demand",
+        "height": 144,
+        "width": 150
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -2640,
+        512
+      ],
+      "typeVersion": 1,
+      "id": "bc2a14bd-dac1-4225-8b63-6d084c9f4beb",
+      "name": "Sticky Note1"
+    },
+    {
+      "parameters": {
+        "content": "## Get Demand's ID",
+        "height": 144,
+        "width": 150
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -2448,
+        512
+      ],
+      "typeVersion": 1,
+      "id": "dffe3a9f-f52f-4882-a1c9-fb18f0aac980",
+      "name": "Sticky Note2"
+    },
+    {
+      "parameters": {
+        "content": "## Create Offer",
+        "height": 144,
+        "width": 150
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -1664,
+        512
+      ],
+      "typeVersion": 1,
+      "id": "6a1f67b2-4d36-411d-9403-10481e691f67",
+      "name": "Sticky Note3"
+    },
+    {
+      "parameters": {
+        "content": "## Accept Offer",
+        "height": 144,
+        "width": 150
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -1424,
+        512
+      ],
+      "typeVersion": 1,
+      "id": "7dcd29c3-078e-4c93-8b8a-1a8f72b12871",
+      "name": "Sticky Note4"
+    },
+    {
+      "parameters": {
+        "content": "## Get Offer ID",
+        "height": 144,
+        "width": 150
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -752,
+        512
+      ],
+      "typeVersion": 1,
+      "id": "c6783152-97cd-4ac8-9d7e-b6ac8a555da3",
+      "name": "Sticky Note5"
+    },
+    {
+      "parameters": {
+        "content": "## Fee Logic",
+        "height": 144,
+        "width": 150
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -384,
+        512
+      ],
+      "typeVersion": 1,
+      "id": "ae03b601-c70d-47b5-9258-f3e93e2c9917",
+      "name": "Sticky Note6"
+    },
+    {
+      "parameters": {
+        "content": "## Deposit check",
+        "height": 144,
+        "width": 150
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -112,
+        512
+      ],
+      "typeVersion": 1,
+      "id": "2e00e272-7c64-4b10-9d76-a33a7d8a6389",
+      "name": "Sticky Note7"
+    },
+    {
+      "parameters": {
+        "content": "## Take Fees",
+        "height": 144,
+        "width": 150
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        144,
+        512
+      ],
+      "typeVersion": 1,
+      "id": "f768a093-6941-49af-a150-b0ab5706a9e9",
+      "name": "Sticky Note8"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://casepeerai.onrender.com/case/{{ $('When Executed by Another Workflow').first().json.CaseID }}/settlement/settlement-deposit/{{ $('Code2').item.json.offerId }}/",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "check_number",
+              "value": "="
+            },
+            {
+              "name": "=memo",
+              "value": "="
+            },
+            {
+              "name": "submitButton",
+              "value": "Submit"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        384,
+        640
+      ],
+      "id": "8bc0c77f-f1c1-4e9d-9d91-d153205313cd",
+      "name": "HTTP Request9"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://casepeerai.onrender.com/case/{{ $('When Executed by Another Workflow').first().json.CaseID }}/settlement/fee-check/{{ $('Code2').item.json.offerId }}/{{ $('Code1').item.json.offerId }}/",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "check_number",
+              "value": "="
+            },
+            {
+              "name": "=memo",
+              "value": "="
+            },
+            {
+              "name": "take_dollar_amount",
+              "value": "False"
+            },
+            {
+              "name": "fee_percentage",
+              "value": "4"
+            },
+            {
+              "name": "dollar_amount"
+            },
+            {
+              "name": "submitButton",
+              "value": "Submit"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        608,
+        640
+      ],
+      "id": "fd083bc2-0608-4260-8a74-16cab2622d68",
+      "name": "HTTP Request10"
+    },
+    {
+      "parameters": {
+        "url": "=https://casepeerai.onrender.com/api/v1/case/case-search/?search{{ $('Code').item.json.firstName }}%20{{ $('Code').item.json.lastName }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        -2368,
+        736
+      ],
+      "id": "9ffdc869-2513-4e8d-be3e-a555020a9420",
+      "name": "HTTP Request2"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get the deposited amount from the previous node\nconst depositedAmount = $('Code').first().json.depositedAmount\n\n// Check if amount exists\nif (!depositedAmount || depositedAmount === null) {\n  return {\n    error: \"Deposited amount not found\",\n    depositedAmount: null,\n    percentage33: null,\n    percentage33Formatted: null\n  };\n}\n\n// Calculate 33%\nconst percentage33 = depositedAmount * 0.33;\n\n// Return the result\nreturn {\n  depositedAmount: depositedAmount,\n  depositedAmountFormatted: `$${depositedAmount.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`,\n  percentage33: percentage33,\n  percentage33Formatted: `$${percentage33.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`,\n  remainingAmount: depositedAmount - percentage33,\n  remainingAmountFormatted: `$${(depositedAmount - percentage33).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1632,
+        832
+      ],
+      "id": "408846cd-533e-4fcb-9dd8-ef18021dd6aa",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://casepeerai.onrender.com/api/cases",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"id\": \"{{ $('HTTP Request2').item.json.id }}\",\n  \"patient_name\": \"{{ $('Code').item.json.fullName }}\",\n  \"status\": \"Active\",\n  \"fees_taken\": \"{{ $('Code in JavaScript1').item.json.deposited_amount }}\",\n  \"savings\": \"0\"\n}\n",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        -1408,
+        832
+      ],
+      "id": "9aca0e9f-05de-4a5d-a64d-c21869e8aa66",
+      "name": "HTTP Request19"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://casepeerai.onrender.com/case/{{ $('When Executed by Another Workflow').first().json.CaseID }}/notes/add-case-note/\n",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "note",
+              "value": "Thirdparty Demand Added by AI"
+            },
+            {
+              "name": "directed_to",
+              "value": "33754"
+            },
+            {
+              "name": "time_worked",
+              "value": "={{ $now }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        832,
+        640
+      ],
+      "id": "e1c82dcb-e138-422f-9b73-e6aede0779bd",
+      "name": "HTTP Request4"
+    },
+    {
+      "parameters": {
+        "url": "=https://casepeerai.onrender.com/case/{{ $('When Executed by Another Workflow').item.json.CaseID }}/settlement/negotiations/\n",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": " text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -2736,
+        736
+      ],
+      "id": "22aea3fb-55dc-4c8e-9b06-a8ca4225a7a7",
+      "name": "HTTP Request11"
+    },
+    {
+      "parameters": {
+        "jsCode": "const html = $input.first().json.response;\n\n// Get all table rows\nconst rows = html.match(/<tr[\\s\\S]*?<\\/tr>/gi) || [];\n\nlet depositedAmount = null;\n\nfor (const row of rows) {\n  // Check if this row contains \"deposited\"\n  if (/>\\s*deposited\\b/i.test(row)) {\n    // Extract the dollar amount from THIS row only\n    const amountMatch = row.match(/\\$\\s*([\\d,]+\\.\\d{2})/);\n    if (amountMatch) {\n      depositedAmount = Number(amountMatch[1].replace(/,/g, ''));\n      break; // ALWAYS take the first deposited row\n    }\n  }\n}\n\nreturn [\n  {\n    json: {\n      deposited_amount: depositedAmount\n    }\n  }\n];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2528,
+        736
+      ],
+      "id": "e64b2f3f-d87c-43e9-ae7b-635330381e71",
+      "name": "Code in JavaScript1"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "256e60e4-171b-4609-a64b-0eabec8570c3",
+              "leftValue": "={{ $json.display_value }}",
+              "rightValue": "={{ $('Code').item.json.lastName }}",
+              "operator": {
+                "type": "string",
+                "operation": "contains"
+              }
+            },
+            {
+              "id": "abe371dc-ff62-4cb8-81b7-f2d3551cb0c0",
+              "leftValue": "={{ $json.display_value }}",
+              "rightValue": "={{ $('Code').item.json.firstName }}",
+              "operator": {
+                "type": "string",
+                "operation": "contains"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -2208,
+        736
+      ],
+      "id": "0b53a7b9-a523-4a3e-bced-b8bbdcd2b930",
+      "name": "If"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://casepeerai.onrender.com/case/{{ $('When Executed by Another Workflow').item.json.CaseID }}/notes/add-case-note/",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "note",
+              "value": "Thirdparty Demand Added"
+            },
+            {
+              "name": "directed_to",
+              "value": "33754"
+            },
+            {
+              "name": "time_worked",
+              "value": "={{ $now }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        1040,
+        640
+      ],
+      "id": "99f9e208-c67d-40b7-a763-8f00e96ed2bf",
+      "name": "HTTP Request12"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get the dynamic ID from the Form Trigger node\nconst caseId = $input.first().json.CaseID; // Change 'case_id' to your field name\n\nconst baseUrl = `https://fissureless-arline-creepily.ngrok-free.dev/api/v1/case/case-documents/${caseId}/?page=`;\nlet page = 1;\nlet results = [];\n\nwhile (true) {\n  const response = await this.helpers.httpRequest({\n    method: 'GET',\n    url: `${baseUrl}${page}`,\n    json: true,\n  });\n  \n  if (!response.results?.length) break;\n  results.push(...response.results);\n  if (response.results.length < response.page_size) break;\n  page++;\n}\n\nreturn results.map(r => ({ json: r }));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "id": "5687c56d-a962-4743-99e7-d759a983c912",
+      "name": "Code in JavaScript2"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get the dynamic ID from the Form Trigger node\nconst caseId = $input.first().json.CaseID; // Change 'case_id' to your field name\n\nconst baseUrl = `https://casepeerai.onrender.com/api/v1/case/case-documents/${caseId}/?page=`;\nlet page = 1;\nlet results = [];\n\nwhile (true) {\n  const response = await this.helpers.httpRequest({\n    method: 'GET',\n    url: `${baseUrl}${page}`,\n    json: true,\n  });\n  \n  if (!response.results?.length) break;\n  results.push(...response.results);\n  if (response.results.length < response.page_size) break;\n  page++;\n}\n\nreturn results.map(r => ({ json: r }));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -3152,
+        1072
+      ],
+      "id": "6ebc5389-533d-4dfc-a391-6a920f90114b",
+      "name": "Code in JavaScript3"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "129eaf5b-ab4b-4f7b-bba1-e96234fc6627",
+              "leftValue": "={{ $json.docname }}",
+              "rightValue": "check",
+              "operator": {
+                "type": "string",
+                "operation": "contains"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -2944,
+        1072
+      ],
+      "id": "26138e74-2334-457c-bf23-05599754aa7f",
+      "name": "If1"
+    },
+    {
+      "parameters": {
+        "url": "={{ $('If1').item.json.docfile }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file"
+            }
+          },
+          "timeout": 100000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -2112,
+        1056
+      ],
+      "id": "c27fb11f-b950-4dee-ab0e-5682a6a99e68",
+      "name": "HTTP Request13",
+      "retryOnFail": true,
+      "waitBetweenTries": 3000,
+      "maxTries": 5
+    },
+    {
+      "parameters": {
+        "resource": "document",
+        "modelId": {
+          "__rl": true,
+          "value": "models/gemini-2.5-flash",
+          "mode": "list",
+          "cachedResultName": "models/gemini-2.5-flash"
+        },
+        "text": "=You are an expert document classification AI specializing in legal and medical document reader.\n\nYour job is to find the amount that was check's amount for the client {{ $json.display_value }} use only the name to match and remove everything else.\n Only return amount as\n \n{\n  \n  \n\"amount\": 1301753\n\n  \n}\nnothing else than amount and actual value as I will use them ahead",
+        "inputType": "binary",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.googleGemini",
+      "typeVersion": 1,
+      "position": [
+        -1920,
+        1056
+      ],
+      "id": "da3d0a73-4f0a-4c9b-99d5-75d7cc3edc81",
+      "name": "Analyze document",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "qmjARxWfkO8rS6G1",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "https://casepeerai.onrender.com/api/v1/case/case-search/?search=",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        -2688,
+        1056
+      ],
+      "id": "5a28e3db-f63d-4dbf-bd00-a7bf54e9e3ed",
+      "name": "HTTP Request14"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "0eb4fbd5-be86-40fe-9983-89cf25649e9a",
+              "leftValue": "={{ $json.id }}",
+              "rightValue": "={{ $('When Executed by Another Workflow').item.json.CaseID }}",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -2480,
+        1056
+      ],
+      "id": "6c9d53d2-00b8-4897-a950-0464ed51b88e",
+      "name": "If2"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cd16e1f7-6407-4863-b013-402b544b4e88",
+              "leftValue": "={{ $json.docname }}",
+              "rightValue": "Complaint",
+              "operator": {
+                "type": "string",
+                "operation": "contains"
+              }
+            },
+            {
+              "id": "73e8b39c-03e0-4eaf-9c13-532762ccd408",
+              "leftValue": "={{ $json.docname }}",
+              "rightValue": "complaint",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "or"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -2800,
+        1216
+      ],
+      "id": "8f84f27b-9db4-4b52-a29d-5fe77cf3db04",
+      "name": "If3",
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "22f3366c-ce3f-4273-b2c2-7cbddda08e12",
+              "name": "Percentage",
+              "value": "4",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -2496,
+        1216
+      ],
+      "id": "601c9a22-7505-41af-b06b-185cab1f230e",
+      "name": "Edit Fields1"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "a805ab93-a0fe-4cef-9f4e-0d71594b4693",
+              "name": "amount",
+              "value": "={{ $json.amount }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -1408,
+        1056
+      ],
+      "id": "dd696a8c-cc39-40f5-bfc6-7b9ced55c97e",
+      "name": "Edit Fields2"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get raw text from the model output\nlet text = $json.content.parts[0].text;\n\n// Remove markdown code fences (```json ... ```)\ntext = text.replace(/```json|```/g, '').trim();\n\n// Parse the cleaned JSON\nconst parsed = JSON.parse(text);\n\n// Return the actual amount\nreturn [{ json: { amount: parsed.amount } }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1712,
+        1056
+      ],
+      "id": "291b58fa-ce14-47bd-ae4a-5be91c9b2628",
+      "name": "Code in JavaScript4"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "dfb10f6b-969e-4c8d-b354-889628daf706",
+              "name": "fees",
+              "value": "17",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -2512,
+        1376
+      ],
+      "id": "c8492ad2-9893-4568-b583-18b0431aefa4",
+      "name": "Edit Fields3"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineAll",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        -1200,
+        1200
+      ],
+      "id": "dc99ffae-a8b4-4c74-a328-cf8536fcb12c",
+      "name": "Merge"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineAll",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        -1856,
+        704
+      ],
+      "id": "c509742a-e251-4b53-add3-748b8ffb3774",
+      "name": "Merge1"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When Executed by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Code in JavaScript3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request": {
+      "main": [
+        [
+          {
+            "node": "Code",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request11",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request1": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request3": {
+      "main": [
+        [
+          {
+            "node": "Code1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code1": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request5": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request6",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request6": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request7",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit Fields": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request5",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request7": {
+      "main": [
+        [
+          {
+            "node": "Code2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code2": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request8",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request8": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request9",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request9": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request10",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request2": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request19",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request10": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request11": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript1": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge1",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "HTTP Request4": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request12",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript3": {
+      "main": [
+        [
+          {
+            "node": "If1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "If3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If1": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request14",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request13": {
+      "main": [
+        [
+          {
+            "node": "Analyze document",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request14": {
+      "main": [
+        [
+          {
+            "node": "If2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If2": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request13",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If3": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields1",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Edit Fields3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analyze document": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript4": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit Fields2": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit Fields1": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Edit Fields3": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Merge1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge1": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "a71c5235-2b80-4b17-8238-e851315e5c85",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "e82d4abdd6eb816597dc8f426c7e69508cc13d63a41073edf573e73f22416c1b"
+  },
+  "id": "V5Cxpen2KdBub8Y9",
+  "tags": []
+}

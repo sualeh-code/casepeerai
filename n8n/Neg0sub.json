@@ -1,0 +1,2065 @@
+{
+  "name": "Neg0sub",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Generating the bill accordingly for MRIs and Xrays",
+        "height": 128
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        4752,
+        464
+      ],
+      "typeVersion": 1,
+      "id": "d2b1e320-87c2-4e79-821b-1e2a5f11d2cb",
+      "name": "Sticky Note9"
+    },
+    {
+      "parameters": {
+        "content": "\n## Asking rag to check if it was a MRI or a Xray",
+        "height": 112,
+        "width": 272
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        3920,
+        512
+      ],
+      "typeVersion": 1,
+      "id": "8526ab78-0fc9-4f3d-918c-d2bab4887daf",
+      "name": "Sticky Note8"
+    },
+    {
+      "parameters": {
+        "content": "\n\n\n\n\n\n## If Condition to check it's a MRI or Xray or not ",
+        "height": 256
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        3504,
+        608
+      ],
+      "typeVersion": 1,
+      "id": "4376dc9d-8a30-42d0-8261-5c9d799348bf",
+      "name": "Sticky Note7"
+    },
+    {
+      "parameters": {
+        "content": "\n\n\n\n\n\n## Searching Each Provider from contacts tab To Get Phone number and Email",
+        "height": 256
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        2608,
+        608
+      ],
+      "typeVersion": 1,
+      "id": "db110479-30cd-4952-bb75-c2bcbd67c7f8",
+      "name": "Sticky Note6"
+    },
+    {
+      "parameters": {
+        "content": "\n\n\n\n\n\n## If Condition to Check If the provider has valid bill or not\n",
+        "height": 256
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        2160,
+        400
+      ],
+      "typeVersion": 1,
+      "id": "f50517f3-ae10-41ca-a2c4-57723454529f",
+      "name": "Sticky Note5"
+    },
+    {
+      "parameters": {
+        "content": "\n\n\n\n\n\n## AI to structure and Format provider's Details",
+        "height": 256
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        1648,
+        144
+      ],
+      "typeVersion": 1,
+      "id": "d15c8236-cbc1-4907-8239-46223dde3cfc",
+      "name": "Sticky Note4"
+    },
+    {
+      "parameters": {
+        "content": "\n\n\n\n\n\n## Getting Info from medical Treatment tab ",
+        "height": 256
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        1376,
+        416
+      ],
+      "typeVersion": 1,
+      "id": "eb8a8220-2ae5-4564-894f-90d55631fe4a",
+      "name": "Sticky Note3"
+    },
+    {
+      "parameters": {
+        "content": "\n\n\n\n\n\n## Getting the document using Casepeer API",
+        "height": 256
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        1104,
+        336
+      ],
+      "typeVersion": 1,
+      "id": "0e9de403-6281-44f3-9750-4699feaf0ae2",
+      "name": "Sticky Note2"
+    },
+    {
+      "parameters": {
+        "content": "## Splitting Each Document as a single Item"
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        912,
+        0
+      ],
+      "typeVersion": 1,
+      "id": "bf903fc5-f058-4c5f-891a-d5510f2be9ff",
+      "name": "Sticky Note1"
+    },
+    {
+      "parameters": {
+        "content": "## Getting No Details offers to settled document"
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        0,
+        0
+      ],
+      "typeVersion": 1,
+      "id": "573b3c79-a45e-42ee-bc18-e2a8dad4ef8a",
+      "name": "Sticky Note"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        5168,
+        528
+      ],
+      "id": "288921f8-9d40-4b70-b764-3807f9f45c12",
+      "name": "Merge2"
+    },
+    {
+      "parameters": {
+        "sendTo": "wasifnadeem92743@gmail.com",
+        "subject": "Bill Negotiation",
+        "emailType": "text",
+        "message": "=Beverly Law 4929 Wilshire Blvd, Suite 960 Los Angeles, CA 90010 \n\nTel: 310-552-6959 \nFax: 323-421-9397  \n\n*Please note our new office address in your file*\n\n{{ $now }}  \n\nVIA FACISMILE OR EMAIL:  (833) 844-1540 \n{{ $('If2').item.json['1'] }}:\n{{ $('If2').item.json['5'] }}\nRE: Our Client/Your Patient:\t{{ $json['patient Name'] }} \n\nDate of Birth:\t\t\t\t{{ $json['patient\\'s DOB'] }} \nDate of Injury:\t\t\t\t{{ $json['incident date'] }}  \n\nDear Sir or Madam:\nThank you for sending over the bills and reports for Lesieli Kanongataa to our office.  We are in the process of negotiating with the Insurance Company and at the current time would like to discuss settlement of the medical bills with your office.  Based on the total medical bills and circumstances our client has allowed us to offer {{ $json.output.new_total_amount }}.  The total that you have billed {{ $json['patient Name'] }} for this case is: {{ $json.output.total_original_amount }} .   Please confirm the outstanding balance for this patient. \n\nPlease either fax back this letter with your initials of acceptance of the offer below or call the undersigned to discuss the settlement of this case a little further.  Thank you for your partnership.  X________________ Acceptance of offer. \tAuthorized Representative of Provider.  Regards, BEVERLY LAW  Please scan and EMAIL back this letter with your initials of acceptance of the offer below to email fax@beverlylaw.org (lien negotiator replace fax email with your email).  Please do not fax back this letter.  Thank you for your partnership. Keep in mind we’re still negotiating with other providers and insurance companies.  X________________ Acceptance of offer. \tAuthorized Representative of Provider.   ********Please Confirm Payment address here:__________________________________________________",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        5472,
+        512
+      ],
+      "id": "99568e98-c1f4-4815-a995-5a814e794057",
+      "name": "Send a message1",
+      "webhookId": "1c8d771e-8ecd-42a4-917c-0c0d2783ad8a",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "qu1bypdqFgmCNgVo",
+          "name": "Gmail account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsonSchemaExample": "{\n\t\"total_original_amount\": \"....\",\n\t\"new_total_amount\": \"...\",\n    \"recalculated_procedures\": {\n\n    }\n}"
+      },
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        4912,
+        816
+      ],
+      "id": "fb7cdcab-2850-4b3f-ab9e-737db8bfac2b",
+      "name": "Structured Output Parser2"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "o4-mini",
+          "mode": "list",
+          "cachedResultName": "o4-mini"
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        4784,
+        816
+      ],
+      "id": "2133fcb4-b571-46c6-8303-8fadff5e3a58",
+      "name": "OpenAI Chat Model3",
+      "credentials": {
+        "openAiApi": {
+          "id": "7fbCuNCbBrhyTPqW",
+          "name": "OpenAi account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You will receive a JSON object containing several procedures and their amounts. Each procedure has a key such as procedure1, procedure2, etc., and each contains:\n- \"procedureX\": the name of the procedure\n- \"amount\": the dollar amount as a string (e.g., \"$1,600.00\")\n- \"count\": the index number\n\nYour tasks are:\n1. Parse all the \"amount\" values and calculate the total sum of all bills.\n2. For each procedure:\n   - If the procedure name contains \"MRI\" (case-insensitive), the new recalculated amount = $400.\n   - If the procedure name contains \"X-Ray\" or \"Xray\" (case-insensitive), the new recalculated amount = $50.\n3. Return the result in the following JSON structure:\n\n{\n  \"total_original_amount\": \"<sum of all original amounts>\",\n  \"new_total_amount\": \"<sum of all recalculated amounts>\",\n  \"recalculated_procedures\": {\n    \"procedure1\": {\n      \"name\": \"<procedure name>\",\n      \"original_amount\": \"<original amount>\",\n      \"new_amount\": \"<new recalculated amount>\"\n    },\n    \"procedure2\": {\n      ...\n    }\n  }\n}\n\nMake sure all currency values are formatted as \"$#,###.00\".\nJson to use\n{{ JSON.stringify($json.bill) }}\n",
+        "hasOutputParser": true,
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        4768,
+        592
+      ],
+      "id": "a39bc25c-c746-4507-8610-310830f7aa31",
+      "name": "AI Agent2"
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.item.json.output;\nconst procedures = data.Procedure;\nconst amounts = data.Amount;\n\nconst bill = {};\n\nprocedures.forEach((procedure, index) => {\n  const key = `procedure${index + 1}`;\n  bill[key] = {\n    [key]: procedure,\n    amount: amounts[index] || null,\n    count: index + 1\n  };\n});\n\nbill.count = procedures.length;\n\nreturn [{ json: { bill } }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4544,
+        592
+      ],
+      "id": "59bd2665-37bd-4a8b-a9cd-e0a8b1645605",
+      "name": "Code2"
+    },
+    {
+      "parameters": {
+        "jsonSchemaExample": "{\n\t\"Procedure\":  [\"Procedure1\", \"Procedure2\", \"Procedure3\"],\n\t\"Amount\": [\"amonut1\", \"amonut2\", \"amonut3\"]\n}"
+      },
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        4336,
+        816
+      ],
+      "id": "d25838b5-e294-4ea5-977f-611ae30b5c80",
+      "name": "Structured Output Parser1"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "d8a1ec4c-7b60-4835-907d-6a0b1c92df6d",
+              "leftValue": "={{ $json[\"1\"] }}",
+              "rightValue": "Imaging",
+              "operator": {
+                "type": "string",
+                "operation": "notContains"
+              }
+            }
+          ],
+          "combinator": "or"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3568,
+        544
+      ],
+      "id": "18bf3400-6df6-4f59-a539-7be3489bf367",
+      "name": "If2"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        4064,
+        80
+      ],
+      "id": "ea3b6c10-e4ec-4578-93a1-e0116e3f89ee",
+      "name": "Merge1"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Deduplicate by phone number (key \"3\")\nconst seen = new Set();\nconst output = [];\n\nfor (const item of $input.all()) {\n  const data = item.json;\n  const phone = (data[\"3\"] || \"\").trim(); // normalize spaces\n  \n  if (!seen.has(phone)) {\n    seen.add(phone);\n    output.push({ json: data });\n  }\n}\n\nreturn output;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3344,
+        544
+      ],
+      "id": "90ebd92a-6f46-4832-9552-02a1f7e4f874",
+      "name": "Code1"
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "data",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        2896,
+        544
+      ],
+      "id": "78d655af-ca9f-47cf-bd23-52cbd0de0637",
+      "name": "Split Out1"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "87d03baf-e166-4765-b178-2d5885d51e3e",
+              "leftValue": "={{ $('If').item.json[\"Phone Number\"] }}",
+              "rightValue": "={{ $json[\"3\"] }}",
+              "operator": {
+                "type": "string",
+                "operation": "contains"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3120,
+        544
+      ],
+      "id": "305444db-873f-4666-861e-890d805b70c2",
+      "name": "If1"
+    },
+    {
+      "parameters": {
+        "url": "=https://casepeerai.onrender.com/contact-directory/?contact_type_id=4&draw=2&columns%5B0%5D%5Bdata%5D=0&columns%5B0%5D%5Bname%5D=&columns%5B0%5D%5Bsearchable%5D=true&columns%5B0%5D%5Borderable%5D=false&columns%5B0%5D%5Bsearch%5D%5Bvalue%5D=&columns%5B0%5D%5Bsearch%5D%5Bregex%5D=false&columns%5B1%5D%5Bdata%5D=1&columns%5B1%5D%5Bname%5D=&columns%5B1%5D%5Bsearchable%5D=true&columns%5B1%5D%5Borderable%5D=true&columns%5B1%5D%5Bsearch%5D%5Bvalue%5D=&columns%5B1%5D%5Bsearch%5D%5Bregex%5D=false&columns%5B2%5D%5Bdata%5D=2&columns%5B2%5D%5Bname%5D=&columns%5B2%5D%5Bsearchable%5D=true&columns%5B2%5D%5Borderable%5D=true&columns%5B2%5D%5Bsearch%5D%5Bvalue%5D=&columns%5B2%5D%5Bsearch%5D%5Bregex%5D=false&columns%5B3%5D%5Bdata%5D=3&columns%5B3%5D%5Bname%5D=&columns%5B3%5D%5Bsearchable%5D=true&columns%5B3%5D%5Borderable%5D=true&columns%5B3%5D%5Bsearch%5D%5Bvalue%5D=&columns%5B3%5D%5Bsearch%5D%5Bregex%5D=false&columns%5B4%5D%5Bdata%5D=4&columns%5B4%5D%5Bname%5D=&columns%5B4%5D%5Bsearchable%5D=true&columns%5B4%5D%5Borderable%5D=true&columns%5B4%5D%5Bsearch%5D%5Bvalue%5D=&columns%5B4%5D%5Bsearch%5D%5Bregex%5D=false&columns%5B5%5D%5Bdata%5D=5&columns%5B5%5D%5Bname%5D=&columns%5B5%5D%5Bsearchable%5D=true&columns%5B5%5D%5Borderable%5D=false&columns%5B5%5D%5Bsearch%5D%5Bvalue%5D=&columns%5B5%5D%5Bsearch%5D%5Bregex%5D=false&columns%5B6%5D%5Bdata%5D=6&columns%5B6%5D%5Bname%5D=&columns%5B6%5D%5Bsearchable%5D=true&columns%5B6%5D%5Borderable%5D=false&columns%5B6%5D%5Bsearch%5D%5Bvalue%5D=&columns%5B6%5D%5Bsearch%5D%5Bregex%5D=false&order%5B0%5D%5Bcolumn%5D=0&order%5B0%5D%5Bdir%5D=asc&start=0&length=25&search%5Bvalue%5D={{ $json.P_F }}&search%5Bregex%5D=false&_=1760655718955",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2672,
+        528
+      ],
+      "id": "cbe91de4-1f6c-4b7f-acfa-b7a16eef5f49",
+      "name": "GPID1"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Add a new field \"P_F\" by replacing spaces in Provider Name with '+'\nreturn $input.all().map(item => {\n  const data = item.json;\n  const providerName = data[\"Provider Name\"] || \"\";\n  const P_F = providerName.replace(/\\s+/g, \"+\"); // Replace spaces with '+'\n\n  return {\n    json: {\n      ...data,\n      P_F\n    }\n  };\n});\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2448,
+        544
+      ],
+      "id": "67b89cf2-fe56-4953-b622-c6ae17f907db",
+      "name": "Code"
+    },
+    {
+      "parameters": {
+        "sendTo": "developerhenry26@gmail.com",
+        "subject": "Bill Negotiation",
+        "emailType": "text",
+        "message": "=Beverly Law 4929 Wilshire Blvd, Suite 960 Los Angeles, CA 90010 \n\nTel: 310-552-6959 \nFax: 323-421-9397  \n\n*Please note our new office address in your file*\n\n{{ $now }}  \n\nVIA FACISMILE OR EMAIL:  (833) 844-1540 \n\n{{ $json['1'] }}:\n{{ $json['5'] }}\nRE: Our Client/Your Patient:\t{{ $json['patient Name'] }} \n\nDate of Birth:\t\t\t\t{{ $json['patient\\'s DOB'] }} \nDate of Injury:\t\t\t\t{{ $json['incident date'] }}  \n\nDear Sir or Madam:\nThank you for sending over the bills and reports for Lesieli Kanongataa to our office.  We are in the process of negotiating with the Insurance Company and at the current time would like to discuss settlement of the medical bills with your office.  Based on the total medical bills and circumstances our client has allowed us to offer {{ $json.offeredamount }}.  The total that you have billed Lesieli Kanongataa for this case is: {{ $json['Total Bill'] }} .   Please confirm the outstanding balance for this patient. \n\nPlease either fax back this letter with your initials of acceptance of the offer below or call the undersigned to discuss the settlement of this case a little further.  Thank you for your partnership.  X________________ Acceptance of offer. \tAuthorized Representative of Provider.  Regards, BEVERLY LAW  Please scan and EMAIL back this letter with your initials of acceptance of the offer below to email fax@beverlylaw.org (lien negotiator replace fax email with your email).  Please do not fax back this letter.  Thank you for your partnership. Keep in mind we’re still negotiating with other providers and insurance companies.  X________________ Acceptance of offer. \tAuthorized Representative of Provider.   ********Please Confirm Payment address here:__________________________________________________",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        4544,
+        80
+      ],
+      "id": "c075485f-919f-4cef-8b45-c7786f2a2b31",
+      "name": "Send a message",
+      "webhookId": "1c8d771e-8ecd-42a4-917c-0c0d2783ad8a",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "qu1bypdqFgmCNgVo",
+          "name": "Gmail account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "d2b20d86-f991-4063-986d-498985168423",
+              "leftValue": "={{ $json[\"Total Bill\"] }}",
+              "rightValue": "N/A",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2224,
+        336
+      ],
+      "id": "f1c176d8-87bb-4e03-89a5-3d2e6978561a",
+      "name": "If"
+    },
+    {
+      "parameters": {
+        "jsonSchemaExample": "[\n      {\n         \"Provider Name\": \"Provider ABC\",\n         \"Email\": \"abc@email.com\",\n         \"patient Name\": \"ABC\",\n         \"Phone Number\": \"(555) 123-4567\",\n         \"patient's DOB\" : \"DOB\",\n         \"incident date\": \"Date\",\n         \"offeredamount\" : \"$xxxxx\",\n         \"Total Bill\": \"$xxxx\"\n       },\n       {\n         \"Provider Name\": \"Provider ABC\",\n         \"Email\": \"abc@email.com\",\n         \"patient Name\": \"ABC\",\n         \"Phone Number\": \"(555) 123-4567\",\n         \"patient's DOB\" : \"DOB\",\n         \"incident date\": \"Date\",\n         \"offeredamount\" : \"$xxxxx\",\n         \"Total Bill\": \"$xxxx\"\n       },{\n         \"Sum Of Bills\" : \"$xxxx\"\n       }\n     ]"
+      },
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        1792,
+        560
+      ],
+      "id": "2098097d-64b9-499e-b6d7-c82f7cb79d20",
+      "name": "Structured Output Parser"
+    },
+    {
+      "parameters": {
+        "resource": "draft",
+        "subject": "Negotiation Email For client",
+        "message": "=Beverly Law\n4929 Wilshire Blvd, Suite 960\nLos Angeles, CA 90010\nTel: 310-552-6959\nFax: 323-421-9397\n\n*Please note our new office address in your file*\n\n{{ $now }}\n\nVIA FACISMILE OR EMAIL:  (833) 844-1540\nCMS Medicare: {{ $json['Provider Name'] }}\nP.O. Box 138832\nOklahoma City, OK 73113{provider address}\n\nRE:\nOur Client/Your Patient:\t{{ $json['patient Name'] }}\nDate of Birth:\t\t\t\t{{ $json['patient\\'s DOB'] }}\nDate of Injury:\t\t\t\t{{ $json['incident date'] }}\n\nDear Sir or Madam:\n\n\tThank you for sending over the bills and reports for Lesieli Kanongataa to our office.  We are in the process of negotiating with the Insurance Company and at the current time would like to discuss settlement of the medical bills with your office.  Based on the total medical bills and circumstances our client has allowed us to offer {{ $json.offeredamount }}.  The total that you have billed Lesieli Kanongataa for this case is: {{ $json['Total Bill'] }} .   Please confirm the outstanding balance for this patient.\n\nDr. Ron J. Rudometkin $1,510.00 {Provider 1}  {Bill 1}\nCMS Medicare $0 {Provider 1}  {Bill 1}\nDepartment of Health Care Services (Medi-cal) $0 {Provider 1}  {Bill 1}\nJuly Medical $2,100.00 {Provider 1}  {Bill 1}\nPrecise Imaging - Freemont $4,400.00 {Provider 1}  {Bill 1}\nMethodist Hospital $6,512.80 {Provider 1}  {Bill 1}\nBLUEROCK CONSULTANTS $24,700.00 {Provider 1}  {Bill 1}\nDr. Nourian $2,500.00 {Provider 1}  {Bill 1}\nCompliant Clients $0 {Provider 1}  {Bill 1}\n\nTotal Medical Bills: {{ $json['Sum Of Bills'] }}\n\n\nPlease either fax back this letter with your initials of acceptance of the offer below or call the undersigned to discuss the settlement of this case a little further.  Thank you for your partnership.\n\nX________________ Acceptance of offer.\n\tAuthorized Representative of Provider.\n\nRegards,\nBEVERLY LAW\n\nPlease scan and EMAIL back this letter with your initials of acceptance of the offer below to email fax@beverlylaw.org (lien negotiator replace fax email with your email).  Please do not fax back this letter.  Thank you for your partnership. Keep in mind we’re still negotiating with other providers and insurance companies.\n\nX________________ Acceptance of offer.\n\tAuthorized Representative of Provider.\n\n\n********Please Confirm Payment address here:__________________________________________________",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        -592,
+        1120
+      ],
+      "id": "92dda154-30e4-49ed-afe4-bd63029d4e3c",
+      "name": "Create a draft",
+      "webhookId": "1164db1b-1813-44ac-ba6b-2f9b6154d59a",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "qu1bypdqFgmCNgVo",
+          "name": "Gmail account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-5",
+          "mode": "list",
+          "cachedResultName": "gpt-5"
+        },
+        "options": {
+          "timeout": 180000
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        1664,
+        560
+      ],
+      "id": "9f27ea36-065b-4610-8c6c-e2bf1c673786",
+      "name": "OpenAI Chat Model",
+      "credentials": {
+        "openAiApi": {
+          "id": "7fbCuNCbBrhyTPqW",
+          "name": "OpenAi account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "output",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        2000,
+        336
+      ],
+      "id": "d95e713d-3178-4faf-9535-c0f6a3a0c9fe",
+      "name": "Split Out2"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are the best Web scrapper in the country—a world-class expert in scrapping websites to rank on Google. In this task, you will analyze the provider's there Email and Phone number  and patient's name from a webpage and perform a detailed and structured scrapping. This data is really crutial make sure you provide acurate and complete data without any assumptions. \n\nhint \"class \"MuiTypography-root sc-dSCufp lfDujM MuiTypography-body1\" contains provider name \" \n\nhint \"class \"panel-title\" contains patient name\"\n\nalso you will have to calucalte offered bill which will be 2/3 of 33% of each provider's orignal bill\n also find patient's DOB\nand injury or incident date\n\nAudit Structure You will review all the providers in the page.\n\nOnce completed, you will present your findings in clear, organized bullet points, into each json Item:\n\n\nHere is the content of my landing page: {{ $json.response }} \nyou will have to return all the Items all the providers ",
+        "hasOutputParser": true,
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        1648,
+        336
+      ],
+      "id": "1bb3d61b-d257-4560-a7f2-f01d574cf004",
+      "name": "AI Agent"
+    },
+    {
+      "parameters": {
+        "url": "=https://casepeerai.onrender.com/case/{{ $('When Executed by Another Workflow').first().json.CaseID }}/medical/treatment/",
+        "options": {}
+      },
+      "id": "6a125221-4857-4d9d-b8da-21a6b809aecc",
+      "name": "Scrape Website",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        1424,
+        336
+      ],
+      "typeVersion": 4.2,
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        1424,
+        32
+      ],
+      "id": "35370118-39c6-48e7-9941-7f989d46c085",
+      "name": "Loop Over Items1"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract DOCX text preserving currency and numbers like $5,000\nconst input = $input.first().json.response;\nconst raw = typeof input === 'string' ? input : JSON.stringify(input);\n\n// Step 1: Extract all <w:t> tags and join WITHOUT adding spaces (since Word often splits words)\nconst matches = [...raw.matchAll(/<w:t[^>]*>(.*?)<\\/w:t>/g)];\nlet text = matches.map(m => m[1]).join('');\n\n// Step 2: Decode basic XML entities\ntext = text\n  .replace(/&lt;/g, '<')\n  .replace(/&gt;/g, '>')\n  .replace(/&amp;/g, '&')\n  .replace(/&quot;/g, '\"')\n  .replace(/&apos;/g, \"'\");\n\n// Step 3: Replace paragraph tags (<w:p>) with line breaks for readability\ntext = raw\n  .replace(/<w:p[^>]*>/g, '\\n') // new lines between paragraphs\n  .replace(/<[^>]+>/g, '')      // remove remaining XML tags\n  .replace(/\\s+/g, ' ')         // normalize spaces\n  .trim();\n\n// Step 4: Combine both extracted and cleaned text\nreturn { json: { text } };\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1712,
+        32
+      ],
+      "id": "739215e2-22a7-479e-8f84-fedf23071ca2",
+      "name": "Code5"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Debug: Let's see what we actually have\nconst item = $input.item.json;\n\n// Log the structure to see what we're working with\nconsole.log('Item keys:', Object.keys(item));\nconsole.log('Item:', JSON.stringify(item).substring(0, 200));\n\n// Try different possible paths\nlet html = null;\n\nif (Array.isArray(item)) {\n  html = item[0]?.response || item[0]?.data || item[0]?.body;\n} else {\n  html = item.response || item.data || item.body || item[0]?.response;\n}\n\nif (!html || typeof html !== 'string') {\n  return [{ json: { \n    error: 'No HTML content found', \n    itemType: typeof item,\n    isArray: Array.isArray(item),\n    keys: Object.keys(item),\n    ids: [] \n  } }];\n}\n\n// Extract the JSON data from the script tag\nconst regex = /window\\.HEALTH_LIENS_DATA = JSON\\.parse\\((\".*?\")\\);/s;\nconst match = html.match(regex);\n\nif (match && match[1]) {\n  try {\n    // Parse the outer JSON string first\n    const jsonString = JSON.parse(match[1]);\n    \n    // Then parse the actual data\n    const healthLiensData = JSON.parse(jsonString);\n    \n    // Extract all IDs\n    const ids = healthLiensData.map(item => item.id);\n    \n    // Return as a single item with all IDs\n    return [{ json: { ids } }];\n  } catch (error) {\n    // If parsing fails, return error details\n    return [{ json: { error: error.message, ids: [] } }];\n  }\n}\n\nreturn [{ json: { error: 'No match found', ids: [] } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        528,
+        96
+      ],
+      "id": "ad49b8a6-86d7-4504-aa6f-fcc5d9328139",
+      "name": "Code3"
+    },
+    {
+      "parameters": {
+        "url": "=https://casepeerai.onrender.com/autoletters/CaseGenerateLetter/{{ $json.ids }}/{{ $json.id_label }}/{{ $('When Executed by Another Workflow').first().json.CaseID }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/octet-stream,text/html;q=0.9,*/*;q=0.8"
+            },
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.3"
+            },
+            {
+              "name": "Accept-Encoding",
+              "value": "identity"
+            },
+            {
+              "name": "Connection",
+              "value": "keep-alive"
+            },
+            {
+              "name": "ngrok-skip-browser-warning",
+              "value": "true"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1200,
+        192
+      ],
+      "id": "1266fbec-43c1-448a-98de-a8cdcf75c744",
+      "name": "HTTP Request2"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "81746249-9ace-43f5-90b4-8f02c2623713",
+              "name": "id_label",
+              "value": "={{ $json.id_label }}",
+              "type": "number"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        528,
+        288
+      ],
+      "id": "f8ef8edb-5ddd-4761-ac85-534a55bec8dd",
+      "name": "Edit Fields2"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineAll",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        752,
+        192
+      ],
+      "id": "2dc3b0fe-d786-4c35-aa72-389147d1affa",
+      "name": "Merge"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get the input data - for n8n HTTP Request node\nlet htmlResponse;\n\n// Try different ways to access the data\ntry {\n  // Option 1: Direct array in json\n  if (Array.isArray($json) && $json[0] && $json[0].response) {\n    htmlResponse = $json[0].response;\n  }\n  // Option 2: Nested array\n  else if (Array.isArray($input.item.json) && $input.item.json[0] && $input.item.json[0].response) {\n    htmlResponse = $input.item.json[0].response;\n  }\n  // Option 3: Direct response property\n  else if ($json.response) {\n    htmlResponse = $json.response;\n  }\n  // Option 4: Body property\n  else if ($json.body) {\n    htmlResponse = $json.body;\n  }\n  // Option 5: Data property\n  else if ($json.data) {\n    htmlResponse = $json.data;\n  }\n  else {\n    throw new Error(\"Could not find response. Available keys: \" + JSON.stringify(Object.keys($json || {})));\n  }\n} catch (e) {\n  throw new Error(\"Error accessing data: \" + e.message + \". Input structure: \" + JSON.stringify($json).substring(0, 200));\n}\n\nif (!htmlResponse || typeof htmlResponse !== 'string') {\n  throw new Error(\"htmlResponse is not a string. Type: \" + typeof htmlResponse + \", Value preview: \" + JSON.stringify(htmlResponse).substring(0, 200));\n}\n\n// Find the LIEN_LETTERS JSON data in the HTML\nconst lienLettersMatch = htmlResponse.match(/window\\.LIEN_LETTERS = JSON\\.parse\\(\"(.+?)\"\\);/);\n\nif (!lienLettersMatch) {\n  throw new Error(\"LIEN_LETTERS data not found in response\");\n}\n\n// Unescape the JSON string\nconst jsonString = lienLettersMatch[1]\n  .replace(/\\\\u0022/g, '\"')\n  .replace(/\\\\u002D/g, '-')\n  .replace(/\\\\\\\\/g, '\\\\');\n\n// Parse the JSON\nconst lienLetters = JSON.parse(jsonString);\n\n// Find \"No Details Offer to Settle\"\nconst noDetailsOffer = lienLetters.find(item => \n  item.label === \"No Details Offer to Settle\"\n);\n\nif (!noDetailsOffer) {\n  throw new Error(\"No Details Offer to Settle not found in LIEN_LETTERS\");\n}\n\n// Return the ID\nreturn {\n  id_label: noDetailsOffer.value}"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        304,
+        288
+      ],
+      "id": "c7a56a89-c015-4ff1-8742-3328dca36ea2",
+      "name": "Code4"
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "ids",
+        "include": "allOtherFields",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        976,
+        192
+      ],
+      "id": "45b3b9de-18ca-4c87-8141-1619685e8030",
+      "name": "Split Out"
+    },
+    {
+      "parameters": {
+        "url": "=https://casepeerai.onrender.com/case/{{ $json[\"CaseID\"] }}/medical/treatment/",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        80,
+        192
+      ],
+      "id": "b86fd72f-8a9d-4a16-a220-3bc188303ffa",
+      "name": "GPID",
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "CaseID"
+            }
+          ]
+        }
+      },
+      "id": "86185d12-79bc-4f17-afcb-70b0dc93db23",
+      "typeVersion": 1.1,
+      "name": "When Executed by Another Workflow",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "position": [
+        -160,
+        192
+      ]
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $('If2').item.json[\"3\"] }}"
+      },
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.3,
+      "position": [
+        3920,
+        816
+      ],
+      "id": "674a9ac9-0838-4bda-b5c8-54004ccc9dd5",
+      "name": "Simple Memory"
+    },
+    {
+      "parameters": {
+        "description": "Patients cases and there related documents and case history and contact information",
+        "topK": 50
+      },
+      "type": "@n8n/n8n-nodes-langchain.toolVectorStore",
+      "typeVersion": 1.1,
+      "position": [
+        4048,
+        816
+      ],
+      "id": "3cca5453-030d-4722-a0ff-cd3bf6e492b7",
+      "name": "Answer questions with a vector store"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "o4-mini",
+          "mode": "list",
+          "cachedResultName": "o4-mini"
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        4240,
+        1024
+      ],
+      "id": "67cdbd0d-c7cf-44e9-9db8-352925f1705c",
+      "name": "OpenAI Chat Model1",
+      "credentials": {
+        "openAiApi": {
+          "id": "7fbCuNCbBrhyTPqW",
+          "name": "OpenAi account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "pineconeIndex": {
+          "__rl": true,
+          "value": "cases",
+          "mode": "list",
+          "cachedResultName": "cases"
+        },
+        "options": {
+          "pineconeNamespace": "={{ $('When Executed by Another Workflow').first().json.CaseID.toString() }}"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.vectorStorePinecone",
+      "typeVersion": 1.3,
+      "position": [
+        3952,
+        1024
+      ],
+      "id": "8d34f098-3070-4f17-ac40-c05a0f961180",
+      "name": "Pinecone Vector Store",
+      "credentials": {
+        "pineconeApi": {
+          "id": "OFR1ltJyEOpt8TjW",
+          "name": "PineconeApi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.embeddingsOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        4032,
+        1232
+      ],
+      "id": "3e8d9984-2524-4685-85f2-62d58aebb2b6",
+      "name": "Embeddings OpenAI",
+      "credentials": {
+        "openAiApi": {
+          "id": "7fbCuNCbBrhyTPqW",
+          "name": "OpenAi account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=How much did the Precise Imaging Charged my client {{ $('Split Out2').first().json[\"patient Name\"] }} for Xray or CTscan?",
+        "hasOutputParser": true,
+        "options": {
+          "systemMessage": "You are a helpful assistant your job is to provide the data of patient's cases including the bills of all the providers associsted to that case make sure you look for all the data every time before giving any answer do not worry about the length of answer just return all the requested information do not miss any thing. When asked for bills only include bills do not add any quotations or estimates. only the bills."
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        3952,
+        592
+      ],
+      "id": "8136ed85-62e1-4418-9825-cf819b337f37",
+      "name": "AI Agent1"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "o4-mini",
+          "mode": "list",
+          "cachedResultName": "o4-mini"
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        3792,
+        816
+      ],
+      "id": "eee98bc4-9601-40a0-a3e0-63811bc2a05c",
+      "name": "OpenAI Chat Model2",
+      "credentials": {
+        "openAiApi": {
+          "id": "7fbCuNCbBrhyTPqW",
+          "name": "OpenAi account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://casepeerai.onrender.com/case/{{ $('When Executed by Another Workflow').first().json.CaseID }}/notes/add-case-note/",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "note",
+              "value": "Thirdparty Demand Added"
+            },
+            {
+              "name": "directed_to",
+              "value": "33754"
+            },
+            {
+              "name": "time_worked",
+              "value": "={{ $now }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        4736,
+        80
+      ],
+      "id": "055e8e14-844c-46ff-9b73-6039e8cfc090",
+      "name": "HTTP Request12"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "d2b20d86-f991-4063-986d-498985168423",
+              "leftValue": "={{ (() => {\n  const bill = $json[\"Total Bill\"] || \"$0.00\";\n  // Remove dollar sign and commas\n  const cleaned = bill.replace(/[$,]/g, \"\");\n  // Convert to a number\n  const value = parseFloat(cleaned);\n  return value;\n})() }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            },
+            {
+              "id": "b542d5e6-4328-468e-ad87-6dea18993667",
+              "leftValue": "={{ (() => {\n  const bill = $json[\"Total Bill\"] || \"$0.00\";\n  // Remove dollar sign and commas\n  const cleaned = bill.replace(/[$,]/g, \"\");\n  // Convert to a number\n  const value = parseFloat(cleaned);\n  return value;\n})() }}",
+              "rightValue": 1,
+              "operator": {
+                "type": "number",
+                "operation": "lt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1728,
+        1296
+      ],
+      "id": "92bdb6d8-c803-4300-bc63-fb54704ee065",
+      "name": "If3"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://casepeerai.onrender.com/api/negotiations",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "case_id",
+              "value": "={{ $('When Executed by Another Workflow').item.json.CaseID.toString() }}"
+            },
+            {
+              "name": "negotiation_type",
+              "value": "Offer"
+            },
+            {
+              "name": "to",
+              "value": "={{ $('Merge1').item.json.Email }}"
+            },
+            {
+              "name": "email_body",
+              "value": "=Beverly Law 4929 Wilshire Blvd, Suite 960 Los Angeles, CA 90010   Tel: 310-552-6959  Fax: 323-421-9397    *Please note our new office address in your file*  {{ $now }}    VIA FACISMILE OR EMAIL:  (833) 844-1540   {{ $json['1'] }}: {{ $json['5'] }} RE: Our Client/Your Patient:\t{{ $json['patient Name'] }}   Date of Birth:\t\t\t\t{{ $json['patient\\'s DOB'] }}  Date of Injury:\t\t\t\t{{ $json['incident date'] }}    Dear Sir or Madam: Thank you for sending over the bills and reports for Lesieli Kanongataa to our office.  We are in the process of negotiating with the Insurance Company and at the current time would like to discuss settlement of the medical bills with your office.  Based on the total medical bills and circumstances our client has allowed us to offer {{ $json.offeredamount }}.  The total that you have billed Lesieli Kanongataa for this case is: {{ $json['Total Bill'] }} .   Please confirm the outstanding balance for this patient.   Please either fax back this letter with your initials of acceptance of the offer below or call the undersigned to discuss the settlement of this case a little further.  Thank you for your partnership.  X________________ Acceptance of offer. \tAuthorized Representative of Provider.  Regards, BEVERLY LAW  Please scan and EMAIL back this letter with your initials of acceptance of the offer below to email fax@beverlylaw.org (lien negotiator replace fax email with your email).  Please do not fax back this letter.  Thank you for your partnership. Keep in mind we’re still negotiating with other providers and insurance companies.  X________________ Acceptance of offer. \tAuthorized Representative of Provider.   ********Please Confirm Payment address here:__________________________________________________"
+            },
+            {
+              "name": "date",
+              "value": "={{ $now }}"
+            },
+            {
+              "name": "actual_bill",
+              "value": "={{ parseFloat(($json[\"Total Bill\"] || '0').replace(/[$,]/g, '')) }}"
+            },
+            {
+              "name": "offered_bill",
+              "value": "={{ parseFloat(($json.offeredamount || '0').replace(/[$,]/g, '')) }}"
+            },
+            {
+              "name": "sent_by_us",
+              "value": "true"
+            },
+            {
+              "name": "result"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        4912,
+        288
+      ],
+      "id": "d020bfd9-e38f-4a79-af38-d876d5a5c548",
+      "name": "HTTP Request"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://casepeerai.onrender.com/api/negotiations",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "case_id",
+              "value": "={{ $('When Executed by Another Workflow').item.json.CaseID.toString() }}"
+            },
+            {
+              "name": "negotiation_type",
+              "value": "Offer"
+            },
+            {
+              "name": "to",
+              "value": "={{ $json.Email }}"
+            },
+            {
+              "name": "email_body",
+              "value": "=Beverly Law 4929 Wilshire Blvd, Suite 960 Los Angeles, CA 90010 \n\nTel: 310-552-6959 \nFax: 323-421-9397  \n\n*Please note our new office address in your file*\n\n{{ $now }}  \n\nVIA FACISMILE OR EMAIL:  (833) 844-1540 \n{{ $('If2').item.json['1'] }}:\n{{ $('If2').item.json['5'] }}\nRE: Our Client/Your Patient:\t{{ $json['patient Name'] }} \n\nDate of Birth:\t\t\t\t{{ $json['patient\\'s DOB'] }} \nDate of Injury:\t\t\t\t{{ $json['incident date'] }}  \n\nDear Sir or Madam:\nThank you for sending over the bills and reports for Lesieli Kanongataa to our office.  We are in the process of negotiating with the Insurance Company and at the current time would like to discuss settlement of the medical bills with your office.  Based on the total medical bills and circumstances our client has allowed us to offer {{ $json.output.new_total_amount }}.  The total that you have billed {{ $json['patient Name'] }} for this case is: {{ $json.output.total_original_amount }} .   Please confirm the outstanding balance for this patient. \n\nPlease either fax back this letter with your initials of acceptance of the offer below or call the undersigned to discuss the settlement of this case a little further.  Thank you for your partnership.  X________________ Acceptance of offer. \tAuthorized Representative of Provider.  Regards, BEVERLY LAW  Please scan and EMAIL back this letter with your initials of acceptance of the offer below to email fax@beverlylaw.org (lien negotiator replace fax email with your email).  Please do not fax back this letter.  Thank you for your partnership. Keep in mind we’re still negotiating with other providers and insurance companies.  X________________ Acceptance of offer. \tAuthorized Representative of Provider.   ********Please Confirm Payment address here:__________________________________________________"
+            },
+            {
+              "name": "date",
+              "value": "={{ $now }}"
+            },
+            {
+              "name": "actual_bill",
+              "value": "={{ parseFloat(($json[\"Total Bill\"] || '0').replace(/[$,]/g, '')) }}"
+            },
+            {
+              "name": "offered_bill",
+              "value": "={{ parseFloat(($json.offeredamount || '0').replace(/[$,]/g, '')) }}"
+            },
+            {
+              "name": "sent_by_us",
+              "value": "true"
+            },
+            {
+              "name": "result"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        5408,
+        768
+      ],
+      "id": "183ea3e1-63e5-4206-afc7-ecc043b13b62",
+      "name": "HTTP Request1"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "3y1pMl7LLoPpAuj0",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/3y1pMl7LLoPpAuj0",
+          "cachedResultName": "Get Mail Sub"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "CaseID": "={{ $('When Executed by Another Workflow').item.json.CaseID.toString() }}"
+          },
+          "matchingColumns": [
+            "CaseID"
+          ],
+          "schema": [
+            {
+              "id": "CaseID",
+              "displayName": "CaseID",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        544,
+        720
+      ],
+      "id": "f2ccde5c-6ede-43c5-831f-10efca5faa9d",
+      "name": "Call 'My Sub-Workflow 5'1",
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "V5Cxpen2KdBub8Y9",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/V5Cxpen2KdBub8Y9",
+          "cachedResultName": "Thirdpartysubf"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "CaseID": "={{ $('When Executed by Another Workflow').item.json.CaseID.toString() }}"
+          },
+          "matchingColumns": [
+            "CaseID"
+          ],
+          "schema": [
+            {
+              "id": "CaseID",
+              "displayName": "CaseID",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        4992,
+        80
+      ],
+      "id": "7905a797-7277-4d59-9c44-afb55d73991c",
+      "name": "Call 'Thirdpartysubf'",
+      "executeOnce": true
+    }
+  ],
+  "pinData": {
+    "When Executed by Another Workflow": [
+      {
+        "json": {
+          "CaseID": "1850882"
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "CaseID": "1850882"
+        },
+        "pairedItem": {
+          "item": 1
+        }
+      },
+      {
+        "json": {
+          "CaseID": "1850882"
+        },
+        "pairedItem": {
+          "item": 2
+        }
+      },
+      {
+        "json": {
+          "CaseID": "1850882"
+        },
+        "pairedItem": {
+          "item": 3
+        }
+      },
+      {
+        "json": {
+          "CaseID": "1850882"
+        },
+        "pairedItem": {
+          "item": 4
+        }
+      },
+      {
+        "json": {
+          "CaseID": "1850882"
+        },
+        "pairedItem": {
+          "item": 5
+        }
+      },
+      {
+        "json": {
+          "CaseID": "1850882"
+        },
+        "pairedItem": {
+          "item": 6
+        }
+      },
+      {
+        "json": {
+          "CaseID": "1850882"
+        },
+        "pairedItem": {
+          "item": 7
+        }
+      },
+      {
+        "json": {
+          "CaseID": "1850882"
+        },
+        "pairedItem": {
+          "item": 8
+        }
+      },
+      {
+        "json": {
+          "CaseID": "1850882"
+        },
+        "pairedItem": {
+          "item": 9
+        }
+      },
+      {
+        "json": {
+          "CaseID": "1850882"
+        },
+        "pairedItem": {
+          "item": 10
+        }
+      },
+      {
+        "json": {
+          "CaseID": "1850882"
+        },
+        "pairedItem": {
+          "item": 11
+        }
+      },
+      {
+        "json": {
+          "CaseID": "1850882"
+        },
+        "pairedItem": {
+          "item": 12
+        }
+      },
+      {
+        "json": {
+          "CaseID": "1850882"
+        },
+        "pairedItem": {
+          "item": 13
+        }
+      },
+      {
+        "json": {
+          "CaseID": "1850882"
+        },
+        "pairedItem": {
+          "item": 14
+        }
+      },
+      {
+        "json": {
+          "CaseID": "1850882"
+        },
+        "pairedItem": {
+          "item": 15
+        }
+      },
+      {
+        "json": {
+          "CaseID": "1850882"
+        },
+        "pairedItem": {
+          "item": 16
+        }
+      },
+      {
+        "json": {
+          "CaseID": "1850882"
+        },
+        "pairedItem": {
+          "item": 17
+        }
+      },
+      {
+        "json": {
+          "CaseID": "1850882"
+        },
+        "pairedItem": {
+          "item": 18
+        }
+      },
+      {
+        "json": {
+          "CaseID": "1850882"
+        },
+        "pairedItem": {
+          "item": 19
+        }
+      },
+      {
+        "json": {
+          "CaseID": "1850882"
+        },
+        "pairedItem": {
+          "item": 20
+        }
+      },
+      {
+        "json": {
+          "CaseID": "1850882"
+        },
+        "pairedItem": {
+          "item": 21
+        }
+      },
+      {
+        "json": {
+          "CaseID": "1850882"
+        },
+        "pairedItem": {
+          "item": 22
+        }
+      },
+      {
+        "json": {
+          "CaseID": "1850882"
+        },
+        "pairedItem": {
+          "item": 23
+        }
+      },
+      {
+        "json": {
+          "CaseID": "1850882"
+        },
+        "pairedItem": {
+          "item": 24
+        }
+      },
+      {
+        "json": {
+          "CaseID": "1850882"
+        },
+        "pairedItem": {
+          "item": 25
+        }
+      },
+      {
+        "json": {
+          "CaseID": "1850882"
+        },
+        "pairedItem": {
+          "item": 26
+        }
+      },
+      {
+        "json": {
+          "CaseID": "1850882"
+        },
+        "pairedItem": {
+          "item": 27
+        }
+      },
+      {
+        "json": {
+          "CaseID": "1850882"
+        },
+        "pairedItem": {
+          "item": 28
+        }
+      },
+      {
+        "json": {
+          "CaseID": "1850882"
+        },
+        "pairedItem": {
+          "item": 29
+        }
+      },
+      {
+        "json": {
+          "CaseID": "1850882"
+        },
+        "pairedItem": {
+          "item": 30
+        }
+      },
+      {
+        "json": {
+          "CaseID": "1850882"
+        },
+        "pairedItem": {
+          "item": 31
+        }
+      },
+      {
+        "json": {
+          "CaseID": "1850882"
+        },
+        "pairedItem": {
+          "item": 32
+        }
+      },
+      {
+        "json": {
+          "CaseID": "1850882"
+        },
+        "pairedItem": {
+          "item": 33
+        }
+      },
+      {
+        "json": {
+          "CaseID": "1850882"
+        },
+        "pairedItem": {
+          "item": 34
+        }
+      },
+      {
+        "json": {
+          "CaseID": "1850882"
+        },
+        "pairedItem": {
+          "item": 35
+        }
+      },
+      {
+        "json": {
+          "CaseID": "1850882"
+        },
+        "pairedItem": {
+          "item": 36
+        }
+      },
+      {
+        "json": {
+          "CaseID": "1850882"
+        },
+        "pairedItem": {
+          "item": 37
+        }
+      },
+      {
+        "json": {
+          "CaseID": "1850882"
+        },
+        "pairedItem": {
+          "item": 38
+        }
+      },
+      {
+        "json": {
+          "CaseID": "1850882"
+        },
+        "pairedItem": {
+          "item": 39
+        }
+      },
+      {
+        "json": {
+          "CaseID": "1850882"
+        },
+        "pairedItem": {
+          "item": 40
+        }
+      },
+      {
+        "json": {
+          "CaseID": "1850882"
+        },
+        "pairedItem": {
+          "item": 41
+        }
+      },
+      {
+        "json": {
+          "CaseID": "1850882"
+        },
+        "pairedItem": {
+          "item": 42
+        }
+      },
+      {
+        "json": {
+          "CaseID": "1850882"
+        },
+        "pairedItem": {
+          "item": 43
+        }
+      },
+      {
+        "json": {
+          "CaseID": "1850882"
+        },
+        "pairedItem": {
+          "item": 44
+        }
+      },
+      {
+        "json": {
+          "CaseID": "1850882"
+        },
+        "pairedItem": {
+          "item": 45
+        }
+      },
+      {
+        "json": {
+          "CaseID": "1850882"
+        },
+        "pairedItem": {
+          "item": 46
+        }
+      },
+      {
+        "json": {
+          "CaseID": "1850882"
+        },
+        "pairedItem": {
+          "item": 47
+        }
+      },
+      {
+        "json": {
+          "CaseID": "1850882"
+        },
+        "pairedItem": {
+          "item": 48
+        }
+      },
+      {
+        "json": {
+          "CaseID": "1850882"
+        },
+        "pairedItem": {
+          "item": 49
+        }
+      },
+      {
+        "json": {
+          "CaseID": "1850882"
+        },
+        "pairedItem": {
+          "item": 50
+        }
+      },
+      {
+        "json": {
+          "CaseID": "1850882"
+        },
+        "pairedItem": {
+          "item": 51
+        }
+      },
+      {
+        "json": {
+          "CaseID": "1850882"
+        },
+        "pairedItem": {
+          "item": 52
+        }
+      }
+    ]
+  },
+  "connections": {
+    "Merge2": {
+      "main": [
+        [
+          {
+            "node": "Send a message1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "HTTP Request1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structured Output Parser2": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "AI Agent2",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model3": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent2",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent2": {
+      "main": [
+        [
+          {
+            "node": "Merge2",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Code2": {
+      "main": [
+        [
+          {
+            "node": "AI Agent2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structured Output Parser1": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "AI Agent1",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If2": {
+      "main": [
+        [
+          {
+            "node": "Merge1",
+            "type": "main",
+            "index": 1
+          }
+        ],
+        [
+          {
+            "node": "AI Agent1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge1": {
+      "main": [
+        [
+          {
+            "node": "Send a message",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code1": {
+      "main": [
+        [
+          {
+            "node": "If2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Out1": {
+      "main": [
+        [
+          {
+            "node": "If1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If1": {
+      "main": [
+        [
+          {
+            "node": "Code1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GPID1": {
+      "main": [
+        [
+          {
+            "node": "Split Out1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code": {
+      "main": [
+        [
+          {
+            "node": "GPID1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send a message": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request12",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Merge2",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Code",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Out2": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structured Output Parser": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Split Out2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Scrape Website": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Items1": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Code5",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code5": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code3": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request2": {
+      "main": [
+        [
+          {
+            "node": "Scrape Website",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Loop Over Items1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit Fields2": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Split Out",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code4": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Out": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GPID": {
+      "main": [
+        [
+          {
+            "node": "Code3",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Code4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "When Executed by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "GPID",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Call 'My Sub-Workflow 5'1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model1": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Answer questions with a vector store",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pinecone Vector Store": {
+      "ai_vectorStore": [
+        [
+          {
+            "node": "Answer questions with a vector store",
+            "type": "ai_vectorStore",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embeddings OpenAI": {
+      "ai_embedding": [
+        [
+          {
+            "node": "Pinecone Vector Store",
+            "type": "ai_embedding",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Simple Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "AI Agent1",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Answer questions with a vector store": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent1",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent1": {
+      "main": [
+        [
+          {
+            "node": "Code2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model2": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent1",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request12": {
+      "main": [
+        [
+          {
+            "node": "Call 'Thirdpartysubf'",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "c6de71ec-9292-40e1-b387-355ed49c13f4",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "e82d4abdd6eb816597dc8f426c7e69508cc13d63a41073edf573e73f22416c1b"
+  },
+  "id": "IL3ZG6Vi4X1vIYLO",
+  "tags": []
+}

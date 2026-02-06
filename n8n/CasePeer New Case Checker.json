@@ -1,0 +1,310 @@
+{
+  "name": "CasePeer New Case Checker",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {}
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        0,
+        0
+      ],
+      "id": "d7dfe690-88f7-4862-85cb-d4525ac3864e",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {
+        "url": "https://casepeerai.onrender.com/report/R/my-cases/?page=1",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        208,
+        0
+      ],
+      "id": "3fc8b2a7-dc34-408f-a51f-fd1cd48ac374",
+      "name": "HTTP Request"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Try to detect where HTML actually is\nconst data = $json.body || $json.data || $json.html || JSON.stringify($json);\nconsole.log('Fetched HTML length:', data.length);\n\n// Use regex to extract case IDs\nconst regex = /\\/case\\/(\\d+)\\//g;\nconst ids = [];\nlet match;\n\nwhile ((match = regex.exec(data)) !== null) {\n  if (!ids.includes(match[1])) ids.push(match[1]);\n}\n\nreturn [{ caseIds: ids }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        416,
+        0
+      ],
+      "id": "4d83a146-c3f7-486f-a2d1-3a21128de3b3",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "jsCode": "const current = $json.caseIds || [];\nconst prev = $getWorkflowStaticData('global').lastCaseIds || [];\nconst newCases = current.filter(id => !prev.includes(id));\n\n// store current for next time\n$getWorkflowStaticData('global').lastCaseIds = current;\n\nreturn [{\n  newCases,\n  newCaseCount: newCases.length,\n  message: newCases.length > 0\n    ? `New cases found: ${newCases.join(', ')}`\n    : 'No new cases found'\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1280,
+        176
+      ],
+      "id": "36632dd4-b2a1-42f5-8d50-a6646d7578fc",
+      "name": "Code in JavaScript1"
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "1KypOjQwEFugxLo3X60aldXNICd3JHHtEYkpSGLIX3Bk",
+          "mode": "list",
+          "cachedResultName": "Case List",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1KypOjQwEFugxLo3X60aldXNICd3JHHtEYkpSGLIX3Bk/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1KypOjQwEFugxLo3X60aldXNICd3JHHtEYkpSGLIX3Bk/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Case ID": "={{ $json.caseId }}"
+          },
+          "matchingColumns": [
+            "Case ID"
+          ],
+          "schema": [
+            {
+              "id": "Case ID",
+              "displayName": "Case ID",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        1264,
+        0
+      ],
+      "id": "6e2cac72-ca28-420a-9a9e-9d5af0b2a0c7",
+      "name": "Append or update row in sheet",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "7T4iyPVVVoUMY2kx",
+          "name": "Google Sheets account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "caseIds",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        624,
+        0
+      ],
+      "id": "016e1eb2-c53b-4927-b8ed-ef848f101a47",
+      "name": "Split Out"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get all case IDs from Split Out\nconst extracted = $items('Split Out').map(item => item.json.caseIds.toString().trim());\n\n// Get all case IDs from Google Sheets\nconst existing = $items('Get Row').map(item => item.json[\"Case ID\"].toString().trim());\n\n// Filter those not already in the sheet\nconst newCases = extracted.filter(id => !existing.includes(id));\n\n// Return one item per new case, or empty array if none\nreturn newCases.map(id => ({ json: { caseId: id } }));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1056,
+        0
+      ],
+      "id": "105ea859-31b9-40f4-ba54-1ea75d1909f0",
+      "name": "Code in JavaScript2"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1KypOjQwEFugxLo3X60aldXNICd3JHHtEYkpSGLIX3Bk",
+          "mode": "list",
+          "cachedResultName": "Case List",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1KypOjQwEFugxLo3X60aldXNICd3JHHtEYkpSGLIX3Bk/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1KypOjQwEFugxLo3X60aldXNICd3JHHtEYkpSGLIX3Bk/edit#gid=0"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        848,
+        0
+      ],
+      "id": "aafab446-8044-483f-a427-62a9d4d60180",
+      "name": "Get Row",
+      "executeOnce": true,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "7T4iyPVVVoUMY2kx",
+          "name": "Google Sheets account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "O0gGrIppbEfApwIT",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/O0gGrIppbEfApwIT",
+          "cachedResultName": "New Classification"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "CaseID": "={{ $json.caseId }}"
+          },
+          "matchingColumns": [
+            "Case ID"
+          ],
+          "schema": [
+            {
+              "id": "CaseID",
+              "displayName": "CaseID",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {
+          "waitForSubWorkflow": false
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        1264,
+        320
+      ],
+      "id": "76b33ae1-b32e-4e3d-9bc2-3018a9245a59",
+      "name": "Call 'New Classification'"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Split Out",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Out": {
+      "main": [
+        [
+          {
+            "node": "Get Row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Row": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript2": {
+      "main": [
+        [
+          {
+            "node": "Call 'New Classification'",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Append or update row in sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "49dcac4a-ae29-4d7c-b158-18b3d80ba001",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "e82d4abdd6eb816597dc8f426c7e69508cc13d63a41073edf573e73f22416c1b"
+  },
+  "id": "iQeiSlGrrPcrAfCn",
+  "tags": []
+}

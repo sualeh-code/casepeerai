@@ -1381,8 +1381,14 @@ def get_openai_usage(db: Session = Depends(get_db)):
                  }
              else:
                  raise HTTPException(status_code=401, detail="Invalid OpenAI API Key")
+        elif response.status_code == 403:
+             return {
+                 "message": "Permission denied for Usage API. Check API Key scopes.",
+                 "error": response.json().get("error", "Unknown error"),
+                 "data": []
+             }
         else:
-            return {"error": response.text, "status_code": response.status_code}
+             return {"error": response.text, "status_code": response.status_code}
 
     except Exception as e:
         logger.error(f"OpenAI API Error: {e}")
@@ -1411,7 +1417,11 @@ def get_n8n_executions(db: Session = Depends(get_db)):
         
         headers = {}
         if api_key.startswith("ey"):
+             # For n8n cloud, it might still expect X-N8N-API-KEY or query param
+             # But the user error says 'X-N8N-API-KEY' header required, so we force it.
+             # We send BOTH for maximum compatibility if it looks like a JWT
              headers["Authorization"] = f"Bearer {api_key}"
+             headers["X-N8N-API-KEY"] = api_key
         else:
              headers["X-N8N-API-KEY"] = api_key
         

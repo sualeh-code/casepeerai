@@ -1,0 +1,420 @@
+{
+  "name": "Gmail Auto Follow-up Reminders",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 24
+            }
+          ]
+        }
+      },
+      "name": "Schedule Daily Check",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "16ab7852-b3c4-40df-8948-417ec5911581"
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "filters": {
+          "includeSpamTrash": false,
+          "q": "in:sent to:wasifnadeem92743@gmail.com"
+        }
+      },
+      "name": "Get Sent Emails",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [
+        192,
+        0
+      ],
+      "id": "3df9c4c2-1685-4e51-b72c-6a49409151ec",
+      "webhookId": "27da2d8f-5712-4be9-a577-af17f1c458e9",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "qu1bypdqFgmCNgVo",
+          "name": "Gmail account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "7a8d0880-3659-42cb-ade3-babbaad3069a",
+              "leftValue": "={{ $json.shouldSendReminder }}",
+              "rightValue": false,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        592,
+        0
+      ],
+      "id": "4d1833e8-f3dc-472c-96f2-b397b6324638",
+      "name": "If"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are a professional medical Email Reminder Your job is to check all the Threads and only return the threads in which messages were sent to Health Service providers from below threads.\n{{ JSON.stringify($json) }}\n\nAdditionally you should also provide the following details for each filtered message.\nthreadId\nsubject\nrecipient\nlastMessageFrom\nlastMessageDate\ndaysSinceLastMessage\nreminderNumber \nshouldSendReminder \nmessageCount\nsnippet\nPatient Name\nlast message ID\n\nWe will send the reminder if the person has not responded us for last two days.\nIn that case shouldSendReminder will be \"true\" otherwise \"false\".\n\nyou will need to count the number of reminders sent to the same person from the thread \"ReminderNumber\".\n\nmessageCount will be the total number of messages in the thread.\n\nand Patient name you will need to extract that from the thread.\n\nsnippet will be the reminder message which you will send to that person.\n\nrecipient will be recipient's email address.\n\nAlso provide last message ID.",
+        "hasOutputParser": true,
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        336,
+        192
+      ],
+      "id": "82e80b8c-db3b-4e1a-a2da-4086b774e45e",
+      "name": "AI Agent",
+      "retryOnFail": false,
+      "executeOnce": false,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "o4-mini-2025-04-16",
+          "mode": "list",
+          "cachedResultName": "o4-mini-2025-04-16"
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        368,
+        400
+      ],
+      "id": "dc106d76-c2e9-4a23-9dbc-c143c7d29132",
+      "name": "OpenAI Chat Model",
+      "credentials": {
+        "openAiApi": {
+          "id": "7fbCuNCbBrhyTPqW",
+          "name": "OpenAi account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsonSchemaExample": "{\n\"threadId\":\"\",\n\"subject\":\"\",\n\"recipient\":\"\",\n\"lastMessageFrom\":\"\",\n\"lastMessageDate\":\"\", \n\"daysSinceLastMessage\":\"\",\n\"reminderNumber\":\"\",\n\"shouldSendReminder\":\"\",\n\"snippet\":\"\",\n\"Patient Name\":\"\",  \n\"lastmessageID\":\"\"\n}"
+      },
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        512,
+        400
+      ],
+      "id": "b1099f8b-a3fc-4e84-86ea-834eb5ae79ff",
+      "name": "Structured Output Parser"
+    },
+    {
+      "parameters": {
+        "url": "=https://casepeerai.onrender.com/api/v1/case/case-search/?search={{ $('If1').item.json.output['Patient Name'] }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        1152,
+        400
+      ],
+      "id": "547bff32-a191-4caa-a7b2-02a90616576b",
+      "name": "HTTP Request2"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "5931d0ba-c63b-4229-833a-a5a6f7a9a40e",
+              "leftValue": "={{ $json.output.shouldSendReminder }}",
+              "rightValue": "true",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        720,
+        160
+      ],
+      "id": "3bd5cbff-f832-425e-98d5-ba47405d2ca0",
+      "name": "If1"
+    },
+    {
+      "parameters": {
+        "resource": "thread",
+        "operation": "reply",
+        "threadId": "={{ $json.output.threadId }}",
+        "messageId": "={{ $json.output.lastmessageID }}",
+        "message": "={{ $json.output.snippet }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        944,
+        144
+      ],
+      "id": "6681e22e-0a00-4389-9b8f-982f193e62bd",
+      "name": "Reply to a message",
+      "webhookId": "b1141c80-683e-4bd5-9415-92bbae8a419f",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "qu1bypdqFgmCNgVo",
+          "name": "Gmail account 2"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "a65d95fd-a1f5-436a-9b59-8bf15a570d2e",
+              "leftValue": "={{ $('If1').item.json.output['Patient Name'] }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        928,
+        400
+      ],
+      "id": "1b91c0c4-749a-44ca-87c5-84d460ea15b9",
+      "name": "If2"
+    },
+    {
+      "parameters": {
+        "url": "=https://casepeerai.onrender.com/api/cases/1850882",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        1328,
+        384
+      ],
+      "id": "4f9effda-977b-4731-902f-b9493229acc9",
+      "name": "HTTP Request"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://casepeerai.onrender.com/api/reminders",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "case_id",
+              "value": "={{ $json.id }}"
+            },
+            {
+              "name": "reminder_number",
+              "value": "={{ $('If2').item.json.output.reminderNumber + 1 }}"
+            },
+            {
+              "name": "reminder_date",
+              "value": "={{ $now }}"
+            },
+            {
+              "name": "reminder_email_body",
+              "value": "={{ $('If2').item.json.output.snippet }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        1536,
+        384
+      ],
+      "id": "57b06dff-50d0-4416-ac28-445431aca395",
+      "name": "HTTP Request1"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Schedule Daily Check": {
+      "main": [
+        [
+          {
+            "node": "Get Sent Emails",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Sent Emails": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structured Output Parser": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "If1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If1": {
+      "main": [
+        [
+          {
+            "node": "Reply to a message",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "If2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request2": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If2": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "cb6d24d8-8841-47df-97e4-cf447bf8b007",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "e82d4abdd6eb816597dc8f426c7e69508cc13d63a41073edf573e73f22416c1b"
+  },
+  "id": "0yZ2UMla4UaZQU62",
+  "tags": []
+}
