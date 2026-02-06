@@ -28,7 +28,7 @@ class TursoClient:
         """Execute a single SQL statement."""
         stmt = {"sql": sql}
         if params:
-            stmt["args"] = params
+            stmt["args"] = self._convert_params(params)
             
         payload = {
             "requests": [
@@ -54,7 +54,16 @@ class TursoClient:
         """Execute multiple SQL statements in a batch."""
         requests_list = []
         for stmt in statements:
-            requests_list.append({"type": "execute", "stmt": stmt})
+            # We need to make sure we're handling the statement structure correctly
+            # If stmt is just a dict with 'sql' and 'args', convert args
+            sql_cmd = stmt.get("sql")
+            args = stmt.get("args")
+            
+            s = {"sql": sql_cmd}
+            if args:
+                s["args"] = self._convert_params(args)
+                
+            requests_list.append({"type": "execute", "stmt": s})
         requests_list.append({"type": "close"})
         
         payload = {"requests": requests_list}
@@ -115,8 +124,43 @@ class TursoClient:
         if cell is None:
             return None
         if isinstance(cell, dict):
-            return cell.get("value")
+            c_type = cell.get("type")
+            value = cell.get("value")
+            
+            if c_type == "integer":
+                return int(value) if value is not None else None
+            elif c_type == "float":
+                return float(value) if value is not None else None
+            elif c_type == "blob":
+                if cell.get("base64"):
+                    import base64
+                    return base64.b64decode(cell["base64"])
+                return None
+            return value
         return cell
+        
+    def _convert_params(self, params: List[Any]) -> List[Dict[str, Any]]:
+        """Convert Python values to Turso typed arguments."""
+        converted = []
+        for p in params:
+            if p is None:
+                converted.append({"type": "null"})
+            elif isinstance(p, int):
+                converted.append({"type": "integer", "value": str(p)})
+            elif isinstance(p, float):
+                converted.append({"type": "float", "value": p})
+            elif isinstance(p, str):
+                converted.append({"type": "text", "value": p})
+            elif isinstance(p, bytes):
+                import base64
+                encoded = base64.b64encode(p).decode('utf-8')
+                converted.append({"type": "blob", "base64": encoded})
+            elif isinstance(p, bool):
+                 # SQLite uses integers for boolean
+                converted.append({"type": "integer", "value": "1" if p else "0"})
+            else:
+                 converted.append({"type": "text", "value": str(p)})
+        return converted
     
     def get_tables(self) -> List[str]:
         """Get list of table names."""
