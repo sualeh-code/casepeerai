@@ -129,11 +129,12 @@ async def lifespan(app: FastAPI):
     logger.info("Starting CasePeer API Wrapper - Initializing Database...")
     
     try:
-        # Verify Turso HTTP connection
-        if turso.test_connection():
-            logger.info("✓ Turso HTTP connection established")
-        else:
-            logger.error("❌ Turso HTTP connection failed during startup")
+        # Optional: Check Turso Connection
+        try:
+            turso.connect()
+            logger.info("[OK] Turso HTTP connection established")
+        except Exception as e:
+            logger.error(f"Turso Connection Warning: {e}")
             # We continue but logs will show failures
         
         # Check and ensure tables/seed data
@@ -152,10 +153,10 @@ async def lifespan(app: FastAPI):
         # Synchronous seed with TursoClient-backed crud
         with SessionLocal() as db:
             seed_settings(db)
-            logger.info("✓ Database and settings initialized")
+            logger.info("[OK] Database and settings initialized")
             
     except Exception as e:
-        logger.error(f"❌ Critical Database Initialization Error: {e}", exc_info=True)
+        logger.error(f"[ERROR] Critical Database Initialization Error: {e}", exc_info=True)
 
     # 2. PROCEED TO AUTHENTICATION
     logger.info("Performing authentication on startup...")
@@ -170,9 +171,9 @@ async def lifespan(app: FastAPI):
             auth_success = await refresh_authentication()
 
         if auth_success:
-            logger.info("✓ Startup authentication successful - proxy ready to use")
+            logger.info("[OK] Startup authentication successful - proxy ready to use")
         else:
-            logger.error("✗ Startup authentication failed - requests may fail")
+            logger.error("[FAIL] Startup authentication failed - requests may fail")
             logger.error("  The proxy will attempt to re-authenticate on first 401/403 error")
             
     except Exception as e:
@@ -697,7 +698,7 @@ async def try_restore_session() -> bool:
             if ACCESS_TOKEN:
                 session.headers['Authorization'] = f'Bearer {ACCESS_TOKEN}'
                 
-            logger.info(f"✓ Session successfully restored from database (Updated: {db_session['updated_at']})")
+            logger.info(f"[OK] Session successfully restored from database (Updated: {db_session['updated_at']})")
             return True
             
     except Exception as e:
@@ -1407,7 +1408,7 @@ async def update_provider_email(request: Request):
                     detail="Authentication required. Session may have expired."
                 )
 
-            logger.info("✅ Email updated successfully")
+            logger.info("[OK] Email updated successfully")
 
             return {
                 "success": True,

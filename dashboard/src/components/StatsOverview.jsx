@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { DollarSign, FileText, Mail, TrendingUp, Activity, Percent, Ban } from 'lucide-react';
+import { DollarSign, Users, Briefcase, Activity, TrendingUp, ArrowUpRight, ArrowDownRight, FileText, Percent, Mail } from 'lucide-react';
+import { Button } from "@/components/ui/button";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts';
 import N8nHealth from './N8nHealth';
 import DocumentFeed from './DocumentFeed';
@@ -71,11 +72,14 @@ const StatsOverview = () => {
                         }
                     });
 
-                    const negotiationPerf = negotiations.map((n, i) => ({
-                        name: n.to ? n.to.substring(0, 10) : `Neg ${i}`,
-                        offered: n.offered_bill || 0,
-                        actual: n.actual_bill || 0
-                    })).slice(0, 20); // Limit to top 20 for readability
+                    const negotiationPerf = negotiations.map((n, i) => {
+                        const name = n.to ? n.to.substring(0, 10) : ('Neg ' + i);
+                        return {
+                            name,
+                            offered: n.offered_bill || 0,
+                            actual: n.actual_bill || 0
+                        };
+                    }).slice(0, 20);
 
                     const negResults = negotiations.reduce((acc, n) => {
                         const res = n.result || 'Unknown';
@@ -106,12 +110,12 @@ const StatsOverview = () => {
     }, []);
 
     const kpiCards = [
-        { title: "Total Revenue", value: `$${stats.totalRevenue.toLocaleString()}`, icon: DollarSign, color: "text-green-500", desc: "Gross revenue" },
-        { title: "Potential Savings", value: `$${stats.totalSavings.toLocaleString()}`, icon: TrendingUp, color: "text-blue-500", desc: "Total negotiated savings" },
-        { title: "Active Cases", value: stats.activeCases, icon: Activity, color: "text-purple-500", desc: `${stats.totalCases} total cases` },
-        { title: "Win Rate", value: `${stats.winRate.toFixed(1)}%`, icon: Percent, color: "text-indigo-500", desc: "Active / Total Ratio" },
+        { title: "Total Revenue", value: "$" + stats.totalRevenue.toLocaleString(), icon: DollarSign, color: "text-green-500", desc: "Gross revenue" },
+        { title: "Potential Savings", value: "$" + stats.totalSavings.toLocaleString(), icon: TrendingUp, color: "text-blue-500", desc: "Total negotiated savings" },
+        { title: "Active Cases", value: stats.activeCases, icon: Activity, color: "text-purple-500", desc: stats.totalCases + " total cases" },
+        { title: "Win Rate", value: stats.winRate.toFixed(1) + "%", icon: Percent, color: "text-indigo-500", desc: "Active / Total Ratio" },
         { title: "Emails Processed", value: stats.totalEmails, icon: Mail, color: "text-orange-500", desc: "Total volume" },
-        { title: "Avg Case Value", value: `$${stats.avgCaseValue.toLocaleString(undefined, { maximumFractionDigits: 0 })}`, icon: DollarSign, color: "text-emerald-600", desc: "Revenue per case" },
+        { title: "Avg Case Value", value: "$" + stats.avgCaseValue.toLocaleString(undefined, { maximumFractionDigits: 0 }), icon: DollarSign, color: "text-emerald-600", desc: "Revenue per case" },
     ];
 
     if (loading) {
@@ -177,7 +181,7 @@ const StatsOverview = () => {
                     </CardHeader>
                     <CardContent>
                         <div className="text-2xl font-bold">
-                            ${stats.totalFees.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            ${stats.totalRevenue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                         </div>
                         <p className="text-xs text-muted-foreground">
                             Fees collected
@@ -239,7 +243,7 @@ const StatsOverview = () => {
                                         dataKey="value"
                                     >
                                         {charts.status.map((entry, index) => (
-                                            <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                                            <Cell key={'cell-' + index} fill={COLORS[index % COLORS.length]} />
                                         ))}
                                     </Pie>
                                     <Tooltip />
@@ -292,7 +296,7 @@ const StatsOverview = () => {
                                             dataKey="value"
                                         >
                                             {charts.negotiationResults.map((entry, index) => (
-                                                <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                                                <Cell key={'cell-' + index} fill={COLORS[index % COLORS.length]} />
                                             ))}
                                         </Pie>
                                         <Tooltip />
