@@ -59,6 +59,7 @@ class CaseCreate(CaseBase):
     pass
 
 class Case(CaseBase):
+    negotiations: list["Negotiation"] = []
     class Config:
         orm_mode = True
 

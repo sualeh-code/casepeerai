@@ -887,7 +887,7 @@ def parse_form_fields(html_content: str) -> Dict[str, Any]:
 # ============================================================================
 
 
-@app.post("/api/authenticate")
+@app.post("/dashboard/api/authenticate")
 async def manual_authenticate():
     """
     Manual authentication endpoint to force re-authentication.
@@ -921,7 +921,7 @@ async def manual_authenticate():
         )
 
 
-@app.post("/api/proxy_upload_file/{case_id}")
+@app.post("/dashboard/api/proxy_upload_file/{case_id}")
 async def proxy_upload_file(
     case_id: str,
     file: UploadFile,
@@ -1039,15 +1039,15 @@ async def proxy_upload_file(
 # ============================================================================
 
 # Cases
-@app.post("/api/cases", response_model=schemas.Case)
+@app.post("/dashboard/api/cases", response_model=schemas.Case)
 def create_case(case: schemas.CaseCreate, db: Session = Depends(get_db)):
     return crud.create_new_case(db=db, case=case)
 
-@app.get("/api/cases", response_model=list[schemas.Case])
+@app.get("/dashboard/api/cases", response_model=list[schemas.Case])
 def read_cases(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     return crud.get_all_cases(db=db, skip=skip, limit=limit)
 
-@app.get("/api/cases/{case_id}", response_model=schemas.Case)
+@app.get("/dashboard/api/cases/{case_id}", response_model=schemas.Case)
 def read_case(case_id: str, db: Session = Depends(get_db)):
     db_case = crud.get_case_by_id(db, case_id=case_id)
     if db_case is None:
@@ -1055,7 +1055,7 @@ def read_case(case_id: str, db: Session = Depends(get_db)):
     return db_case
 
 # Negotiations
-@app.post("/api/negotiations", response_model=schemas.Negotiation)
+@app.post("/dashboard/api/negotiations", response_model=schemas.Negotiation)
 def create_negotiation(negotiation: schemas.NegotiationCreate, db: Session = Depends(get_db)):
     # Verify case exists
     db_case = crud.get_case_by_id(db, case_id=negotiation.case_id)
@@ -1063,12 +1063,12 @@ def create_negotiation(negotiation: schemas.NegotiationCreate, db: Session = Dep
         raise HTTPException(status_code=404, detail="Case not found")
     return crud.create_negotiation(db=db, negotiation=negotiation)
 
-@app.get("/api/negotiations", response_model=list[schemas.Negotiation])
+@app.get("/dashboard/api/negotiations", response_model=list[schemas.Negotiation])
 def read_negotiations(case_id: str, db: Session = Depends(get_db)):
     return crud.get_negotiations_by_case(db=db, case_id=case_id)
 
 # Classifications
-@app.post("/api/classifications", response_model=schemas.Classification)
+@app.post("/dashboard/api/classifications", response_model=schemas.Classification)
 def create_classification(classification: schemas.ClassificationCreate, db: Session = Depends(get_db)):
     # Verify case exists
     db_case = crud.get_case_by_id(db, case_id=classification.case_id)
@@ -1076,12 +1076,12 @@ def create_classification(classification: schemas.ClassificationCreate, db: Sess
         raise HTTPException(status_code=404, detail="Case not found")
     return crud.create_classification(db=db, classification=classification)
 
-@app.get("/api/classifications", response_model=list[schemas.Classification])
+@app.get("/dashboard/api/classifications", response_model=list[schemas.Classification])
 def read_classifications(case_id: str, db: Session = Depends(get_db)):
     return crud.get_classifications_by_case(db=db, case_id=case_id)
 
 # Reminders
-@app.post("/api/reminders", response_model=schemas.Reminder)
+@app.post("/dashboard/api/reminders", response_model=schemas.Reminder)
 def create_reminder(reminder: schemas.ReminderCreate, db: Session = Depends(get_db)):
     # Verify case exists
     db_case = crud.get_case_by_id(db, case_id=reminder.case_id)
@@ -1089,29 +1089,29 @@ def create_reminder(reminder: schemas.ReminderCreate, db: Session = Depends(get_
         raise HTTPException(status_code=404, detail="Case not found")
     return crud.create_reminder(db=db, reminder=reminder)
 
-@app.get("/api/reminders", response_model=list[schemas.Reminder])
+@app.get("/dashboard/api/reminders", response_model=list[schemas.Reminder])
 def read_reminders(case_id: str, db: Session = Depends(get_db)):
     return crud.get_reminders_by_case(db=db, case_id=case_id)
 
 # Token Usage
-@app.post("/api/token_usage", response_model=schemas.TokenUsage)
+@app.post("/dashboard/api/token_usage", response_model=schemas.TokenUsage)
 def create_token_usage(usage: schemas.TokenUsageCreate, db: Session = Depends(get_db)):
     return crud.create_token_usage(db=db, usage=usage)
 
-@app.get("/api/token_usage", response_model=list[schemas.TokenUsage])
+@app.get("/dashboard/api/token_usage", response_model=list[schemas.TokenUsage])
 def read_token_usage(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     return crud.get_token_usage(db=db, skip=skip, limit=limit)
 
 
-@app.get("/api/settings/", response_model=list[schemas.AppSetting])
+@app.get("/dashboard/api/settings/", response_model=list[schemas.AppSetting])
 def read_settings(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     return crud.get_all_settings(db, skip=skip, limit=limit)
 
-@app.post("/api/settings/", response_model=schemas.AppSetting)
+@app.post("/dashboard/api/settings/", response_model=schemas.AppSetting)
 def create_or_update_setting(setting: schemas.AppSettingCreate, db: Session = Depends(get_db)):
     return crud.set_setting(db=db, setting=setting)
 
-@app.get("/api/logs")
+@app.get("/dashboard/api/logs")
 def get_logs(limit: int = 100):
     """Get the last N lines of logs."""
     log_file = "app.log"
@@ -1130,7 +1130,7 @@ def get_logs(limit: int = 100):
 # NEW ENDPOINT: Update Provider Email (Added for n8n integration)
 # ============================================================================
 
-@app.post("/api/update-provider-email")
+@app.post("/dashboard/api/update-provider-email")
 async def update_provider_email(request: Request):
     """
     Update provider email address while preserving all other fields.
@@ -1344,7 +1344,7 @@ async def update_provider_email(request: Request):
 # External Integrations Endpoints
 # ============================================================================
 
-@app.get("/api/integrations/openai/usage")
+@app.get("/dashboard/api/integrations/openai/usage")
 def get_openai_usage(db: Session = Depends(get_db)):
     """Fetch usage data from OpenAI API."""
     api_key = get_config(db, "openai_api_key")
@@ -1394,7 +1394,7 @@ def get_openai_usage(db: Session = Depends(get_db)):
         logger.error(f"OpenAI API Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/api/integrations/n8n/executions")
+@app.get("/dashboard/api/integrations/n8n/executions")
 def get_n8n_executions(db: Session = Depends(get_db)):
     """Fetch execution stats from n8n."""
     api_key = get_config(db, "n8n_api_key")
@@ -1441,9 +1441,105 @@ def get_n8n_executions(db: Session = Depends(get_db)):
         else:
              return {"error": f"n8n API Error: {response.text}", "status_code": response.status_code}
 
+
     except Exception as e:
         logger.error(f"n8n API Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+# ============================================================================
+# NEW ENDPOINT: Live Negotiation Data (Scraping)
+# ============================================================================
+
+@app.get("/dashboard/api/live/cases/{case_id}/negotiations")
+async def get_live_negotiations(case_id: str):
+    """
+    Fetch live negotiation data directly from CasePeer by scraping the page.
+    """
+    logger.info(f"Fetching live negotiations for case {case_id}")
+
+    endpoint = f"/case/{case_id}/settlement/negotiations/"
+
+    try:
+        # 1. Fetch the HTML page
+        response = await make_api_request(endpoint, method="GET")
+
+        if response.status_code != 200:
+             # Try refreshing auth once if 403/401
+            if response.status_code in (401, 403):
+                 logger.info("Auth failed, refreshing...")
+                 if await refresh_authentication():
+                      response = await make_api_request(endpoint, method="GET")
+
+            if response.status_code != 200:
+                raise HTTPException(status_code=response.status_code, detail="Failed to fetch page from CasePeer")
+
+        html_content = response.text
+
+        # 2. Parse HTML
+        soup = BeautifulSoup(html_content, 'html.parser')
+        negotiations = []
+
+        # Strategy: Find all tables, look for one with "Provider" in header
+        tables = soup.find_all('table')
+        target_table = None
+
+        for table in tables:
+            headers = [th.get_text(strip=True).lower() for th in table.find_all('th')]
+            if any("provider" in h for h in headers) or any("bill" in h for h in headers):
+                target_table = table
+                break
+
+        if target_table:
+            # Parse rows
+            rows = target_table.find_all('tr')
+            headers = [th.get_text(strip=True) for th in rows[0].find_all(['th', 'td'])]
+
+            for row in rows[1:]:
+                cells = row.find_all('td')
+                if len(cells) < 2: continue
+
+                # Simple mapping based on index if headers match known columns,
+                # otherwise just dump the row
+                row_data = {}
+                for i, cell in enumerate(cells):
+                    if i < len(headers):
+                        row_data[headers[i]] = cell.get_text(strip=True)
+
+                # Try to normalize to our schema
+                # Finding likely columns by keyword
+                provider = "Unknown"
+                actual = "0"
+                offered = "0"
+                status = "Unknown"
+
+                for k, v in row_data.items():
+                    k_lower = k.lower()
+                    if "provider" in k_lower: provider = v
+                    elif "original" in k_lower or "bill" in k_lower: actual = v
+                    elif "offer" in k_lower: offered = v
+                    elif "status" in k_lower: status = v
+
+                negotiations.append({
+                    "provider": provider,
+                    "actual_bill": actual,
+                    "offered_bill": offered,
+                    "status": status,
+                    "raw_data": row_data
+                })
+        else:
+            logger.warning("No negotiation table found in live page.")
+
+        return {
+            "source": "live_scrape",
+            "case_id": case_id,
+            "count": len(negotiations),
+            "negotiations": negotiations
+        }
+
+    except Exception as e:
+        logger.error(f"Live scrape failed: {e}")
+        # Return empty list instead of 500 to prevent UI crash
+        return {"source": "error", "error": str(e), "negotiations": []}
 
 @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"])
 async def proxy_request(request: Request, path: str):

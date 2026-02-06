@@ -46,8 +46,35 @@ def get_all_settings(db, skip: int = 0, limit: int = 100):
 
 # CASE CRUD (models.Case)
 def get_all_cases(db, skip: int = 0, limit: int = 100) -> List[Dict]:
-    """Get all cases."""
-    return turso.fetch_all("SELECT * FROM cases LIMIT ? OFFSET ?", [limit, skip])
+    """Get all cases with nested negotiations."""
+    cases = turso.fetch_all("SELECT * FROM cases LIMIT ? OFFSET ?", [limit, skip])
+    
+    if not cases:
+        return []
+
+    # Fetch negotiations for these cases to populate the relationship
+    # This mimics 'joinedload' in manual SQL
+    case_ids = [c["id"] for c in cases]
+    if not case_ids:
+        return cases
+        
+    placeholders = ", ".join(["?" for _ in case_ids])
+    query = f"SELECT * FROM negotiations WHERE case_id IN ({placeholders})"
+    all_negotiations = turso.fetch_all(query, case_ids)
+    
+    # Group by case_id
+    neg_map = {}
+    for n in all_negotiations:
+        cid = n["case_id"]
+        if cid not in neg_map:
+            neg_map[cid] = []
+        neg_map[cid].append(n)
+        
+    # Attach to cases
+    for c in cases:
+        c["negotiations"] = neg_map.get(c["id"], [])
+
+    return cases
 
 def get_case_by_id(db, case_id: str) -> Optional[Dict]:
     """Get a case by ID."""
