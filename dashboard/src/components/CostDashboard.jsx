@@ -72,16 +72,18 @@ const CostDashboard = () => {
                     </div>
                     <Card>
                         <CardHeader><CardTitle>Daily Trend</CardTitle></CardHeader>
-                        <CardContent className="h-[300px]">
-                            <ResponsiveContainer width="100%" height="100%">
-                                <LineChart data={tokenUsage}>
-                                    <CartesianGrid strokeDasharray="3 3" />
-                                    <XAxis dataKey="dateStr" />
-                                    <YAxis />
-                                    <Tooltip />
-                                    <Line type="monotone" dataKey="cost" stroke="#8884d8" />
-                                </LineChart>
-                            </ResponsiveContainer>
+                        <CardContent>
+                            <div className="h-[300px] w-full">
+                                <ResponsiveContainer width="100%" height="100%">
+                                    <LineChart data={tokenUsage}>
+                                        <CartesianGrid strokeDasharray="3 3" />
+                                        <XAxis dataKey="dateStr" />
+                                        <YAxis />
+                                        <Tooltip />
+                                        <Line type="monotone" dataKey="cost" stroke="#8884d8" />
+                                    </LineChart>
+                                </ResponsiveContainer>
+                            </div>
                         </CardContent>
                     </Card>
                 </TabsContent>

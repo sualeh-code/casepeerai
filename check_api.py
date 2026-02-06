@@ -26,16 +26,7 @@ try:
     
     try:
         data = res.json()
-        print(f"Type: {type(data)}")
-        if isinstance(data, list):
-             print(f"Length: {len(data)}")
-        elif isinstance(data, dict):
-             results = data.get("results", [])
-             print(f"Results Length: {len(results)}")
-             if results:
-                 print(f"First note: {results[0]}")
-        else:
-             print(f"Content: {json.dumps(data, indent=2)}")
+        print(f"Full Response: {json.dumps(data, indent=2)}")
     except Exception as e:
         print(f"JSON Error: {e}")
         print(f"Text: {res.text[:500]}")
