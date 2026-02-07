@@ -220,10 +220,10 @@ def fetch_otp_from_gmail(max_retries: int = 10, retry_delay: int = 5) -> Optiona
     logger.info("Connecting to Gmail to fetch OTP...")
 
     try:
-        # Fetch credentials from DB
-        with SessionLocal() as db:
-            gmail_email = get_config(db, "gmail_email", DEFAULT_GMAIL_EMAIL)
-            gmail_password = get_config(db, "gmail_app_password", DEFAULT_GMAIL_APP_PASSWORD)
+        # Fetch credentials from Turso
+        from turso_client import get_setting
+        gmail_email = get_setting("gmail_email", DEFAULT_GMAIL_EMAIL)
+        gmail_password = get_setting("gmail_app_password", DEFAULT_GMAIL_APP_PASSWORD)
 
         # Connect to Gmail IMAP server
         mail = imaplib.IMAP4_SSL("imap.gmail.com", 993)
@@ -577,13 +577,13 @@ async def refresh_authentication() -> bool:
         return True
 
     # Run Playwright in a separate thread to avoid async loop issues
-    # Fetch credentials in MAIN thread to avoid DB threading issues
-    with SessionLocal() as db:
-        casepeer_base_url = get_config(db, "casepeer_base_url", DEFAULT_CASEPEER_BASE_URL)
-        username = get_config(db, "casepeer_username", DEFAULT_CASEPEER_USERNAME)
-        password = get_config(db, "casepeer_password", DEFAULT_CASEPEER_PASSWORD)
-        otp_retry_count = int(get_config(db, "otp_retry_count", "10"))
-        otp_retry_delay = int(get_config(db, "otp_retry_delay", "5"))
+    # Fetch credentials from Turso
+    from turso_client import get_setting
+    casepeer_base_url = get_setting("casepeer_base_url", DEFAULT_CASEPEER_BASE_URL)
+    username = get_setting("casepeer_username", DEFAULT_CASEPEER_USERNAME)
+    password = get_setting("casepeer_password", DEFAULT_CASEPEER_PASSWORD)
+    otp_retry_count = int(get_setting("otp_retry_count", "10"))
+    otp_retry_delay = int(get_setting("otp_retry_delay", "5"))
 
     # Pass credentials to the thread
     access_token, refresh_token, csrf_token = await asyncio.to_thread(
