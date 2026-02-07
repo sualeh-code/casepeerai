@@ -113,6 +113,7 @@ const CaseDetails = ({ caseId, onBack }) => {
 
             <Tabs defaultValue="negotiations" className="w-full">
                 <TabsList>
+                    <TabsTrigger value="negotiations">Negotiations</TabsTrigger>
                     <TabsTrigger value="notes">Notes</TabsTrigger>
                     <TabsTrigger value="classifications">Classifications</TabsTrigger>
                     <TabsTrigger value="reminders">Reminders</TabsTrigger>

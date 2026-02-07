@@ -95,13 +95,13 @@ const CaseNotes = ({ caseId }) => {
                                 notes.map((note, idx) => (
                                     <TableRow key={note.id || idx}>
                                         <TableCell className="whitespace-nowrap font-medium text-xs">
-                                            {note.created_at || note.date || note.issued_date || note.created_at_date || "Unknown Date"}
+                                            {note.created || note.created_at || note.date || "Unknown Date"}
                                         </TableCell>
                                         <TableCell className="text-xs">
-                                            {note.created_by || note.author || note.created_by_name || note.creator_name || note.creator || "Unknown"}
+                                            {note.createdby || note.author_name || note.created_by || note.author || "Unknown"}
                                         </TableCell>
                                         <TableCell className="max-w-xl">
-                                            <div className="whitespace-pre-wrap text-sm" dangerouslySetInnerHTML={{ __html: note.note || note.text || note.body || note.content || "" }} />
+                                            <div className="whitespace-pre-wrap text-sm" dangerouslySetInnerHTML={{ __html: note.note || note.text || note.body || "" }} />
                                         </TableCell>
                                         <TableCell className="text-xs text-muted-foreground">
                                             {note.note_type || note.type || "General"}
