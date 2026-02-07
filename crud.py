@@ -86,13 +86,13 @@ def create_new_case(db, case: schemas.CaseCreate):
     case_dict = case.dict()
     
     # Generate SQL for dynamic columns
-    cols = ", ".join(case_dict.keys())
+    cols = ", ".join([f'"{k}"' for k in case_dict.keys()])
     placeholders = ", ".join(["?" for _ in case_dict])
     vals = list(case_dict.values())
     
     if existing:
         # Update
-        updates = ", ".join([f"{k} = ?" for k in case_dict.keys()])
+        updates = ", ".join([f'"{k}" = ?' for k in case_dict.keys()])
         turso.execute(f"UPDATE cases SET {updates} WHERE id = ?", vals + [case.id])
     else:
         # Insert
@@ -106,7 +106,7 @@ def get_case_metric(db, case_id: int):
 
 def create_case_metric(db, case: schemas.CaseMetricCreate):
     case_dict = case.dict()
-    cols = ", ".join(case_dict.keys())
+    cols = ", ".join([f'"{k}"' for k in case_dict.keys()])
     placeholders = ", ".join(["?" for _ in case_dict])
     vals = list(case_dict.values())
     turso.execute(f"INSERT INTO case_metrics ({cols}) VALUES ({placeholders})", vals)
@@ -116,7 +116,7 @@ def create_case_metric(db, case: schemas.CaseMetricCreate):
 # NEGOTIATION CRUD
 def create_negotiation(db, negotiation: schemas.NegotiationCreate):
     neg_dict = negotiation.dict()
-    cols = ", ".join(neg_dict.keys())
+    cols = ", ".join([f'"{k}"' for k in neg_dict.keys()])
     placeholders = ", ".join(["?" for _ in neg_dict])
     vals = list(neg_dict.values())
     turso.execute(f"INSERT INTO negotiations ({cols}) VALUES ({placeholders})", vals)
@@ -128,7 +128,7 @@ def get_negotiations_by_case(db, case_id: str):
 # CLASSIFICATION CRUD
 def create_classification(db, classification: schemas.ClassificationCreate):
     cls_dict = classification.dict()
-    cols = ", ".join(cls_dict.keys())
+    cols = ", ".join([f'"{k}"' for k in cls_dict.keys()])
     placeholders = ", ".join(["?" for _ in cls_dict])
     vals = list(cls_dict.values())
     turso.execute(f"INSERT INTO classifications ({cols}) VALUES ({placeholders})", vals)
@@ -140,7 +140,7 @@ def get_classifications_by_case(db, case_id: str):
 # REMINDER CRUD
 def create_reminder(db, reminder: schemas.ReminderCreate):
     rem_dict = reminder.dict()
-    cols = ", ".join(rem_dict.keys())
+    cols = ", ".join([f'"{k}"' for k in rem_dict.keys()])
     placeholders = ", ".join(["?" for _ in rem_dict])
     vals = list(rem_dict.values())
     turso.execute(f"INSERT INTO reminders ({cols}) VALUES ({placeholders})", vals)
