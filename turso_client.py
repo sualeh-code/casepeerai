@@ -66,7 +66,9 @@ class TursoClient:
             # Reminders
             {"sql": "CREATE TABLE IF NOT EXISTS reminders (id INTEGER PRIMARY KEY AUTOINCREMENT, case_id TEXT, reminder_number INTEGER, reminder_date TEXT, reminder_email_body TEXT)"},
             # Token Usage
-            {"sql": "CREATE TABLE IF NOT EXISTS token_usage (id INTEGER PRIMARY KEY AUTOINCREMENT, date DATETIME DEFAULT CURRENT_TIMESTAMP, tokens_used INTEGER, cost REAL, model_name TEXT)"}
+            {"sql": "CREATE TABLE IF NOT EXISTS token_usage (id INTEGER PRIMARY KEY AUTOINCREMENT, date DATETIME DEFAULT CURRENT_TIMESTAMP, tokens_used INTEGER, cost REAL, model_name TEXT)"},
+            # Case Metrics
+            {"sql": "CREATE TABLE IF NOT EXISTS case_metrics (id INTEGER PRIMARY KEY AUTOINCREMENT, case_name TEXT, status TEXT, emails_received INTEGER DEFAULT 0, emails_sent INTEGER DEFAULT 0, savings REAL DEFAULT 0, revenue REAL DEFAULT 0, start_date DATETIME, end_date DATETIME, completion_time TEXT)"}
         ]
         try:
             self.execute_many(statements)
@@ -260,41 +262,6 @@ def log_token_usage(tokens: int, cost: float, model: str):
         return True
     except Exception as e:
         logger.error(f"log_token_usage failed: {e}")
-        return False
-
-
-# App Settings helpers
-def get_setting(key: str, default: str = None) -> Optional[str]:
-    """Get a setting from app_settings table."""
-    try:
-        row = turso.fetch_one(
-            "SELECT value FROM app_settings WHERE key = ?",
-            [key]
-        )
-        return row["value"] if row else default
-    except Exception as e:
-        logger.warning(f"get_setting({key}) failed: {e}")
-        return default
-
-
-def set_setting(key: str, value: str, description: str = ""):
-    """Set or update a setting in app_settings table."""
-    try:
-        # Check if exists
-        existing = turso.fetch_one("SELECT key FROM app_settings WHERE key = ?", [key])
-        if existing:
-            turso.execute(
-                "UPDATE app_settings SET value = ?, description = ? WHERE key = ?",
-                [value, description, key]
-            )
-        else:
-            turso.execute(
-                "INSERT INTO app_settings (key, value, description) VALUES (?, ?, ?)",
-                [key, value, description]
-            )
-        return True
-    except Exception as e:
-        logger.error(f"set_setting({key}) failed: {e}")
         return False
 
 

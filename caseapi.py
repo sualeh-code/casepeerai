@@ -24,7 +24,7 @@ import requests
 from bs4 import BeautifulSoup
 from sqlalchemy.orm import Session
 import models, schemas, crud
-from database import SessionLocal, engine, get_db
+from database import engine
 
 # Create database tables
 # Tables are now created directly via turso.initialize_schema in the lifespan manager
@@ -1026,55 +1026,55 @@ async def proxy_upload_file(
 
 # Cases
 @app.post("/internal-api/cases", response_model=schemas.Case)
-def create_case(case: schemas.CaseCreate, db: Session = Depends(get_db)):
-    return crud.create_new_case(db=db, case=case)
+def create_case(case: schemas.CaseCreate):
+    return crud.create_new_case(None, case=case)
 
 @app.get("/internal-api/cases", response_model=list[schemas.Case])
-def read_cases(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+def read_cases(skip: int = 0, limit: int = 100):
     logger.info("Handling request: GET /internal-api/cases (Internal Handler)")
-    return crud.get_all_cases(db=db, skip=skip, limit=limit)
+    return crud.get_all_cases(None, skip=skip, limit=limit)
 
 @app.get("/internal-api/cases/{case_id}", response_model=schemas.Case)
-def read_case(case_id: str, db: Session = Depends(get_db)):
-    db_case = crud.get_case_by_id(db, case_id=case_id)
+def read_case(case_id: str):
+    db_case = crud.get_case_by_id(None, case_id=case_id)
     if db_case is None:
         raise HTTPException(status_code=404, detail="Case not found")
     return db_case
 
 # Negotiations
 @app.post("/internal-api/negotiations", response_model=schemas.Negotiation)
-def create_negotiation(negotiation: schemas.NegotiationCreate, db: Session = Depends(get_db)):
+def create_negotiation(negotiation: schemas.NegotiationCreate):
     # Verify case exists
-    db_case = crud.get_case_by_id(db, case_id=negotiation.case_id)
+    db_case = crud.get_case_by_id(None, case_id=negotiation.case_id)
     if not db_case:
         raise HTTPException(status_code=404, detail="Case not found")
-    return crud.create_negotiation(db=db, negotiation=negotiation)
+    return crud.create_negotiation(None, negotiation=negotiation)
 
 @app.get("/internal-api/negotiations", response_model=list[schemas.Negotiation])
-def read_negotiations(case_id: str, db: Session = Depends(get_db)):
-    return crud.get_negotiations_by_case(db=db, case_id=case_id)
+def read_negotiations(case_id: str):
+    return crud.get_negotiations_by_case(None, case_id=case_id)
 
 # Classifications
 @app.post("/internal-api/classifications", response_model=schemas.Classification)
-def create_classification(classification: schemas.ClassificationCreate, db: Session = Depends(get_db)):
+def create_classification(classification: schemas.ClassificationCreate):
     # Verify case exists
-    db_case = crud.get_case_by_id(db, case_id=classification.case_id)
+    db_case = crud.get_case_by_id(None, case_id=classification.case_id)
     if not db_case:
         raise HTTPException(status_code=404, detail="Case not found")
-    return crud.create_classification(db=db, classification=classification)
+    return crud.create_classification(None, classification=classification)
 
 @app.get("/internal-api/classifications", response_model=list[schemas.Classification])
-def read_classifications(case_id: str, db: Session = Depends(get_db)):
-    return crud.get_classifications_by_case(db=db, case_id=case_id)
+def read_classifications(case_id: str):
+    return crud.get_classifications_by_case(None, case_id=case_id)
 
 # Reminders
 @app.post("/internal-api/reminders", response_model=schemas.Reminder)
-def create_reminder(reminder: schemas.ReminderCreate, db: Session = Depends(get_db)):
+def create_reminder(reminder: schemas.ReminderCreate):
     # Verify case exists
-    db_case = crud.get_case_by_id(db, case_id=reminder.case_id)
+    db_case = crud.get_case_by_id(None, case_id=reminder.case_id)
     if not db_case:
         raise HTTPException(status_code=404, detail="Case not found")
-    return crud.create_reminder(db=db, reminder=reminder)
+    return crud.create_reminder(None, reminder=reminder)
 
 @app.get("/internal-api/cases/{case_id}/reminders", response_model=list[schemas.Reminder])
 def read_reminders(case_id: str):
