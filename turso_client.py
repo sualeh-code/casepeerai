@@ -50,6 +50,32 @@ class TursoClient:
             logger.error(f"Turso execute error: {e}")
             raise
     
+    def initialize_schema(self):
+        """Create all necessary tables if they don't exist."""
+        statements = [
+            # App Settings
+            {"sql": "CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT, description TEXT)"},
+            # App Sessions
+            {"sql": "CREATE TABLE IF NOT EXISTS app_sessions (name TEXT PRIMARY KEY, session_data TEXT, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP)"},
+            # Cases
+            {"sql": "CREATE TABLE IF NOT EXISTS cases (id TEXT PRIMARY KEY, patient_name TEXT, status TEXT, fees_taken REAL DEFAULT 0, savings REAL DEFAULT 0, revenue REAL DEFAULT 0, emails_received INTEGER DEFAULT 0, emails_sent INTEGER DEFAULT 0)"},
+            # Negotiations
+            {"sql": "CREATE TABLE IF NOT EXISTS negotiations (id INTEGER PRIMARY KEY AUTOINCREMENT, case_id TEXT, negotiation_type TEXT, \"to\" TEXT, email_body TEXT, date TEXT, actual_bill REAL, offered_bill REAL, sent_by_us INTEGER DEFAULT 1, result TEXT)"},
+            # Classifications
+            {"sql": "CREATE TABLE IF NOT EXISTS classifications (id INTEGER PRIMARY KEY AUTOINCREMENT, case_id TEXT, ocr_performed INTEGER DEFAULT 0, number_of_documents INTEGER, confidence REAL)"},
+            # Reminders
+            {"sql": "CREATE TABLE IF NOT EXISTS reminders (id INTEGER PRIMARY KEY AUTOINCREMENT, case_id TEXT, reminder_number INTEGER, reminder_date TEXT, reminder_email_body TEXT)"},
+            # Token Usage
+            {"sql": "CREATE TABLE IF NOT EXISTS token_usage (id INTEGER PRIMARY KEY AUTOINCREMENT, date DATETIME DEFAULT CURRENT_TIMESTAMP, tokens_used INTEGER, cost REAL, model_name TEXT)"}
+        ]
+        try:
+            self.execute_many(statements)
+            logger.info("[OK] Turso schema initialized")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to initialize Turso schema: {e}")
+            return False
+
     def execute_many(self, statements: List[Dict]) -> Dict[str, Any]:
         """Execute multiple SQL statements in a batch."""
         requests_list = []
@@ -215,13 +241,61 @@ def set_setting(key: str, value: str, description: str = ""):
         return False
 
 
-def get_all_settings() -> List[Dict]:
-    """Get all settings."""
+# Token Usage helpers
+def get_token_usage(limit: int = 100) -> List[Dict]:
+    """Get recent token usage."""
     try:
-        return turso.fetch_all("SELECT key, value, description FROM app_settings")
+        return turso.fetch_all("SELECT * FROM token_usage ORDER BY date DESC LIMIT ?", [limit])
     except Exception as e:
-        logger.error(f"get_all_settings failed: {e}")
+        logger.error(f"get_token_usage failed: {e}")
         return []
+
+def log_token_usage(tokens: int, cost: float, model: str):
+    """Log AI token usage."""
+    try:
+        turso.execute(
+            "INSERT INTO token_usage (tokens_used, cost, model_name) VALUES (?, ?, ?)",
+            [tokens, cost, model]
+        )
+        return True
+    except Exception as e:
+        logger.error(f"log_token_usage failed: {e}")
+        return False
+
+
+# App Settings helpers
+def get_setting(key: str, default: str = None) -> Optional[str]:
+    """Get a setting from app_settings table."""
+    try:
+        row = turso.fetch_one(
+            "SELECT value FROM app_settings WHERE key = ?",
+            [key]
+        )
+        return row["value"] if row else default
+    except Exception as e:
+        logger.warning(f"get_setting({key}) failed: {e}")
+        return default
+
+
+def set_setting(key: str, value: str, description: str = ""):
+    """Set or update a setting in app_settings table."""
+    try:
+        # Check if exists
+        existing = turso.fetch_one("SELECT key FROM app_settings WHERE key = ?", [key])
+        if existing:
+            turso.execute(
+                "UPDATE app_settings SET value = ?, description = ? WHERE key = ?",
+                [value, description, key]
+            )
+        else:
+            turso.execute(
+                "INSERT INTO app_settings (key, value, description) VALUES (?, ?, ?)",
+                [key, value, description]
+            )
+        return True
+    except Exception as e:
+        logger.error(f"set_setting({key}) failed: {e}")
+        return False
 
 
 # Session helpers
@@ -236,20 +310,19 @@ def get_session(name: str = "default") -> Optional[Dict]:
         logger.warning(f"get_session failed: {e}")
         return None
 
-
-def save_session(name: str, access_token: str, refresh_token: str = None, csrf_token: str = None):
-    """Save or update session."""
+def save_session(name: str, session_data: str):
+    """Save or update session data (JSON string)."""
     try:
         existing = turso.fetch_one("SELECT name FROM app_sessions WHERE name = ?", [name])
         if existing:
             turso.execute(
-                "UPDATE app_sessions SET access_token = ?, refresh_token = ?, csrf_token = ?, updated_at = datetime('now') WHERE name = ?",
-                [access_token, refresh_token, csrf_token, name]
+                "UPDATE app_sessions SET session_data = ?, updated_at = datetime('now') WHERE name = ?",
+                [session_data, name]
             )
         else:
             turso.execute(
-                "INSERT INTO app_sessions (name, access_token, refresh_token, csrf_token) VALUES (?, ?, ?, ?)",
-                [name, access_token, refresh_token, csrf_token]
+                "INSERT INTO app_sessions (name, session_data) VALUES (?, ?)",
+                [name, session_data]
             )
         return True
     except Exception as e:

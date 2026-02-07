@@ -109,30 +109,10 @@ const CaseDetails = ({ caseId, onBack }) => {
                         <div className="text-2xl font-bold text-green-600">${caseData.savings?.toFixed(2)}</div>
                     </CardContent>
                 </Card>
-                <Card className="bg-muted/50 border-dashed">
-                    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                        <CardTitle className="text-sm font-medium">Live Data</CardTitle>
-                        <Globe className="h-4 w-4 text-muted-foreground" />
-                    </CardHeader>
-                    <CardContent>
-                        <Button
-                            variant="default"
-                            size="sm"
-                            className="w-full mt-1"
-                            onClick={fetchLiveData}
-                            disabled={loadingLive}
-                        >
-                            {loadingLive ? <RefreshCw className="h-4 w-4 animate-spin mr-2" /> : <RefreshCw className="h-4 w-4 mr-2" />}
-                            {loadingLive ? "Syncing..." : "Sync Live Data"}
-                        </Button>
-                    </CardContent>
-                </Card>
             </div>
 
             <Tabs defaultValue="negotiations" className="w-full">
                 <TabsList>
-                    <TabsTrigger value="negotiations">Stored Negotiations</TabsTrigger>
-                    <TabsTrigger value="live">Live Data (Direct)</TabsTrigger>
                     <TabsTrigger value="notes">Notes</TabsTrigger>
                     <TabsTrigger value="classifications">Classifications</TabsTrigger>
                     <TabsTrigger value="reminders">Reminders</TabsTrigger>
@@ -208,59 +188,6 @@ const CaseDetails = ({ caseId, onBack }) => {
                     </Card>
                 </TabsContent>
 
-                <TabsContent value="live">
-                    <Card>
-                        <CardHeader>
-                            <CardTitle className="flex items-center justify-between">
-                                <div className="flex items-center gap-2">
-                                    <Globe className="h-5 w-5" />
-                                    Live Negotiations (Direct from CasePeer)
-                                </div>
-                                <Button variant="outline" size="sm" onClick={fetchLiveData} disabled={loadingLive}>
-                                    {loadingLive ? <RefreshCw className="h-3 w-3 animate-spin mr-2" /> : <RefreshCw className="h-3 w-3 mr-2" />}
-                                    Refresh Live Data
-                                </Button>
-                            </CardTitle>
-                            <CardDescription>
-                                Unlike stored data, this data is fetched directly from CasePeer in real-time. It may take a few seconds to load.
-                            </CardDescription>
-                        </CardHeader>
-                        <CardContent>
-                            <Table>
-                                <TableHeader>
-                                    <TableRow>
-                                        <TableHead>Provider</TableHead>
-                                        <TableHead>Actual Bill</TableHead>
-                                        <TableHead>Offered Bill</TableHead>
-                                        <TableHead>Status</TableHead>
-                                        <TableHead>Actions</TableHead>
-                                    </TableRow>
-                                </TableHeader>
-                                <TableBody>
-                                    {liveNegotiations.length === 0 ? (
-                                        <TableRow>
-                                            <TableCell colSpan={5} className="text-center py-8 text-muted-foreground">
-                                                {loadingLive ? "Fetching live data..." : "No live data loaded. Click 'Sync Live Data' to fetch."}
-                                            </TableCell>
-                                        </TableRow>
-                                    ) : (
-                                        liveNegotiations.map((n, idx) => (
-                                            <TableRow key={idx}>
-                                                <TableCell className="font-medium">{n.provider}</TableCell>
-                                                <TableCell>{n.actual_bill}</TableCell>
-                                                <TableCell>{n.offered_bill}</TableCell>
-                                                <TableCell>{n.status}</TableCell>
-                                                <TableCell>
-                                                    <Button variant="ghost" size="sm" disabled>Details</Button>
-                                                </TableCell>
-                                            </TableRow>
-                                        ))
-                                    )}
-                                </TableBody>
-                            </Table>
-                        </CardContent>
-                    </Card>
-                </TabsContent>
 
                 <TabsContent value="notes">
                     <CaseNotes caseId={caseId} />

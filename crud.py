@@ -149,50 +149,10 @@ def create_reminder(db, reminder: schemas.ReminderCreate):
 def get_reminders_by_case(db, case_id: str):
     return turso.fetch_all("SELECT * FROM reminders WHERE case_id = ?", [case_id])
 
-# TOKEN USAGE CRUD
-def create_token_usage(db, usage: schemas.TokenUsageCreate):
-    usage_dict = usage.dict()
-    cols = ", ".join(usage_dict.keys())
-    placeholders = ", ".join(["?" for _ in usage_dict])
-    vals = list(usage_dict.values())
-    turso.execute(f"INSERT INTO token_usage ({cols}) VALUES ({placeholders})", vals)
-    return turso.fetch_one("SELECT * FROM token_usage ORDER BY id DESC LIMIT 1")
-
 # SESSION CRUD
-def save_session(db, session_data: str):
-    existing = turso.fetch_one("SELECT * FROM app_sessions WHERE name = 'default'")
-    if existing:
-        turso.execute(
-            "UPDATE app_sessions SET session_data = ?, updated_at = datetime('now') WHERE name = 'default'",
-            [session_data]
-        )
-    else:
-        turso.execute(
-            "INSERT INTO app_sessions (name, session_data) VALUES ('default', ?)",
-            [session_data]
-        )
-    return turso.fetch_one("SELECT * FROM app_sessions WHERE name = 'default'")
-
 def get_latest_session(db):
+    """Old compatibility shim, use turso_client directly for sessions now."""
     return turso.fetch_one("SELECT * FROM app_sessions ORDER BY updated_at DESC LIMIT 1")
 
-# DOCUMENT CRUD
-def create_document(db, document: schemas.DocumentCreate):
-    doc_dict = document.dict()
-    # Simple dynamic SQL generation
-    cols = ", ".join(doc_dict.keys())
-    placeholders = ", ".join(["?" for _ in doc_dict])
-    vals = list(doc_dict.values())
-    turso.execute(f"INSERT INTO documents ({cols}) VALUES ({placeholders})", vals)
-    # Return last inserted
-    return turso.fetch_one("SELECT * FROM documents WHERE case_id = ? ORDER BY id DESC LIMIT 1", [document.case_id])
-
-def get_documents(db, skip: int = 0, limit: int = 100):
-    return turso.fetch_all("SELECT * FROM documents LIMIT ? OFFSET ?", [limit, skip])
-
-def get_documents_by_case(db, case_id: str):
-    return turso.fetch_all("SELECT * FROM documents WHERE case_id = ?", [case_id])
-
-def get_document_by_filename(db, case_id: str, file_name: str):
-    return turso.fetch_one("SELECT * FROM documents WHERE case_id = ? AND file_name = ?", [case_id, file_name])
+# Legacy/Unneeded functions removed: Document CRUD, TokenUsage CRUD
 

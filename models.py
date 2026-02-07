@@ -81,15 +81,6 @@ class Reminder(Base):
 
     case = relationship("Case", back_populates="reminders")
 
-class TokenUsage(Base):
-    __tablename__ = "token_usage"
-
-    id = Column(Integer, primary_key=True, index=True)
-    date = Column(DateTime(timezone=True), server_default=func.now())
-    tokens_used = Column(Integer)
-    cost = Column(Float)
-    model_name = Column(String)
-
 class AppSession(Base):
     __tablename__ = "app_sessions"
 
@@ -97,17 +88,3 @@ class AppSession(Base):
     name = Column(String, index=True, default="default")
     session_data = Column(String)  # JSON string of cookies and tokens
     updated_at = Column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())
-
-class Document(Base):
-    __tablename__ = "documents"
-
-    id = Column(Integer, primary_key=True, index=True)
-    case_id = Column(String, ForeignKey("cases.id"))
-    file_name = Column(String)
-    category_id = Column(String)
-    extracted_text = Column(String)
-    confidence = Column(Float)
-    is_reviewed = Column(Boolean, default=False)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-
-    case = relationship("Case", back_populates="documents")

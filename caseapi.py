@@ -27,8 +27,7 @@ import models, schemas, crud
 from database import SessionLocal, engine, get_db
 
 # Create database tables
-# Create database tables (Done in lifespan now for better logging)
-# models.Base.metadata.create_all(bind=engine)
+# Tables are now created directly via turso.initialize_schema in the lifespan manager
 
 # Configure logging
 logging.basicConfig(
@@ -131,32 +130,13 @@ async def lifespan(app: FastAPI):
     logger.info("Starting CasePeer API Wrapper - Initializing Database...")
     
     try:
-        # Optional: Check Turso Connection
-        try:
-            # turso.connect() # Removed: Method does not exist
-            # logger.info("[OK] Turso HTTP connection established")
-            pass
-        except Exception as e:
-            logger.error(f"Turso Connection Warning: {e}")
-            # We continue but logs will show failures
+        # Initialize Turso Schema directly
+        turso.initialize_schema()
         
-        # Check and ensure tables/seed data
-        tables = turso.get_tables()
-        logger.info(f"Database tables checked: {tables}")
-        
-        if "app_settings" not in tables:
-            logger.warning("app_settings table missing, performing emergency schema creation...")
-            
-        # Always run create_all to ensure new tables (like documents) are created
-        # It skips existing tables safely
-        models.Base.metadata.create_all(bind=engine)
-        tables = turso.get_tables()
-        logger.info(f"Tables after creation check: {tables}")
-        
-        # Synchronous seed with TursoClient-backed crud
-        with SessionLocal() as db:
-            seed_settings(db)
-            logger.info("[OK] Database and settings initialized")
+        # Seed settings via Turso
+        from turso_client import set_setting
+        set_setting("casepeer_base_url", DEFAULT_CASEPEER_BASE_URL, "CasePeer base URL")
+        logger.info("[OK] Database and settings initialized")
             
     except Exception as e:
         logger.error(f"[ERROR] Critical Database Initialization Error: {e}", exc_info=True)
@@ -564,8 +544,9 @@ def playwright_login(username: str, password: str, base_url: str, otp_retry_coun
                         } for c in cookies
                     ]
                 }
-                with SessionLocal() as db:
-                    crud.save_session(db, json.dumps(session_data))
+                # Save session to Turso
+                from turso_client import save_session
+                save_session("default", json.dumps(session_data))
                 logger.info("Session state saved to database")
 
                 return access_token, refresh_token, csrf_token
@@ -643,71 +624,62 @@ async def refresh_authentication() -> bool:
             session.headers['Authorization'] = f'Bearer {ACCESS_TOKEN}'
 
         logger.info("Authentication refreshed successfully")
-        return True
-    else:
-        logger.error("Failed to refresh authentication")
-        return False
-
+    # Preserve session to Turso
+    from turso_client import save_session
+    session_data = {
+        "access_token": ACCESS_TOKEN,
+        "refresh_token": REFRESH_TOKEN,
+        "csrf_token": CSRF_TOKEN,
+        "cookies": session.cookies.get_dict(),
+        "updated_at": time.time()
+    }
+    save_session("default", json.dumps(session_data))
+    
+    return True
 
 async def try_restore_session() -> bool:
-    """
-    Attempt to restore authentication session from the database.
-    
-    Returns:
-        bool: True if session was restored, False otherwise
-    """
-    global ACCESS_TOKEN, REFRESH_TOKEN, CSRF_TOKEN
+    """Attempt to restore authentication session from the database."""
+    from turso_client import get_session
     
     logger.info("Attempting to restore session from database...")
-    
+    db_session = get_session("default")
+    if not db_session or not db_session.get("session_data"):
+        return False
+        
     try:
-        with SessionLocal() as db:
-            db_session = crud.get_latest_session(db)
-            if not db_session:
-                logger.info("No saved session found in database")
-                return False
+        data = json.loads(db_session["session_data"])
+        
+        # Check if session is too old (e.g., > 24h)
+        if time.time() - data.get("updated_at", 0) > 86400:
+             logger.info("Database session expired (>24h)")
+             return False
+
+        global ACCESS_TOKEN, REFRESH_TOKEN, CSRF_TOKEN
+        ACCESS_TOKEN = data.get("access_token")
+        REFRESH_TOKEN = data.get("refresh_token")
+        CSRF_TOKEN = data.get("csrf_token")
+        
+        # Restore cookies
+        cookies = data.get("cookies", {})
+        for name, value in cookies.items():
+            session.cookies.set(name, value)
             
-            session_data = json.loads(db_session["session_data"])
-            
-            # Check if session is too old (e.g., > 30 days)
-            # For now, we'll try to use it and let it fail naturally if expired
-            
-            ACCESS_TOKEN = session_data.get("access_token")
-            REFRESH_TOKEN = session_data.get("refresh_token")
-            CSRF_TOKEN = session_data.get("csrf_token")
-            stored_cookies = session_data.get("cookies", [])
-            
-            # Restore cookies to requests session
-            for cookie in stored_cookies:
-                session.cookies.set(
-                    cookie['name'],
-                    cookie['value'],
-                    domain=cookie.get('domain', ''),
-                    path=cookie.get('path', '/')
-                )
-            
-            # Fetch base URL from DB for headers
-            casepeer_base_url = get_config(db, "casepeer_base_url", DEFAULT_CASEPEER_BASE_URL)
-            
-            # Update session headers
-            session.headers.update({
-                'Accept': 'application/json, text/plain, */*',
-                'Accept-Language': 'en-GB,en-US;q=0.9,en;q=0.8',
-                'Referer': f'{casepeer_base_url}/',
-                'X-CSRFToken': CSRF_TOKEN,
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36',
-            })
-            
-            if ACCESS_TOKEN:
-                session.headers['Authorization'] = f'Bearer {ACCESS_TOKEN}'
-                
-            logger.info(f"[OK] Session successfully restored from database (Updated: {db_session['updated_at']})")
+        # Verify
+        if "sessionid" in session.cookies.get_dict():
+            logger.info(f"[OK] Session successfully restored from database (Updated: {db_session.get('updated_at')})")
             return True
             
+        logger.warning("Session data found but sessionid cookie is missing")
+        return False
     except Exception as e:
         logger.error(f"Failed to restore session: {e}")
         return False
 
+# Token Usage
+@app.get("/internal-api/token_usage")
+def read_token_usage(limit: int = 100):
+    from turso_client import get_token_usage
+    return get_token_usage(limit=limit)
 
 # ============================================================================
 # API Client Module
@@ -730,9 +702,9 @@ async def make_api_request(endpoint: str, method: str = "GET", data: Any = None,
     Raises:
         HTTPException: On API errors
     """
-    # Fetch base URL from DB
-    with SessionLocal() as db:
-        casepeer_base_url = get_config(db, "casepeer_base_url", DEFAULT_CASEPEER_BASE_URL)
+    # Fetch base URL from Turso
+    from turso_client import get_setting
+    casepeer_base_url = get_setting("casepeer_base_url", DEFAULT_CASEPEER_BASE_URL)
         
     url = f"{casepeer_base_url}{endpoint}"
     logger.info(f"Making {method} request to {url}")
@@ -1095,93 +1067,6 @@ def create_classification(classification: schemas.ClassificationCreate, db: Sess
 def read_classifications(case_id: str, db: Session = Depends(get_db)):
     return crud.get_classifications_by_case(db=db, case_id=case_id)
 
-# Documents (New)
-@app.post("/internal-api/documents", response_model=schemas.Document)
-def create_document(document: schemas.DocumentCreate, db: Session = Depends(get_db)):
-    db_case = crud.get_case_by_id(db, case_id=document.case_id)
-    if not db_case:
-        raise HTTPException(status_code=404, detail="Case not found")
-    return crud.create_document(db=db, document=document)
-
-@app.get("/internal-api/documents", response_model=list[schemas.Document])
-def read_documents(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    return crud.get_documents(db=db, skip=skip, limit=limit)
-
-@app.get("/internal-api/cases/{case_id}/documents", response_model=list[schemas.Document])
-def read_case_documents(case_id: str, db: Session = Depends(get_db)):
-    return crud.get_documents_by_case(db, case_id)
-
-@app.post("/internal-api/cases/{case_id}/documents/sync")
-async def sync_case_documents(case_id: str, db: Session = Depends(get_db)):
-    """
-    Fetch documents from CasePeer API and sync to local DB.
-    Useful for populating the Smart Document Feed with real data.
-    """
-    logger.info(f"Syncing documents for case {case_id}")
-    
-    # API Endpoint from n8n workflow
-    endpoint = f"/api/v1/case/case-documents/{case_id}/"
-    
-    synced_count = 0
-    page = 1
-    max_pages = 5 # Safety limit
-    
-    try:
-        while page <= max_pages:
-            url = f"{endpoint}?page={page}"
-            response = await make_api_request(url, method="GET")
-            
-            if response.status_code != 200:
-                if response.status_code in (401, 403):
-                     if await refresh_authentication():
-                          response = await make_api_request(url, method="GET")
-                
-                if response.status_code != 200:
-                    logger.error(f"Failed to fetch documents page {page}: {response.text}")
-                    break
-            
-            data = response.json()
-            results = data.get("results", [])
-            
-            if not results:
-                break
-                
-            for item in results:
-                # Map CasePeer document to our schema
-                # CasePeer result likely has: id, file_name, file_url, category, etc.
-                # key 'document_name' or 'file_name'? Checking n8n... n8n uses 'file_name' in some nodes, 
-                # but 'results' usually maps directly. Let's assume 'file_name' or 'name'.
-                # fallback to 'unknown'
-                
-                fname = item.get("document_name") or item.get("file_name") or item.get("name") or "Unknown File"
-                cat_id = str(item.get("category", "Unclassified"))
-                
-                # Check if exists
-                existing = crud.get_document_by_filename(db, case_id, fname)
-                if not existing:
-                    new_doc = schemas.DocumentCreate(
-                        case_id=case_id,
-                        file_name=fname,
-                        category_id=cat_id,
-                        extracted_text="Synced from CasePeer",
-                        confidence=0.0, # Needs review
-                        is_reviewed=False
-                    )
-                    crud.create_document(db, new_doc)
-                    synced_count += 1
-            
-            if not data.get("next"):
-                break
-                
-            page += 1
-            
-        return {"status": "success", "synced": synced_count}
-
-    except Exception as e:
-        logger.error(f"Sync failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 # Reminders
 @app.post("/internal-api/reminders", response_model=schemas.Reminder)
 def create_reminder(reminder: schemas.ReminderCreate, db: Session = Depends(get_db)):
@@ -1191,27 +1076,21 @@ def create_reminder(reminder: schemas.ReminderCreate, db: Session = Depends(get_
         raise HTTPException(status_code=404, detail="Case not found")
     return crud.create_reminder(db=db, reminder=reminder)
 
-@app.get("/internal-api/reminders", response_model=list[schemas.Reminder])
-def read_reminders(case_id: str, db: Session = Depends(get_db)):
-    return crud.get_reminders_by_case(db=db, case_id=case_id)
-
-# Token Usage
-@app.post("/internal-api/token_usage", response_model=schemas.TokenUsage)
-def create_token_usage(usage: schemas.TokenUsageCreate, db: Session = Depends(get_db)):
-    return crud.create_token_usage(db=db, usage=usage)
-
-@app.get("/internal-api/token_usage", response_model=list[schemas.TokenUsage])
-def read_token_usage(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    return crud.get_token_usage(db=db, skip=skip, limit=limit)
+@app.get("/internal-api/cases/{case_id}/reminders", response_model=list[schemas.Reminder])
+def read_reminders(case_id: str):
+    from crud import get_reminders_by_case
+    return get_reminders_by_case(None, case_id)
 
 
-@app.get("/internal-api/settings/", response_model=list[schemas.AppSetting])
-def read_settings(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    return crud.get_all_settings(db, skip=skip, limit=limit)
+@app.get("/internal-api/settings", response_model=list[schemas.AppSetting])
+def read_settings(skip: int = 0, limit: int = 100):
+    from crud import get_all_settings
+    return get_all_settings(None, skip, limit)
 
-@app.post("/internal-api/settings/", response_model=schemas.AppSetting)
-def create_or_update_setting(setting: schemas.AppSettingCreate, db: Session = Depends(get_db)):
-    return crud.set_setting(db=db, setting=setting)
+@app.post("/internal-api/settings", response_model=schemas.AppSetting)
+def create_or_update_setting(setting: schemas.AppSettingCreate):
+    from crud import set_setting
+    return set_setting(None, setting)
 
 @app.get("/internal-api/logs")
 def get_logs(limit: int = 100):
@@ -1448,9 +1327,10 @@ async def update_provider_email(request: Request):
 # ============================================================================
 
 @app.get("/internal-api/integrations/openai/usage")
-def get_openai_usage(db: Session = Depends(get_db)):
+def get_openai_usage():
     """Fetch usage data from OpenAI API."""
-    api_key = get_config(db, "openai_api_key")
+    from turso_client import get_setting
+    api_key = get_setting("openai_api_key")
     if not api_key:
          raise HTTPException(status_code=400, detail="OpenAI API Key not set in settings")
     
@@ -1498,10 +1378,11 @@ def get_openai_usage(db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/internal-api/integrations/n8n/executions")
-def get_n8n_executions(db: Session = Depends(get_db)):
+def get_n8n_executions():
     """Fetch execution stats from n8n."""
-    api_key = get_config(db, "n8n_api_key")
-    base_url = get_config(db, "n8n_webhook_url", "").strip()
+    from turso_client import get_setting
+    api_key = get_setting("n8n_api_key")
+    base_url = get_setting("n8n_webhook_url", "").strip()
     
     if not api_key:
          raise HTTPException(status_code=400, detail="n8n API Key not set in settings")

@@ -6,24 +6,26 @@ import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from 'recha
 const N8nHealth = ({ executions = [], loading }) => {
     if (loading) return <div>Loading automation stats...</div>;
 
-    const successful = executions.filter(e => e.finished && !e.stoppedAt).length; // Assuming 'stoppedAt' implies error or manual stop if check failed, but usually we check 'data.resultData.error'
-    // Simplified logic: usually n8n execution object has 'finished' and 'mode'. 
-    // We'll trust the parent to pass processed data or use simple checks.
-    // Real n8n API response for executions usually has `finished`, `mode`, `startedAt`, `stoppedAt`.
-    // If it failed, it might not have specific error flag at top level depending on version.
-    // Let's assume we get a standard list.
+    // The original logic for filtering successful/error executions from an array
+    // is commented out as the new logic will handle both array and object structures.
+    // const successful = executions.filter(e => e.finished && !e.stoppedAt).length;
+    // const errors = executions.filter(e => !e.finished || e.data?.resultData?.error).length;
 
-    const errors = executions.filter(e => !e.finished || e.data?.resultData?.error).length;
-    // Adjusting logic: logic depends on actual n8n response structure. 
-    // For now we'll do: Success = finished=true, Error = everything else or explicit error.
+    let successCount = 0;
+    let errorCount = 0;
+    let total = 0;
 
-    // Let's rely on a simpler prop structure passed from parent for safety, 
-    // OR just visualizes what we have.
-    // We will assume executions have { id, startedAt, finished, mode, retryOf }
-
-    const total = executions.length;
-    const successCount = executions.filter(e => e.finished).length;
-    const errorCount = total - successCount;
+    if (executions && !Array.isArray(executions)) {
+        // Handle summary object
+        successCount = executions.success || 0;
+        errorCount = executions.error || 0;
+        total = executions.total_fetched || (successCount + errorCount);
+    } else {
+        // Handle array
+        total = executions.length;
+        successCount = executions.filter(e => e.finished).length;
+        errorCount = total - successCount;
+    }
 
     const data = [
         { name: 'Success', value: successCount, color: '#22c55e' }, // green-500

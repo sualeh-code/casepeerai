@@ -4,7 +4,6 @@ import { DollarSign, Users, Briefcase, Activity, TrendingUp, ArrowUpRight, Arrow
 import { Button } from "@/components/ui/button";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts';
 import N8nHealth from './N8nHealth';
-import DocumentFeed from './DocumentFeed';
 
 const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8'];
 
@@ -94,9 +93,7 @@ const StatsOverview = () => {
 
                 if (n8nRes.ok) {
                     const n8nData = await n8nRes.json();
-                    if (Array.isArray(n8nData)) {
-                        setN8nExecutions(n8nData);
-                    }
+                    setN8nExecutions(n8nData);
                 }
 
             } catch (error) {
@@ -190,14 +187,9 @@ const StatsOverview = () => {
                 </Card>
             </div>
 
-            {/* Middle Row: N8n Health & Document Feed */}
-            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+            {/* Middle Row: N8n Health */}
+            <div className="grid gap-4 md:grid-cols-1">
                 <N8nHealth executions={n8nExecutions} loading={loading} />
-                <DocumentFeed latestCaseId={stats.latestCaseId} />
-                {/* Note: using chart data name is a hack, better to use stats.latestCaseId if available. 
-                    Let's check setStats... it doesn't store the raw list. 
-                    I'll need to store a raw case ID in stats or use a separate state.
-                */}
             </div>
 
             {/* Bottom Row: Charts & Logs */}
