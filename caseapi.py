@@ -1607,7 +1607,8 @@ async def proxy_request(request: Request, path: str):
     # Check if the path starts with any specific reserved prefix
     is_reserved = False
     for reserved in reserved_prefixes:
-        if path.startswith(reserved):
+        # Check for exact match or path starting with prefix followed by /
+        if path == reserved or path.startswith(f"{reserved}/"):
             is_reserved = True
             break
     
