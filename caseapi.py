@@ -610,6 +610,7 @@ async def refresh_authentication() -> bool:
             'Accept-Language': 'en-GB,en-US;q=0.9,en;q=0.8',
             'Referer': f'{casepeer_base_url}/',
             'X-CSRFToken': CSRF_TOKEN,
+            'X-Requested-With': 'XMLHttpRequest',
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36',
             'sec-fetch-dest': 'empty',
             'sec-fetch-mode': 'cors',
