@@ -719,10 +719,10 @@ async def make_api_request(endpoint: str, method: str = "GET", data: Any = None,
         logger.warning(f"⚠ sessionid cookie MISSING - form submissions may fail")
 
     # Ensure we have authentication
-    if ACCESS_TOKEN:
-        session.headers.update({
-            'Authorization': f'Bearer {ACCESS_TOKEN}',
-        })
+    # if ACCESS_TOKEN:
+    #     session.headers.update({
+    #         'Authorization': f'Bearer {ACCESS_TOKEN}',
+    #     })
 
     try:
         # Prepare request arguments
