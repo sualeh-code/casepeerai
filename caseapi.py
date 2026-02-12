@@ -873,10 +873,11 @@ def parse_form_fields(html_content: str) -> Dict[str, Any]:
 # ============================================================================
 
 
-@app.post("/internal-api/authenticate")
-async def manual_authenticate():
+@app.api_route("/internal-api/authenticate", methods=["GET", "POST"])
+async def manual_authenticate(request: Request):
     """
     Manual authentication endpoint to force re-authentication.
+    Supports both GET (browser visit) and POST (API call).
 
     Use this endpoint if:
     - Startup authentication failed
