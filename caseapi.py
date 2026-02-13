@@ -530,7 +530,8 @@ def playwright_login(username: str, password: str, base_url: str, otp_retry_coun
             if csrf_token:
                 logger.info("Successfully extracted CSRF token and cookies")
                 
-                # Save session to DB
+                # Save session to Turso
+                from turso_client import save_session
                 session_data = {
                     "access_token": access_token,
                     "refresh_token": refresh_token,
@@ -542,10 +543,9 @@ def playwright_login(username: str, password: str, base_url: str, otp_retry_coun
                             "domain": c.get('domain', ''),
                             "path": c.get('path', '/')
                         } for c in cookies
-                    ]
+                    ],
+                    "updated_at": time.time()
                 }
-                # Save session to Turso
-                from turso_client import save_session
                 save_session("default", json.dumps(session_data))
                 logger.info("Session state saved to database")
 
@@ -558,6 +558,34 @@ def playwright_login(username: str, password: str, base_url: str, otp_retry_coun
         logger.error(f"Playwright login failed: {str(e)}", exc_info=True)
         return None, None, None
 
+
+def apply_session_headers(casepeer_base_url: str):
+    """Update session headers with all required headers."""
+    global ACCESS_TOKEN, REFRESH_TOKEN, CSRF_TOKEN
+    
+    headers = {
+        'Accept': 'application/json, text/plain, */*',
+        'Accept-Encoding': 'gzip, deflate, br, zstd',
+        'Accept-Language': 'en-GB,en-US;q=0.9,en;q=0.8',
+        'Referer': f'{casepeer_base_url}/',
+        'X-Requested-With': 'XMLHttpRequest',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36',
+        'sec-fetch-dest': 'empty',
+        'sec-fetch-mode': 'cors',
+        'sec-fetch-site': 'same-origin',
+        'sec-ch-ua': '"Google Chrome";v="141", "Not?A_Brand";v="8", "Chromium";v="141"',
+        'sec-ch-ua-mobile': '?0',
+        'sec-ch-ua-platform': '"Windows"'
+    }
+
+    if CSRF_TOKEN:
+        headers['X-CSRFToken'] = CSRF_TOKEN
+
+    if ACCESS_TOKEN:
+        headers['Authorization'] = f'Bearer {ACCESS_TOKEN}'
+
+    session.headers.update(headers)
+    logger.info(f"Applied session headers. Authorization: {'YES' if ACCESS_TOKEN else 'NO'}, CSRF: {'YES' if CSRF_TOKEN else 'NO'}")
 
 async def refresh_authentication() -> bool:
     """
@@ -595,48 +623,20 @@ async def refresh_authentication() -> bool:
         otp_retry_delay
     )
 
-    # Re-fetch base URL if needed (though we have it) or just use the local var
-    # casepeer_base_url is already fetched above
-
     if csrf_token:
         ACCESS_TOKEN = access_token
         REFRESH_TOKEN = refresh_token
         CSRF_TOKEN = csrf_token
 
-        # Update session headers with all required headers
-        session.headers.update({
-            'Accept': 'application/json, text/plain, */*',
-            'Accept-Encoding': 'gzip, deflate, br, zstd',
-            'Accept-Language': 'en-GB,en-US;q=0.9,en;q=0.8',
-            'Referer': f'{casepeer_base_url}/',
-            'X-CSRFToken': CSRF_TOKEN,
-            'X-Requested-With': 'XMLHttpRequest',
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36',
-            'sec-fetch-dest': 'empty',
-            'sec-fetch-mode': 'cors',
-            'sec-fetch-site': 'same-origin',
-            'sec-ch-ua': '"Google Chrome";v="141", "Not?A_Brand";v="8", "Chromium";v="141"',
-            'sec-ch-ua-mobile': '?0',
-            'sec-ch-ua-platform': '"Windows"'
-        })
-
-        # Add Authorization header if access token exists
-        if ACCESS_TOKEN:
-            session.headers['Authorization'] = f'Bearer {ACCESS_TOKEN}'
+        # Update session headers
+        apply_session_headers(casepeer_base_url)
 
         logger.info("Authentication refreshed successfully")
-    # Preserve session to Turso
-    from turso_client import save_session
-    session_data = {
-        "access_token": ACCESS_TOKEN,
-        "refresh_token": REFRESH_TOKEN,
-        "csrf_token": CSRF_TOKEN,
-        "cookies": session.cookies.get_dict(),
-        "updated_at": time.time()
-    }
-    save_session("default", json.dumps(session_data))
+        
+        # Session is already saved to DB inside playwright_login
+        return True
     
-    return True
+    return False
 
 async def try_restore_session() -> bool:
     """Attempt to restore authentication session from the database."""
@@ -660,17 +660,33 @@ async def try_restore_session() -> bool:
         REFRESH_TOKEN = data.get("refresh_token")
         CSRF_TOKEN = data.get("csrf_token")
         
-        # Restore cookies
-        cookies = data.get("cookies", {})
-        for name, value in cookies.items():
-            session.cookies.set(name, value)
+        # Restore cookies with domain and path info
+        cookies_data = data.get("cookies", [])
+        if isinstance(cookies_data, list):
+            # Detailed cookie format
+            for c in cookies_data:
+                session.cookies.set(
+                    c['name'], 
+                    c['value'], 
+                    domain=c.get('domain', ''), 
+                    path=c.get('path', '/')
+                )
+        elif isinstance(cookies_data, dict):
+            # Legacy format
+            for name, value in cookies_data.items():
+                session.cookies.set(name, value)
             
         # Verify
         if "sessionid" in session.cookies.get_dict():
+            # Apply headers
+            from turso_client import get_setting
+            casepeer_base_url = get_setting("casepeer_base_url", DEFAULT_CASEPEER_BASE_URL)
+            apply_session_headers(casepeer_base_url)
+            
             logger.info(f"[OK] Session successfully restored from database (Updated: {db_session.get('updated_at')})")
             return True
             
-        logger.warning("Session data found but sessionid cookie is missing")
+        logger.warning("Session data found but sessionid cookie is missing or failed to restore correctly")
         return False
     except Exception as e:
         logger.error(f"Failed to restore session: {e}")
