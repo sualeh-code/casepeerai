@@ -742,6 +742,7 @@ async def make_api_request(endpoint: str, method: str = "GET", data: Any = None,
                 session.headers['Content-Type'] = 'application/json'
 
         # Make the request in a separate thread to avoid blocking
+        logger.info(f"Request Headers: {session.headers}")
         response = await asyncio.to_thread(session.request, method, url, **request_kwargs)
 
         # Handle 401/403 - Unauthorized/Forbidden (both indicate authentication needed)
