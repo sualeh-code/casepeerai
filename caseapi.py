@@ -587,20 +587,24 @@ def apply_session_headers(casepeer_base_url: str):
     session.headers.update(headers)
     logger.info(f"Applied session headers. Authorization: {'YES' if ACCESS_TOKEN else 'NO'}, CSRF: {'YES' if CSRF_TOKEN else 'NO'}")
 
-async def refresh_authentication() -> bool:
+async def refresh_authentication(force: bool = False) -> bool:
     """
     Refresh authentication tokens using Playwright login.
     Runs Playwright in a separate thread to avoid async loop conflicts.
+
+    Args:
+        force: If True, skip database restoration and force a fresh Playwright login.
 
     Returns:
         bool: True if authentication successful, False otherwise
     """
     global ACCESS_TOKEN, REFRESH_TOKEN, CSRF_TOKEN
 
-    logger.info("Refreshing authentication...")
+    logger.info(f"Refreshing authentication (force={force})...")
 
     # First attempt to restore from database to see if we can avoid Playwright
-    if await try_restore_session():
+    # unless force is True
+    if not force and await try_restore_session():
         logger.info("Session restored from database, skipping Playwright login")
         return True
 
@@ -762,11 +766,20 @@ async def make_api_request(endpoint: str, method: str = "GET", data: Any = None,
         response = await asyncio.to_thread(session.request, method, url, **request_kwargs)
 
         # Handle 401/403 - Unauthorized/Forbidden (both indicate authentication needed)
-        if response.status_code in (401, 403):
-            logger.warning(f"Received {response.status_code}, refreshing authentication...")
+        # Also handle 200 responses that are actually redirects to the login page
+        content_type = response.headers.get('Content-Type', '')
+        is_login_page = 'text/html' in content_type and ('/login/' in response.url or '<title>CasePeer</title>' in response.text)
+        
+        if response.status_code in (401, 403) or is_login_page:
+            if is_login_page:
+                logger.warning("Detected redirect to login page, forcing fresh authentication...")
+                should_force = True
+            else:
+                logger.warning(f"Received {response.status_code}, refreshing authentication...")
+                should_force = False
 
             # Attempt to refresh authentication
-            if await refresh_authentication():
+            if await refresh_authentication(force=should_force):
                 logger.info("Retrying request after authentication refresh...")
                 # Retry the request once
                 response = await asyncio.to_thread(session.request, method, url, **request_kwargs)
