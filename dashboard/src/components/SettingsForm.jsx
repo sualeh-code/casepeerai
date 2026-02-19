@@ -67,6 +67,7 @@ const SettingsForm = () => {
         { key: 'openai_api_key', label: 'OpenAI API Key', type: 'password' },
         { key: 'n8n_api_key', label: 'n8n API Key', type: 'password' },
         { key: 'n8n_webhook_url', label: 'n8n Webhook/Base URL', type: 'text' },
+        { key: 'vapi_api_key', label: 'VAPI API Key', type: 'password' },
     ];
 
     return (

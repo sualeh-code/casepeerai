@@ -1538,6 +1538,193 @@ def get_n8n_executions():
         raise HTTPException(status_code=500, detail=str(e))
 
 # ============================================================================
+# VAPI Integration Endpoints
+# ============================================================================
+
+@app.get("/internal-api/integrations/vapi/calls")
+def get_vapi_calls():
+    """Fetch recent calls from VAPI API."""
+    from turso_client import get_setting
+    api_key = get_setting("vapi_api_key")
+    if not api_key:
+        raise HTTPException(status_code=400, detail="VAPI API Key not set in settings")
+
+    try:
+        url = "https://api.vapi.ai/call?limit=100"
+        headers = {"Authorization": f"Bearer {api_key}"}
+        response = requests.get(url, headers=headers)
+
+        if response.status_code == 200:
+            calls = response.json()
+
+            # Helper: compute duration from timestamps if duration field is 0
+            def calc_duration(c):
+                d = c.get("duration", 0) or 0
+                if d > 0:
+                    return d
+                started = c.get("startedAt", "")
+                ended = c.get("endedAt", "")
+                if started and ended:
+                    from datetime import datetime
+                    try:
+                        s = datetime.fromisoformat(started.replace("Z", "+00:00"))
+                        e = datetime.fromisoformat(ended.replace("Z", "+00:00"))
+                        return max((e - s).total_seconds(), 0)
+                    except Exception:
+                        return 0
+                return 0
+
+            # Compute summary stats
+            total_calls = len(calls)
+            total_cost = sum(c.get("cost", 0) or 0 for c in calls)
+            total_duration = sum(calc_duration(c) for c in calls)
+            ended_calls = [c for c in calls if c.get("status") == "ended"]
+            in_progress = [c for c in calls if c.get("status") == "in-progress"]
+
+            # Status breakdown
+            status_counts = {}
+            for c in calls:
+                s = c.get("status", "unknown")
+                status_counts[s] = status_counts.get(s, 0) + 1
+
+            # Type breakdown
+            type_counts = {}
+            for c in calls:
+                t = c.get("type", "unknown")
+                type_counts[t] = type_counts.get(t, 0) + 1
+
+            # End reason breakdown
+            end_reasons = {}
+            for c in calls:
+                r = c.get("endedReason", "unknown")
+                if r:
+                    end_reasons[r] = end_reasons.get(r, 0) + 1
+
+            # Cost breakdown from most recent calls
+            recent_calls = []
+            for c in calls[:20]:
+                recent_calls.append({
+                    "id": c.get("id", ""),
+                    "type": c.get("type", ""),
+                    "status": c.get("status", ""),
+                    "cost": c.get("cost", 0),
+                    "duration": calc_duration(c),
+                    "startedAt": c.get("startedAt", ""),
+                    "endedAt": c.get("endedAt", ""),
+                    "endedReason": c.get("endedReason", ""),
+                    "assistantId": c.get("assistantId", ""),
+                    "costBreakdown": c.get("costBreakdown", {}),
+                })
+
+            return {
+                "total_calls": total_calls,
+                "total_cost": round(total_cost, 4),
+                "total_duration_seconds": round(total_duration, 1),
+                "total_duration_minutes": round(total_duration / 60, 1) if total_duration else 0,
+                "avg_cost_per_call": round(total_cost / total_calls, 4) if total_calls else 0,
+                "avg_duration_seconds": round(total_duration / total_calls, 1) if total_calls else 0,
+                "in_progress_count": len(in_progress),
+                "status_breakdown": status_counts,
+                "type_breakdown": type_counts,
+                "end_reasons": end_reasons,
+                "recent_calls": recent_calls,
+            }
+        elif response.status_code == 401:
+            raise HTTPException(status_code=401, detail="Invalid VAPI API Key")
+        elif response.status_code == 403:
+            return {"error": "Permission denied. Check VAPI API Key.", "data": {}}
+        else:
+            return {"error": f"VAPI API Error: {response.text}", "status_code": response.status_code}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"VAPI API Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/internal-api/integrations/vapi/analytics")
+async def get_vapi_analytics(request: Request):
+    """Fetch analytics/cost data from VAPI Analytics API."""
+    from turso_client import get_setting
+    api_key = get_setting("vapi_api_key")
+    if not api_key:
+        raise HTTPException(status_code=400, detail="VAPI API Key not set in settings")
+
+    try:
+        from datetime import datetime, timedelta
+        now = datetime.utcnow()
+        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+        url = "https://api.vapi.ai/analytics"
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "queries": [
+                {
+                    "name": "total_cost",
+                    "table": "call",
+                    "operations": [
+                        {"operation": "sum", "column": "cost"},
+                        {"operation": "count", "column": "id"},
+                        {"operation": "sum", "column": "duration"},
+                        {"operation": "avg", "column": "cost"},
+                    ],
+                    "timeRange": {
+                        "start": month_start.isoformat() + "Z",
+                        "end": now.isoformat() + "Z",
+                        "timezone": "UTC"
+                    }
+                },
+                {
+                    "name": "cost_by_type",
+                    "table": "call",
+                    "groupBy": ["type"],
+                    "operations": [
+                        {"operation": "sum", "column": "cost"},
+                        {"operation": "count", "column": "id"},
+                    ],
+                    "timeRange": {
+                        "start": month_start.isoformat() + "Z",
+                        "end": now.isoformat() + "Z",
+                        "timezone": "UTC"
+                    }
+                },
+                {
+                    "name": "daily_usage",
+                    "table": "call",
+                    "operations": [
+                        {"operation": "history", "column": "minutesUsed"},
+                        {"operation": "history", "column": "concurrency"},
+                    ],
+                    "timeRange": {
+                        "start": month_start.isoformat() + "Z",
+                        "end": now.isoformat() + "Z",
+                        "timezone": "UTC",
+                        "step": "day"
+                    }
+                }
+            ]
+        }
+
+        response = requests.post(url, headers=headers, json=payload)
+
+        if response.status_code in (200, 201):
+            return response.json()
+        elif response.status_code == 401:
+            raise HTTPException(status_code=401, detail="Invalid VAPI API Key")
+        else:
+            return {"error": f"VAPI Analytics Error: {response.text}", "status_code": response.status_code}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"VAPI Analytics Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ============================================================================
 # NEW ENDPOINT: Live Negotiation Data (Scraping)
 # ============================================================================
 

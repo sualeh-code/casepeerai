@@ -8,6 +8,7 @@ import CaseDetails from './components/CaseDetails';
 import CostDashboard from './components/CostDashboard';
 import N8nExecutions from './components/N8nExecutions';
 import OpenAiUsage from './components/OpenAiUsage';
+import VapiAnalytics from './components/VapiAnalytics';
 import LoginPage from './components/LoginPage';
 
 function App() {
@@ -40,6 +41,7 @@ function App() {
       )}
       {activeTab === 'n8n' && <N8nExecutions />}
       {activeTab === 'openai' && <OpenAiUsage />}
+      {activeTab === 'vapi' && <VapiAnalytics />}
       {activeTab === 'costs' && <CostDashboard />}
       {activeTab === 'settings' && <SettingsForm />}
       {activeTab === 'logs' && <SystemLogs />}

@@ -1,5 +1,5 @@
 import React from 'react';
-import { LayoutDashboard, Settings, FileText, Terminal, Zap, Brain, DollarSign, LogOut } from 'lucide-react';
+import { LayoutDashboard, Settings, FileText, Terminal, Zap, Brain, DollarSign, LogOut, Phone } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const navItems = [
@@ -7,6 +7,7 @@ const navItems = [
     { id: 'cases', label: 'Cases', icon: FileText },
     { id: 'n8n', label: 'n8n Executions', icon: Zap },
     { id: 'openai', label: 'OpenAI Usage', icon: Brain },
+    { id: 'vapi', label: 'VAPI Calls', icon: Phone },
     { id: 'costs', label: 'Costs', icon: DollarSign },
     { id: 'settings', label: 'Settings', icon: Settings },
     { id: 'logs', label: 'System Logs', icon: Terminal },
