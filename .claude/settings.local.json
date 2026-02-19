@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(where:*)",
+      "Bash(dir:*)",
+      "Bash(py -m pip list:*)",
+      "Bash(findstr:*)",
+      "Bash(py -m pip show:*)",
+      "Bash(py -m pip install:*)",
+      "Bash(py:*)",
+      "Bash(curl:*)",
+      "Bash(taskkill:*)",
+      "Bash(timeout:*)",
+      "Bash(ping:*)",
+      "Bash(git push:*)",
+      "Bash(npm run build:*)",
+      "Bash(netstat:*)",
+      "WebFetch(domain:vapi.ai)"
+    ]
+  }
+}

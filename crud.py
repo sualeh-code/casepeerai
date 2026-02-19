@@ -154,5 +154,25 @@ def get_latest_session(db):
     """Old compatibility shim, use turso_client directly for sessions now."""
     return turso.fetch_one("SELECT * FROM app_sessions ORDER BY updated_at DESC LIMIT 1")
 
+# DELETE CRUD
+def delete_case(db, case_id: str) -> bool:
+    """Delete a case and all related data (negotiations, classifications, reminders)."""
+    turso.execute("DELETE FROM negotiations WHERE case_id = ?", [case_id])
+    turso.execute("DELETE FROM classifications WHERE case_id = ?", [case_id])
+    turso.execute("DELETE FROM reminders WHERE case_id = ?", [case_id])
+    turso.execute("DELETE FROM cases WHERE id = ?", [case_id])
+    return True
+
+def delete_all_cases(db) -> int:
+    """Delete all cases and all related data. Returns count of deleted cases."""
+    cases = turso.fetch_all("SELECT id FROM cases")
+    count = len(cases)
+    turso.execute("DELETE FROM negotiations")
+    turso.execute("DELETE FROM classifications")
+    turso.execute("DELETE FROM reminders")
+    turso.execute("DELETE FROM cases")
+    turso.execute("DELETE FROM case_metrics")
+    return count
+
 # Legacy/Unneeded functions removed: Document CRUD, TokenUsage CRUD
 

@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { ArrowLeft, FileText, Bell, MessageSquare, Eye, RefreshCw, Globe, StickyNote } from 'lucide-react';
+import { ArrowLeft, FileText, Bell, MessageSquare, Eye, RefreshCw, Globe, StickyNote, Trash2 } from 'lucide-react';
 import CaseNotes from './CaseNotes';
 import {
     Dialog,
@@ -73,12 +73,30 @@ const CaseDetails = ({ caseId, onBack }) => {
 
     return (
         <div className="space-y-6">
-            <div className="flex items-center gap-4">
-                <Button variant="outline" size="sm" onClick={onBack}>
-                    <ArrowLeft className="h-4 w-4 mr-2" />
-                    Back to Cases
+            <div className="flex items-center justify-between">
+                <div className="flex items-center gap-4">
+                    <Button variant="outline" size="sm" onClick={onBack}>
+                        <ArrowLeft className="h-4 w-4 mr-2" />
+                        Back to Cases
+                    </Button>
+                    <h2 className="text-3xl font-bold tracking-tight">Case: {caseData.patient_name} <span className="text-muted-foreground text-xl">#{caseData.id}</span></h2>
+                </div>
+                <Button
+                    variant="destructive"
+                    size="sm"
+                    onClick={async () => {
+                        if (!confirm(`Delete case ${caseData.id} and all related data?`)) return;
+                        try {
+                            const res = await fetch(`/internal-api/cases/${caseData.id}`, { method: 'DELETE' });
+                            if (res.ok) onBack();
+                        } catch (err) {
+                            console.error("Failed to delete case:", err);
+                        }
+                    }}
+                >
+                    <Trash2 className="h-4 w-4 mr-2" />
+                    Delete Case
                 </Button>
-                <h2 className="text-3xl font-bold tracking-tight">Case: {caseData.patient_name} <span className="text-muted-foreground text-xl">#{caseData.id}</span></h2>
             </div>
 
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">

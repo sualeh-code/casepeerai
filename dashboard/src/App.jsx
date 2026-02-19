@@ -6,8 +6,14 @@ import SettingsForm from './components/SettingsForm';
 import SystemLogs from './components/SystemLogs';
 import CaseDetails from './components/CaseDetails';
 import CostDashboard from './components/CostDashboard';
+import N8nExecutions from './components/N8nExecutions';
+import OpenAiUsage from './components/OpenAiUsage';
+import LoginPage from './components/LoginPage';
 
 function App() {
+  const [authenticated, setAuthenticated] = useState(
+    () => sessionStorage.getItem('dashboard_auth') === 'true'
+  );
   const [activeTab, setActiveTab] = useState('dashboard');
   const [selectedCaseId, setSelectedCaseId] = useState(null);
 
@@ -17,6 +23,10 @@ function App() {
       setSelectedCaseId(null);
     }
   };
+
+  if (!authenticated) {
+    return <LoginPage onLogin={() => setAuthenticated(true)} />;
+  }
 
   return (
     <DashboardLayout activeTab={activeTab} onTabChange={handleTabChange}>
@@ -28,9 +38,11 @@ function App() {
           <CaseTable onCaseSelect={setSelectedCaseId} />
         )
       )}
+      {activeTab === 'n8n' && <N8nExecutions />}
+      {activeTab === 'openai' && <OpenAiUsage />}
+      {activeTab === 'costs' && <CostDashboard />}
       {activeTab === 'settings' && <SettingsForm />}
       {activeTab === 'logs' && <SystemLogs />}
-      {activeTab === 'costs' && <CostDashboard />}
     </DashboardLayout>
   );
 }

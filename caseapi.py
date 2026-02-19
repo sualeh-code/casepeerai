@@ -1118,6 +1118,23 @@ def read_case(case_id: str):
         raise HTTPException(status_code=404, detail="Case not found")
     return db_case
 
+@app.delete("/internal-api/cases/{case_id}")
+def delete_case(case_id: str):
+    """Delete a case and all its related data (negotiations, classifications, reminders)."""
+    db_case = crud.get_case_by_id(None, case_id=case_id)
+    if db_case is None:
+        raise HTTPException(status_code=404, detail="Case not found")
+    crud.delete_case(None, case_id=case_id)
+    logger.info(f"Deleted case {case_id} and all related data")
+    return {"message": f"Case {case_id} and all related data deleted", "case_id": case_id}
+
+@app.delete("/internal-api/cases")
+def delete_all_cases():
+    """Delete ALL cases and all related data. Use with caution."""
+    count = crud.delete_all_cases(None)
+    logger.info(f"Deleted all cases ({count} cases and all related data)")
+    return {"message": f"Deleted {count} cases and all related data", "count": count}
+
 # Negotiations
 @app.post("/internal-api/negotiations", response_model=schemas.Negotiation)
 def create_negotiation(negotiation: schemas.NegotiationCreate):
@@ -1158,6 +1175,17 @@ def read_reminders(case_id: str):
     from crud import get_reminders_by_case
     return get_reminders_by_case(None, case_id)
 
+
+@app.post("/internal-api/auth/login")
+async def dashboard_login(request: Request):
+    """Verify admin password for dashboard access."""
+    from turso_client import get_setting
+    body = await request.json()
+    password = body.get("password", "")
+    admin_password = get_setting("admin_password", "admin123")
+    if password == admin_password:
+        return {"authenticated": True}
+    raise HTTPException(status_code=401, detail="Invalid password")
 
 @app.get("/internal-api/settings", response_model=list[schemas.AppSetting])
 def read_settings(skip: int = 0, limit: int = 100):

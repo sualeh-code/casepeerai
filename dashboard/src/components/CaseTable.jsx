@@ -2,7 +2,6 @@ import React, { useEffect, useState } from 'react';
 import {
     Table,
     TableBody,
-    TableCaption,
     TableCell,
     TableHead,
     TableHeader,
@@ -10,13 +9,12 @@ import {
 } from "@/components/ui/table"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import FileUpload from './FileUpload';
+import { Trash2 } from 'lucide-react';
 
 const CaseTable = ({ onCaseSelect }) => {
     const [cases, setCases] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [deleting, setDeleting] = useState(null);
 
     const fetchCases = async () => {
         try {
@@ -36,10 +34,44 @@ const CaseTable = ({ onCaseSelect }) => {
         fetchCases();
     }, []);
 
+    const handleDeleteCase = async (e, caseId) => {
+        e.stopPropagation();
+        if (!confirm(`Delete case ${caseId} and all its related data?`)) return;
+        setDeleting(caseId);
+        try {
+            const res = await fetch(`/internal-api/cases/${caseId}`, { method: 'DELETE' });
+            if (res.ok) {
+                setCases(prev => prev.filter(c => c.id !== caseId));
+            }
+        } catch (err) {
+            console.error("Failed to delete case:", err);
+        } finally {
+            setDeleting(null);
+        }
+    };
+
+    const handleDeleteAll = async () => {
+        if (!confirm(`Delete ALL ${cases.length} cases and all related data? This cannot be undone.`)) return;
+        try {
+            const res = await fetch('/internal-api/cases', { method: 'DELETE' });
+            if (res.ok) {
+                setCases([]);
+            }
+        } catch (err) {
+            console.error("Failed to delete all cases:", err);
+        }
+    };
+
     return (
         <div className="space-y-6">
             <div className="flex justify-between items-center">
                 <h2 className="text-3xl font-bold tracking-tight">Case Management</h2>
+                {cases.length > 0 && (
+                    <Button variant="destructive" size="sm" onClick={handleDeleteAll}>
+                        <Trash2 className="h-4 w-4 mr-2" />
+                        Delete All Cases
+                    </Button>
+                )}
             </div>
 
             <Card>
@@ -56,12 +88,13 @@ const CaseTable = ({ onCaseSelect }) => {
                                 <TableHead>Status</TableHead>
                                 <TableHead>Fees Taken</TableHead>
                                 <TableHead>Savings</TableHead>
+                                <TableHead className="w-[60px]"></TableHead>
                             </TableRow>
                         </TableHeader>
                         <TableBody>
                             {cases.length === 0 ? (
                                 <TableRow>
-                                    <TableCell colSpan={5} className="text-center h-24 text-muted-foreground">
+                                    <TableCell colSpan={6} className="text-center h-24 text-muted-foreground">
                                         No cases found. Use the API to add cases.
                                     </TableCell>
                                 </TableRow>
@@ -77,6 +110,17 @@ const CaseTable = ({ onCaseSelect }) => {
                                         <TableCell>{c.status}</TableCell>
                                         <TableCell>${c.fees_taken?.toFixed(2)}</TableCell>
                                         <TableCell>${c.savings?.toFixed(2)}</TableCell>
+                                        <TableCell>
+                                            <Button
+                                                variant="ghost"
+                                                size="sm"
+                                                className="h-8 w-8 p-0 text-destructive hover:text-destructive hover:bg-destructive/10"
+                                                onClick={(e) => handleDeleteCase(e, c.id)}
+                                                disabled={deleting === c.id}
+                                            >
+                                                <Trash2 className="h-4 w-4" />
+                                            </Button>
+                                        </TableCell>
                                     </TableRow>
                                 ))
                             )}
