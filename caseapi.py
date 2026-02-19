@@ -355,7 +355,6 @@ def playwright_login(username: str, password: str, base_url: str, otp_retry_coun
                 try:
                     if page.locator(selector).count() > 0:
                         logger.info(f"OTP field detected with selector: {selector}")
-                        otp_field_found = True
 
                         # Click Remember Me checkbox if it exists (it's often on the OTP page)
                         try:
@@ -383,8 +382,8 @@ def playwright_login(username: str, password: str, base_url: str, otp_retry_coun
                             try:
                                 page.wait_for_selector(selector, state="visible", timeout=5000)
                                 logger.info(f"OTP field is visible and ready")
-                            except:
-                                logger.warning(f"Timeout waiting for OTP field, proceeding anyway")
+                            except Exception as e:
+                                logger.warning(f"Timeout waiting for OTP field: {e}, proceeding anyway")
 
                             # Try multiple methods to fill the OTP
                             fill_success = False
@@ -414,7 +413,7 @@ def playwright_login(username: str, password: str, base_url: str, otp_retry_coun
                             if not fill_success:
                                 logger.error("Failed to fill OTP field")
                                 page.screenshot(path="otp_fill_failed.png")
-                                #browser.close()
+                                browser.close()
                                 return None, None, None
 
                             # Take screenshot after filling
@@ -462,19 +461,24 @@ def playwright_login(username: str, password: str, base_url: str, otp_retry_coun
 
                             if not submitted:
                                 logger.error("All submit methods failed")
-                                #browser.close()
+                                browser.close()
                                 return None, None, None
 
                             # Wait for authentication to complete
                             page.wait_for_load_state("networkidle", timeout=30000)
                             logger.info("OTP authentication completed")
+
+                            # Only set to True if we successfully completed OTP processing
+                            otp_field_found = True
                         else:
                             logger.error("Failed to retrieve OTP from Gmail")
-                            #browser.close()
+                            browser.close()
                             return None, None, None
 
                         break
-                except:
+                except Exception as e:
+                    logger.warning(f"Failed to process OTP with selector {selector}: {e}")
+                    # otp_field_found remains False on error
                     continue
 
             if not otp_field_found:
@@ -525,7 +529,7 @@ def playwright_login(username: str, password: str, base_url: str, otp_retry_coun
 
             logger.info(f"Added {len(cookies)} cookies to session")
 
-            #browser.close()
+            browser.close()
 
             if csrf_token:
                 logger.info("Successfully extracted CSRF token and cookies")
@@ -559,10 +563,10 @@ def playwright_login(username: str, password: str, base_url: str, otp_retry_coun
         return None, None, None
 
 
-def apply_session_headers(casepeer_base_url: str):
-    """Update session headers with all required headers."""
-    global ACCESS_TOKEN, REFRESH_TOKEN, CSRF_TOKEN
-    
+def build_request_headers(casepeer_base_url: str) -> dict:
+    """Build request headers without modifying global session (thread-safe)."""
+    global ACCESS_TOKEN, CSRF_TOKEN
+
     headers = {
         'Accept': 'application/json, text/plain, */*',
         'Accept-Encoding': 'gzip, deflate, br, zstd',
@@ -584,6 +588,11 @@ def apply_session_headers(casepeer_base_url: str):
     if ACCESS_TOKEN:
         headers['Authorization'] = f'Bearer {ACCESS_TOKEN}'
 
+    return headers
+
+def apply_session_headers(casepeer_base_url: str):
+    """Update session headers with all required headers (legacy - kept for compatibility)."""
+    headers = build_request_headers(casepeer_base_url)
     session.headers.update(headers)
     logger.info(f"Applied session headers. Authorization: {'YES' if ACCESS_TOKEN else 'NO'}, CSRF: {'YES' if CSRF_TOKEN else 'NO'}")
 
@@ -706,16 +715,23 @@ def read_token_usage(limit: int = 100):
 # API Client Module
 # ============================================================================
 
-async def make_api_request(endpoint: str, method: str = "GET", data: Any = None, content_type: str = "application/json", **kwargs):
+async def make_api_request(endpoint: str, method: str = "GET", data: Any = None, raw_body: bytes = None, content_type: str = "application/json", **kwargs):
     """
     Make an API request to CasePeer with automatic token refresh on 401/403.
+
+    Supports 4 body modes:
+      1. raw_body (bytes)  - transparent forwarding with original content-type
+      2. multipart         - data dict + files dict (content_type contains "multipart/form-data")
+      3. form-encoded      - data dict sent as form (content_type contains "x-www-form-urlencoded")
+      4. JSON (default)    - data dict serialized as JSON
 
     Args:
         endpoint: API endpoint path (e.g., "/case/case-documents/123/")
         method: HTTP method (GET, POST, etc.)
-        data: Request body data for POST/PUT/PATCH requests
-        content_type: Content type of the request (JSON or form)
-        **kwargs: Additional arguments to pass to requests
+        data: Structured body data (dict) for POST/PUT/PATCH requests
+        raw_body: Raw bytes to forward as-is (takes priority over data)
+        content_type: Original content type of the request
+        **kwargs: Additional arguments (e.g., files={} for multipart)
 
     Returns:
         Response object from requests
@@ -726,7 +742,7 @@ async def make_api_request(endpoint: str, method: str = "GET", data: Any = None,
     # Fetch base URL from Turso
     from turso_client import get_setting
     casepeer_base_url = get_setting("casepeer_base_url", DEFAULT_CASEPEER_BASE_URL)
-        
+
     url = f"{casepeer_base_url}{endpoint}"
     logger.info(f"Making {method} request to {url}")
 
@@ -734,42 +750,52 @@ async def make_api_request(endpoint: str, method: str = "GET", data: Any = None,
     cookie_names = list(session.cookies.keys())
     logger.info(f"Session cookies: {cookie_names}")
     if 'sessionid' in cookie_names:
-        logger.info(f"✓ sessionid cookie present")
+        logger.info("sessionid cookie present")
     else:
-        logger.warning(f"⚠ sessionid cookie MISSING - form submissions may fail")
-
-    # Ensure we have authentication
-    # if ACCESS_TOKEN:
-    #     session.headers.update({
-    #         'Authorization': f'Bearer {ACCESS_TOKEN}',
-    #     })
+        logger.warning("sessionid cookie MISSING - form submissions may fail")
 
     try:
+        # Build request-specific headers (thread-safe)
+        request_headers = build_request_headers(casepeer_base_url)
+
         # Prepare request arguments
         request_kwargs = kwargs.copy()
-        if data is not None:
-            # Determine how to send the data based on content type
+
+        if raw_body is not None:
+            # Mode 1: Raw forwarding - send bytes as-is with original content-type
+            request_kwargs['data'] = raw_body
+            if content_type:
+                request_headers['Content-Type'] = content_type
+        elif data is not None:
             if "multipart/form-data" in content_type:
-                files = kwargs.pop('files', None)  # Expect files dict from caller
-                request_kwargs['data'] = data  # regular form fields
+                # Mode 2: Multipart - files + form fields
+                files = request_kwargs.pop('files', None)
+                request_kwargs['data'] = data
                 if files:
                     request_kwargs['files'] = files
-                session.headers.pop('Content-Type', None)      # actual file uploads
-    # Do NOT set Content-Type manually; requests sets boundary automatically
+                # Let requests library set Content-Type with boundary automatically
+                request_headers.pop('Content-Type', None)
+            elif "application/x-www-form-urlencoded" in content_type:
+                # Mode 3: Form-encoded - use data= not json=
+                request_kwargs['data'] = data
+                request_headers['Content-Type'] = 'application/x-www-form-urlencoded'
             else:
-                # Send as JSON (default)
+                # Mode 4: JSON (default for structured data)
                 request_kwargs['json'] = data
-                session.headers['Content-Type'] = 'application/json'
+                request_headers['Content-Type'] = 'application/json'
+
+        # Add headers to request kwargs
+        request_kwargs['headers'] = request_headers
 
         # Make the request in a separate thread to avoid blocking
-        logger.info(f"Request Headers: {session.headers}")
+        logger.info(f"Request Headers: {request_headers}")
         response = await asyncio.to_thread(session.request, method, url, **request_kwargs)
 
         # Handle 401/403 - Unauthorized/Forbidden (both indicate authentication needed)
         # Also handle 200 responses that are actually redirects to the login page
-        content_type = response.headers.get('Content-Type', '')
-        is_login_page = 'text/html' in content_type and ('/login/' in response.url or '<title>CasePeer</title>' in response.text)
-        
+        resp_content_type = response.headers.get('Content-Type', '')
+        is_login_page = 'text/html' in resp_content_type and ('/login/' in response.url or '<title>CasePeer</title>' in response.text)
+
         if response.status_code in (401, 403) or is_login_page:
             if is_login_page:
                 logger.warning("Detected redirect to login page, forcing fresh authentication...")
@@ -781,6 +807,17 @@ async def make_api_request(endpoint: str, method: str = "GET", data: Any = None,
             # Attempt to refresh authentication
             if await refresh_authentication(force=should_force):
                 logger.info("Retrying request after authentication refresh...")
+                # Rebuild headers with new tokens, preserving original content-type behavior
+                request_headers = build_request_headers(casepeer_base_url)
+                if raw_body is not None and content_type:
+                    request_headers['Content-Type'] = content_type
+                elif "multipart/form-data" in content_type:
+                    request_headers.pop('Content-Type', None)
+                elif "application/x-www-form-urlencoded" in content_type:
+                    request_headers['Content-Type'] = 'application/x-www-form-urlencoded'
+                elif data is not None:
+                    request_headers['Content-Type'] = 'application/json'
+                request_kwargs['headers'] = request_headers
                 # Retry the request once
                 response = await asyncio.to_thread(session.request, method, url, **request_kwargs)
             else:
@@ -970,11 +1007,19 @@ async def proxy_upload_file(
     # Validate CSRF token
     final_csrf_token = csrfmiddlewaretoken or CSRF_TOKEN
     if not final_csrf_token:
-        logger.error("No CSRF token found in request or globally. Cannot proceed with upload.")
-        raise HTTPException(
-            status_code=400,
-            detail="CSRF token is missing. Please authenticate first or provide it in the request."
-        )
+        logger.warning("No CSRF token found, attempting authentication...")
+        # Try to authenticate to get a CSRF token
+        if await refresh_authentication():
+            final_csrf_token = CSRF_TOKEN
+            logger.info(f"Authentication successful, obtained CSRF token")
+
+        # If still no token after authentication attempt, fail
+        if not final_csrf_token:
+            logger.error("No CSRF token found even after authentication attempt.")
+            raise HTTPException(
+                status_code=400,
+                detail="CSRF token is missing. Authentication failed. Please authenticate first or provide it in the request."
+            )
     file_content = await file.read()
     files = {
         'file': (file.filename, file_content, file.content_type)
@@ -1215,7 +1260,8 @@ async def update_provider_email(request: Request):
                 html_content = data['response']
             else:
                 html_content = response.text
-        except:
+        except Exception as e:
+            logger.debug(f"Response is not JSON: {e}, using raw text")
             html_content = response.text
 
         logger.info("Successfully fetched provider form")
@@ -1425,8 +1471,9 @@ def get_n8n_executions():
     try:
         parsed = urlparse(base_url)
         api_base = f"{parsed.scheme}://{parsed.netloc}/api/v1"
-    except:
-        return {"error": "Invalid n8n URL"}
+    except Exception as e:
+        logger.error(f"Failed to parse n8n URL: {e}")
+        return {"error": f"Invalid n8n URL: {str(e)}"}
 
     try:
         url = f"{api_base}/executions?limit=50"
@@ -1555,6 +1602,14 @@ async def get_live_negotiations(case_id: str):
     except Exception as e:
         logger.error(f"Live scrape failed: {e}")
         # Return empty list instead of 500 to prevent UI crash
+        return {
+            "source": "live_scrape",
+            "case_id": case_id,
+            "count": 0,
+            "negotiations": [],
+            "error": str(e)
+        }
+
 @app.get("/internal-api/cases/{case_id}/notes")
 async def get_case_notes(case_id: str):
     """
@@ -1608,6 +1663,59 @@ async def get_case_notes(case_id: str):
     except Exception as e:
         logger.error(f"Error fetching notes: {e}")
         return {"results": [], "error": str(e)}
+
+
+# ============================================================================
+# Proxy Helper Functions
+# ============================================================================
+
+def _extract_html(response) -> Optional[str]:
+    """Extract HTML content from a CasePeer response (may be JSON-wrapped or raw)."""
+    try:
+        data = response.json()
+        if 'response' in data and isinstance(data['response'], str):
+            return data['response']
+        return response.text
+    except Exception:
+        return response.text
+
+
+async def _inject_csrf(endpoint: str, body: dict) -> dict:
+    """
+    Inject CSRF token into form body via GET-then-POST pattern.
+    Fetches the form page, extracts CSRF token and existing fields,
+    merges with the incoming body, and returns the complete form data.
+    """
+    logger.info(f"CSRF token missing - initiating GET-then-POST for {endpoint}")
+    try:
+        get_response = await make_api_request(endpoint, method="GET")
+        if get_response.status_code == 200:
+            html_content = _extract_html(get_response)
+            if html_content:
+                csrf_token = extract_csrf_from_html(html_content)
+                if csrf_token:
+                    logger.info(f"Extracted CSRF token: {csrf_token[:20]}...")
+                    existing = parse_form_fields(html_content)
+                    if existing:
+                        logger.info(f"Parsed {len(existing)} existing form fields, merging")
+                        existing.update(body)
+                        existing['csrfmiddlewaretoken'] = csrf_token
+                        if 'submitButton' not in existing:
+                            existing['submitButton'] = 'Submit'
+                        return existing
+                    else:
+                        # No existing fields parsed, just add CSRF to body
+                        body['csrfmiddlewaretoken'] = csrf_token
+                        return body
+    except Exception as e:
+        logger.error(f"CSRF injection failed: {e}")
+
+    # Fallback: use global CSRF token
+    if CSRF_TOKEN:
+        logger.info("Falling back to global CSRF token")
+        body['csrfmiddlewaretoken'] = CSRF_TOKEN
+    return body
+
 
 @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"])
 async def proxy_request(request: Request, path: str):
@@ -1694,120 +1802,75 @@ async def proxy_request(request: Request, path: str):
 
 
     try:
-        # Get request body for POST/PUT/PATCH requests
+        # ============================================================
+        # Body handling: raw-first approach
+        # Only parse when modification is needed (CSRF injection)
+        # ============================================================
         body = None
+        raw_body = None
+        files_kwargs = {}
         content_type = request.headers.get("content-type", "")
 
         if method in ["POST", "PUT", "PATCH"]:
-            try:
-                # Check if the request is JSON or form data
-                if "application/json" in content_type:
-                    body = await request.json()
-                    logger.info(f"Request body (JSON): {body}")
-                elif "application/x-www-form-urlencoded" in content_type or "multipart/form-data" in content_type:
-                    # Handle form-encoded data
-                    form_data = await request.form()
-                    body = dict(form_data)
-                    logger.info(f"Request body (Form): {body}")
+            raw_bytes = await request.body()
 
-                    # ============================================================
-                    # AUTOMATIC GET-THEN-POST PATTERN FOR FORM SUBMISSIONS
-                    # ============================================================
-                    # If CSRF token is missing, do GET-then-POST automatically
-                    if 'csrfmiddlewaretoken' not in body:
-                        logger.info("🔄 CSRF token missing - initiating automatic GET-then-POST flow")
-                        logger.info(f"   Step 1: GET {endpoint} to fetch form data")
+            if "application/x-www-form-urlencoded" in content_type:
+                # Form-encoded: parse for CSRF injection, forward as form data
+                form_data = await request.form()
+                body = dict(form_data)
+                logger.info(f"Request body (Form): {body}")
 
-                        # Step 1: GET the form to extract CSRF and existing fields
-                        try:
-                            get_response = await make_api_request(endpoint, method="GET")
-
-                            if get_response.status_code == 200:
-                                # Extract HTML content
-                                html_content = None
-                                try:
-                                    data = get_response.json()
-                                    if 'response' in data and isinstance(data['response'], str):
-                                        html_content = data['response']
-                                    else:
-                                        html_content = get_response.text
-                                except:
-                                    html_content = get_response.text
-
-                                if html_content:
-                                    # Step 2: Extract CSRF token
-                                    logger.info("   Step 2: Extract CSRF token from form")
-                                    csrf_token = extract_csrf_from_html(html_content)
-
-                                    if csrf_token:
-                                        logger.info(f"   ✅ Extracted CSRF token: {csrf_token[:20]}...")
-
-                                        # Step 3: Parse all existing form fields
-                                        logger.info("   Step 3: Parse existing form fields")
-                                        existing_form_data = parse_form_fields(html_content)
-
-                                        if existing_form_data and len(existing_form_data) >= 5:
-                                            logger.info(f"   ✅ Parsed {len(existing_form_data)} existing fields")
-
-                                            # Step 4: Merge incoming data with existing form data
-                                            logger.info("   Step 4: Merge incoming data with existing fields")
-                                            # Existing fields are preserved, incoming fields override
-                                            existing_form_data.update(body)
-                                            existing_form_data['csrfmiddlewaretoken'] = csrf_token
-
-                                            # Ensure submitButton is present
-                                            if 'submitButton' not in existing_form_data:
-                                                existing_form_data['submitButton'] = 'Submit'
-
-                                            # Replace body with merged form data
-                                            body = existing_form_data
-
-                                            logger.info(f"   ✅ Form data merged: {len(body)} total fields")
-                                            logger.info("   🚀 Proceeding with POST using complete form data")
-                                        else:
-                                            logger.warning(f"   ⚠️  Only parsed {len(existing_form_data) if existing_form_data else 0} fields")
-                                            logger.warning("   Falling back to original body + global CSRF token")
-                                            if CSRF_TOKEN:
-                                                body['csrfmiddlewaretoken'] = CSRF_TOKEN
-                                    else:
-                                        logger.warning("   ⚠️  Could not extract CSRF token from form")
-                                        logger.warning("   Falling back to global CSRF token")
-                                        if CSRF_TOKEN:
-                                            body['csrfmiddlewaretoken'] = CSRF_TOKEN
-                                else:
-                                    logger.warning("   ⚠️  Empty HTML content from GET request")
-                                    if CSRF_TOKEN:
-                                        body['csrfmiddlewaretoken'] = CSRF_TOKEN
-                            else:
-                                logger.warning(f"   ⚠️  GET request failed with status {get_response.status_code}")
-                                if CSRF_TOKEN:
-                                    body['csrfmiddlewaretoken'] = CSRF_TOKEN
-
-                        except Exception as e:
-                            logger.error(f"   ❌ GET-then-POST flow failed: {e}")
-                            logger.warning("   Falling back to global CSRF token")
-                            if CSRF_TOKEN:
-                                body['csrfmiddlewaretoken'] = CSRF_TOKEN
-                    else:
-                        logger.info("✅ CSRF token already present in request body")
-
+                # Auto-inject CSRF if missing
+                if 'csrfmiddlewaretoken' not in body:
+                    body = await _inject_csrf(endpoint, body)
                 else:
-                    # Try JSON by default
-                    body = await request.json()
-                    logger.info(f"Request body: {body}")
-            except:
-                # No body or empty body
-                logger.info("No request body")
-                pass
+                    logger.info("CSRF token already present in request body")
 
-        # Make API request
-        response = await make_api_request(endpoint, method=method, data=body, content_type=content_type)
+            elif "multipart/form-data" in content_type:
+                # Multipart: extract files properly (don't lose UploadFile objects)
+                form = await request.form()
+                body = {}
+                files_dict = {}
+
+                for key, value in form.multi_items():
+                    if hasattr(value, 'read'):  # It's an UploadFile
+                        file_content = await value.read()
+                        files_dict[key] = (value.filename, file_content, value.content_type)
+                    else:
+                        body[key] = value
+
+                logger.info(f"Request body (Multipart): {len(body)} fields, {len(files_dict)} files")
+
+                # Auto-inject CSRF for multipart forms too
+                if 'csrfmiddlewaretoken' not in body and CSRF_TOKEN:
+                    body['csrfmiddlewaretoken'] = CSRF_TOKEN
+
+                if files_dict:
+                    files_kwargs = {'files': files_dict}
+
+            else:
+                # Everything else (JSON, XML, plain text, unknown, empty):
+                # Forward raw bytes as-is - preserves original content-type
+                if raw_bytes:
+                    raw_body = raw_bytes
+                    logger.info(f"Request body (Raw): {len(raw_bytes)} bytes, content-type: {content_type or 'none'}")
+                else:
+                    logger.info("No request body")
+
+        # Forward the request to CasePeer
+        if raw_body is not None:
+            response = await make_api_request(endpoint, method=method, raw_body=raw_body, content_type=content_type)
+        elif "multipart/form-data" in content_type:
+            response = await make_api_request(endpoint, method=method, data=body, content_type=content_type, **files_kwargs)
+        else:
+            response = await make_api_request(endpoint, method=method, data=body, content_type=content_type)
 
         # Try to return JSON response
         try:
             return response.json()
-        except:
+        except Exception as e:
             # If response is not JSON, return text
+            logger.debug(f"Response is not JSON: {e}, returning raw text")
             return {"response": response.text, "status_code": response.status_code}
 
     except HTTPException:
