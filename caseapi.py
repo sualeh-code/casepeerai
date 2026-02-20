@@ -310,7 +310,7 @@ def playwright_login(username: str, password: str, base_url: str, otp_retry_coun
             # Hardcode headless mode for server deployment
             is_headless = True
             logger.info(f"Launching browser (headless={is_headless})...")
-            
+
             browser: Browser = p.chromium.launch(headless=is_headless)
             context = browser.new_context(
                 user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36'
@@ -529,11 +529,9 @@ def playwright_login(username: str, password: str, base_url: str, otp_retry_coun
 
             logger.info(f"Added {len(cookies)} cookies to session")
 
-            browser.close()
-
             if csrf_token:
                 logger.info("Successfully extracted CSRF token and cookies")
-                
+
                 # Save session to Turso
                 from turso_client import save_session
                 session_data = {
@@ -553,13 +551,21 @@ def playwright_login(username: str, password: str, base_url: str, otp_retry_coun
                 save_session("default", json.dumps(session_data))
                 logger.info("Session state saved to database")
 
+                browser.close()
                 return access_token, refresh_token, csrf_token
             else:
                 logger.error("Failed to extract CSRF token")
+                browser.close()
                 return None, None, None
 
     except Exception as e:
         logger.error(f"Playwright login failed: {str(e)}", exc_info=True)
+        # Ensure browser is closed even on unexpected errors
+        try:
+            browser.close()
+            logger.info("Browser closed after error")
+        except Exception:
+            pass
         return None, None, None
 
 
@@ -1521,13 +1527,55 @@ def get_n8n_executions():
         if response.status_code == 200:
             data = response.json()
             executions = data.get('data', [])
-            success_count = sum(1 for e in executions if e.get('finished', False))
-            error_count = len(executions) - success_count
+            success_count = sum(1 for e in executions if e.get('finished', False) and e.get('status') != 'error')
+            error_count = sum(1 for e in executions if e.get('status') == 'error' or (e.get('finished', False) and e.get('stoppedAt') and not e.get('finished')))
+            running_count = sum(1 for e in executions if not e.get('finished', False) and not e.get('stoppedAt'))
+            waiting_count = len(executions) - success_count - error_count - running_count
+
+            # Workflow breakdown
+            workflow_counts = {}
+            for e in executions:
+                wf_name = e.get('workflowData', {}).get('name', 'Unknown') if e.get('workflowData') else (e.get('workflowId', 'Unknown'))
+                workflow_counts[wf_name] = workflow_counts.get(wf_name, 0) + 1
+
+            # Detailed recent executions
+            recent = []
+            for e in executions[:20]:
+                started = e.get('startedAt', '')
+                stopped = e.get('stoppedAt', '')
+                duration_sec = None
+                if started and stopped:
+                    try:
+                        from datetime import datetime
+                        s = datetime.fromisoformat(started.replace('Z', '+00:00'))
+                        t = datetime.fromisoformat(stopped.replace('Z', '+00:00'))
+                        duration_sec = round((t - s).total_seconds(), 1)
+                    except Exception:
+                        pass
+
+                wf_data = e.get('workflowData', {}) or {}
+                recent.append({
+                    "id": e.get('id', ''),
+                    "finished": e.get('finished', False),
+                    "status": e.get('status', 'unknown'),
+                    "mode": e.get('mode', ''),
+                    "startedAt": started,
+                    "stoppedAt": stopped,
+                    "duration_sec": duration_sec,
+                    "workflowId": e.get('workflowId', ''),
+                    "workflowName": wf_data.get('name', ''),
+                    "retryOf": e.get('retryOf', None),
+                    "retrySuccessId": e.get('retrySuccessId', None),
+                })
+
             return {
                 "total_fetched": len(executions),
                 "success": success_count,
                 "error": error_count,
-                "recent_executions": executions[:5]
+                "running": running_count,
+                "waiting": waiting_count,
+                "workflow_breakdown": workflow_counts,
+                "recent_executions": recent,
             }
         else:
              return {"error": f"n8n API Error: {response.text}", "status_code": response.status_code}
