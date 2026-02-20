@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { DollarSign, Users, Briefcase, Activity, TrendingUp, ArrowUpRight, ArrowDownRight, FileText, Percent, Mail } from 'lucide-react';
+import { DollarSign, Users, Briefcase, Activity, TrendingUp, ArrowUpRight, ArrowDownRight, FileText, Percent, Mail, Phone, Clock } from 'lucide-react';
 import { Button } from "@/components/ui/button";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts';
 import N8nHealth from './N8nHealth';
@@ -25,14 +25,16 @@ const StatsOverview = () => {
         negotiationResults: []
     });
     const [n8nExecutions, setN8nExecutions] = useState([]);
+    const [vapiStats, setVapiStats] = useState(null);
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
         const fetchData = async () => {
             try {
-                const [casesRes, n8nRes] = await Promise.all([
+                const [casesRes, n8nRes, vapiRes] = await Promise.all([
                     fetch('/internal-api/cases'),
-                    fetch('/internal-api/integrations/n8n/executions')
+                    fetch('/internal-api/integrations/n8n/executions'),
+                    fetch('/internal-api/integrations/vapi/calls')
                 ]);
 
                 if (casesRes.ok) {
@@ -94,6 +96,13 @@ const StatsOverview = () => {
                 if (n8nRes.ok) {
                     const n8nData = await n8nRes.json();
                     setN8nExecutions(n8nData);
+                }
+
+                if (vapiRes.ok) {
+                    const vapiData = await vapiRes.json();
+                    if (!vapiData.error) {
+                        setVapiStats(vapiData);
+                    }
                 }
 
             } catch (error) {
@@ -191,6 +200,62 @@ const StatsOverview = () => {
             <div className="grid gap-4 md:grid-cols-1">
                 <N8nHealth executions={n8nExecutions} loading={loading} />
             </div>
+
+            {/* VAPI Voice AI Summary */}
+            {vapiStats && vapiStats.total_calls > 0 && (
+                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+                    <Card>
+                        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                            <CardTitle className="text-sm font-medium">VAPI Calls</CardTitle>
+                            <Phone className="h-4 w-4 text-muted-foreground" />
+                        </CardHeader>
+                        <CardContent>
+                            <div className="text-2xl font-bold">{vapiStats.total_calls}</div>
+                            <p className="text-xs text-muted-foreground">
+                                {vapiStats.type_breakdown?.outboundPhoneCall || 0} outbound, {vapiStats.type_breakdown?.webCall || 0} web
+                            </p>
+                        </CardContent>
+                    </Card>
+                    <Card>
+                        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                            <CardTitle className="text-sm font-medium">VAPI Total Cost</CardTitle>
+                            <DollarSign className="h-4 w-4 text-muted-foreground" />
+                        </CardHeader>
+                        <CardContent>
+                            <div className="text-2xl font-bold">${vapiStats.total_cost?.toFixed(2)}</div>
+                            <p className="text-xs text-muted-foreground">
+                                ${vapiStats.avg_cost_per_call?.toFixed(4)} avg per call
+                            </p>
+                        </CardContent>
+                    </Card>
+                    <Card>
+                        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                            <CardTitle className="text-sm font-medium">VAPI Duration</CardTitle>
+                            <Clock className="h-4 w-4 text-muted-foreground" />
+                        </CardHeader>
+                        <CardContent>
+                            <div className="text-2xl font-bold">{vapiStats.total_duration_minutes?.toFixed(1)} min</div>
+                            <p className="text-xs text-muted-foreground">
+                                {vapiStats.avg_duration_seconds?.toFixed(0)}s avg per call
+                            </p>
+                        </CardContent>
+                    </Card>
+                    <Card>
+                        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                            <CardTitle className="text-sm font-medium">VAPI Cost/Min</CardTitle>
+                            <TrendingUp className="h-4 w-4 text-muted-foreground" />
+                        </CardHeader>
+                        <CardContent>
+                            <div className="text-2xl font-bold">
+                                ${vapiStats.total_duration_minutes > 0
+                                    ? (vapiStats.total_cost / vapiStats.total_duration_minutes).toFixed(2)
+                                    : vapiStats.total_cost?.toFixed(2)}
+                            </div>
+                            <p className="text-xs text-muted-foreground">Average rate per minute</p>
+                        </CardContent>
+                    </Card>
+                </div>
+            )}
 
             {/* Bottom Row: Charts & Logs */}
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-7">
