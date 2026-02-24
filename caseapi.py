@@ -162,9 +162,27 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Startup Authentication Error: {e}", exc_info=True)
 
+    # 3. START NEGOTIATION EMAIL POLLER
+    try:
+        from turso_client import get_setting as _gs
+        auto_start = _gs("negotiation_poller_enabled", "true")
+        if auto_start.lower() == "true":
+            from gmail_poller import start_poller
+            await start_poller()
+            logger.info("[OK] Negotiation email poller started")
+        else:
+            logger.info("[SKIP] Negotiation email poller disabled (set negotiation_poller_enabled=true to enable)")
+    except Exception as e:
+        logger.error(f"Failed to start email poller: {e}", exc_info=True)
+
     yield
 
-    # Shutdown (if needed in future)
+    # Shutdown: stop the poller
+    try:
+        from gmail_poller import stop_poller
+        await stop_poller()
+    except Exception:
+        pass
     logger.info("Shutting down CasePeer API Wrapper...")
 
 
@@ -1926,6 +1944,78 @@ async def get_case_notes(case_id: str):
     except Exception as e:
         logger.error(f"Error fetching notes: {e}")
         return {"results": [], "error": str(e)}
+
+
+# ============================================================================
+# Negotiation Email Poller Controls
+# ============================================================================
+
+@app.get("/internal-api/poller/status")
+async def poller_status():
+    """Get the current status of the negotiation email poller."""
+    from gmail_poller import get_poller_stats
+    return get_poller_stats()
+
+@app.post("/internal-api/poller/start")
+async def poller_start():
+    """Start the negotiation email poller."""
+    from gmail_poller import start_poller
+    result = await start_poller()
+    return result
+
+@app.post("/internal-api/poller/stop")
+async def poller_stop():
+    """Stop the negotiation email poller."""
+    from gmail_poller import stop_poller
+    result = await stop_poller()
+    return result
+
+
+# ============================================================================
+# Negotiation Agent Endpoint
+# ============================================================================
+
+@app.post("/internal-api/process-negotiation-email")
+async def process_negotiation_email(request: Request):
+    """
+    Single AI agent endpoint for processing negotiation emails.
+
+    Called by n8n after Gmail Trigger + Get Thread + Mark as Read.
+    n8n sends the full Gmail thread JSON, this agent handles everything:
+    classification, CasePeer updates, and reply generation.
+
+    Request body: Gmail thread JSON (the output of n8n's "Get a thread" node)
+
+    Returns:
+        {
+            "intent": "accepted|rejected|...",
+            "reply_message": "HTML email body (or null)",
+            "provider_name": "...",
+            "patient_name": "...",
+            "reasoning": "...",
+            "actions_taken": [...],
+            "thread_id": "...",
+            "last_message_id": "..."
+        }
+    """
+    try:
+        thread_data = await request.json()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid JSON body: {e}")
+
+    if not thread_data:
+        raise HTTPException(status_code=400, detail="Empty request body")
+
+    logger.info(f"[NegotiationAgent] Processing email thread with {len(thread_data.get('messages', []))} messages")
+
+    try:
+        from negotiation_agent import process_negotiation_email as run_agent
+        result = await run_agent(thread_data)
+        logger.info(f"[NegotiationAgent] Result: intent={result.get('intent')}, reply={'yes' if result.get('reply_message') else 'no'}")
+        return result
+    except Exception as e:
+        logger.error(f"[NegotiationAgent] Error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Agent processing failed: {e}")
 
 
 # ============================================================================

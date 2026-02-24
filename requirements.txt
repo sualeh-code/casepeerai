@@ -5,6 +5,8 @@ playwright
 requests
 beautifulsoup4
 python-multipart
+openai
+fpdf2
 libsql-client==0.3.1
 sqlalchemy-libsql==0.2.0
 # Optional but recommended for dev

@@ -1,0 +1,5103 @@
+{
+  "name": "Negotiation part 2",
+  "nodes": [
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "filters": {
+          "readStatus": "unread",
+          "sender": "NatalyaValencia@beverlylaw.org"
+        }
+      },
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        848,
+        3872
+      ],
+      "id": "be45f18c-9a48-4a65-b3ec-059241ae7d6d",
+      "name": "Gmail Trigger",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "qu1bypdqFgmCNgVo",
+          "name": "Gmail account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "thread",
+        "operation": "get",
+        "threadId": "={{ $json.threadId }}",
+        "simple": false,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        1072,
+        3872
+      ],
+      "id": "d4bc7507-0b62-43e8-9f53-9818e8a799d9",
+      "name": "Get a thread",
+      "webhookId": "21187715-107e-400d-a5ac-4a75fa59b793",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "qu1bypdqFgmCNgVo",
+          "name": "Gmail account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "markAsRead",
+        "messageId": "={{ $('Gmail Trigger').item.json.id }}"
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        1296,
+        3552
+      ],
+      "id": "32a72b70-2d66-4d88-b57c-783e683ec10d",
+      "name": "Mark a message as read",
+      "webhookId": "193423bc-3574-4100-ab8c-1bb1082d808d",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "qu1bypdqFgmCNgVo",
+          "name": "Gmail account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract sender name and full email body (not snippet)\nconst output = [];\n\nfor (const item of $input.all()) {\n  const messages = item.json.messages || [];\n\n  for (const msg of messages) {\n    const from = msg.From || '';\n    const payload = msg.payload || {};\n    let body = '';\n\n    // Try to extract plain text body\n    if (payload.body && payload.body.data) {\n      // Gmail API encodes body in base64url format, so decode it\n      body = Buffer.from(payload.body.data, 'base64').toString('utf8');\n    } \n    // If body is nested in parts (multipart emails)\n    else if (payload.parts) {\n      for (const part of payload.parts) {\n        if (part.mimeType === 'text/plain' && part.body && part.body.data) {\n          body = Buffer.from(part.body.data, 'base64').toString('utf8');\n          break;\n        }\n      }\n    }\n\n    // Fallback to snippet if nothing found\n    if (!body) body = msg.snippet || '';\n\n    // Clean sender name\n    const nameMatch = from.match(/^(.*?)</);\n    const senderName = nameMatch ? nameMatch[1].trim() : from;\n\n    // Remove quoted replies (lines starting with “>” or \"On ... wrote:\")\n    body = body\n      .replace(/On\\s.+wrote:.+/gs, '')  // remove reply section\n      .replace(/>\\s?.+/g, '')           // remove quoted lines\n      .trim();\n\n    output.push({\n      json: {\n        sender: senderName,\n        body: body\n      }\n    });\n  }\n}\n\nreturn output;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1296,
+        4896
+      ],
+      "id": "37fb46f0-6c5b-4816-8cf1-98b45a2d781f",
+      "name": "Code1"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Combine all previous items into a single conversation\nconst allMessages = $input.all().map(item => item.json);\n\n// Optionally merge into a single string conversation\nconst conversationText = allMessages.map(m => `${m.sender}: ${m.body}`).join('\\n---\\n');\n\nreturn [{\n  json: {\n    conversation: allMessages,    // full objects\n    combinedText: conversationText // readable text version\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1520,
+        4896
+      ],
+      "id": "ecea4ff8-71d0-4d08-858d-4bbbe255af37",
+      "name": "Code3"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Analyze the following email conversation and determine the negotiation status based strictly on the provider’s most recent message.\n\nEmails JSON:\n{{JSON.stringify($json.conversation)}}\n",
+        "hasOutputParser": true,
+        "options": {
+          "systemMessage": "You are an advanced legal document and email analysis assistant for a law firm specializing in medical bill negotiations.\nYour role is to analyze email conversations between our law firm and medical service providers and determine the current negotiation status.\nCRITICAL INSTRUCTIONS:\n- Emails are provided in chronological order (oldest to newest).\n- You MUST analyze ONLY the provider's most recent message.\n- Ignore:\n  - Email signatures\n  - Quoted text\n  - Email headers\n  - Auto-generated replies\n- Focus only on the new content written by the provider.\nCLASSIFICATION RULES (Return EXACTLY one status):\naccepted\n→ The provider clearly agreed to the settlement offer.\nExamples:\n\"We accept.\"\n\"Agreed.\"\n\"That works.\"\n\"We will accept $X.\"\nIf the provider accepts AND asks when payment will be sent → classify as \"accepted\".\nrejected\n→ The provider declined, refused, disputed, or countered the settlement.\nAny counteroffer or conditional acceptance counts as rejected.\nprovided details\n→ The provider did NOT clearly state acceptance but provided explicit payment details such as:\n- Payee name\n- Mailing address\n- Check instructions\n- Wire/ACH information\nAccepted and Provided details\n→ The provider accepted AND included payment or mailing details in the same message.\n-The provider has added w-9 document or any other document.\n-The provider has provided payment information or mailing Details\nasked for clerance\n→ The provider is asking a question about our last message (clarification, confirmation, documentation request).\nasking for payment\n→ The provider is requesting payment status or follow-up.\nExamples:\n\"When will payment be sent?\"\n\"We have not received the check.\"\n\"Please provide payment update.\"\nbill correction\n→ The provider is stating that the billed amount is incorrect, has changed, or differs from what was previously communicated.\nThis includes:\n- Claiming the actual bill is a different amount than what we referenced.\n- Notifying us of a corrected, adjusted, or updated balance.\n- Stating a billing error was made and providing a revised figure.\nExamples:\n\"The correct balance is actually $X.\"\n\"We made a billing error; the actual amount owed is $X.\"\n\"Our records show the bill should be $X, not $X.\"\n\"The account has been adjusted to $X.\"\nbill confirmation\n→ The provider is responding to our request to confirm a bill amount.\nThis includes:\n- Confirming the balance on file matches what we provided.\n- Disagreeing with or correcting the amount we asked them to confirm.\n- Any direct response to a bill confirmation request from our firm, regardless of whether the amount is agreed upon or disputed.\nExamples:\n\"Yes, the balance of $X is correct.\"\n\"We confirm the bill amount of $X.\"\n\"The amount you referenced does not match our records; our balance is $X.\"\n\"We cannot confirm that amount.\"\nIMPORTANT LOGIC RULES:\n1. A provider will NOT ask for payment before accepting the settlement.\n   If they ask when payment will be issued, they have implicitly accepted → classify as \"accepted\".\n2. Only classify as \"provided details\" if explicit name/address/payment information is included AND there is no clear acceptance statement.\n3. If acceptance AND payment details appear together → return \"Accepted and Provided details\".\n4. Do NOT infer acceptance unless clearly stated or logically implied through payment timing inquiry.\n5. If the provider corrects or disputes the billed amount without accepting or rejecting our offer → classify as \"bill correction\".\n6. If the provider corrects the bill AND rejects our offer or makes a counteroffer → classify as \"rejected\".\n7. Use \"bill confirmation\" ONLY when our firm explicitly asked the provider to confirm a bill amount and the provider is directly responding to that request — regardless of whether they agree or dispute the amount.\n8. Distinguish between \"bill correction\" (provider proactively corrects the amount unprompted) and \"bill confirmation\" (provider responds to our explicit confirmation request). Always check the context of prior emails.\n9. If unclear → return \"unclear\".\n10. Be strict and conservative in interpretation.\nPATIENT NAME EXTRACTION RULES:\n- For ALL intents: Extract the patient name from anywhere in the email conversation body.\n- For \"bill confirmation\" intent SPECIFICALLY: The patient name MUST be extracted from the email body of the bill confirmation email itself. Do not rely on other emails in the thread for the patient name in this case.\n- If no patient name is found → return \"unknown\".\nADDITIONAL EXTRACTION REQUIREMENTS:\n- Extract Provider Name:\n  - Found in the FIRST email body.\n  - NOT from the email address.\n  - Exclude our firm name: Beverly Law.\nOUTPUT REQUIREMENTS:\nReturn ONLY valid JSON in the following format:\n{\n  \"status\": \"accepted | rejected | provided details | Accepted and Provided details | asked for clerance | asking for payment | bill correction | bill confirmation | unclear\",\n  \"reasoning\": \"Brief explanation referencing ONLY the provider's latest message\",\n  \"provider_message\": \"Concise summary of the provider's latest message\",\n  \"provider_name\": \"Provider name from first email body\",\n  \"patient_name\": \"Patient name from conversation\"\n}\nDo not include any extra commentary outside the JSON."
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        1744,
+        4896
+      ],
+      "id": "357525c5-b3ba-4e21-96ab-7cca5badf964",
+      "name": "AI Agent",
+      "retryOnFail": true,
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-5.2",
+          "mode": "list",
+          "cachedResultName": "gpt-5.2"
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        1760,
+        5120
+      ],
+      "id": "cd0e3b22-64bf-4bf1-905b-3644268c1405",
+      "name": "OpenAI Chat Model",
+      "credentials": {
+        "openAiApi": {
+          "id": "7fbCuNCbBrhyTPqW",
+          "name": "OpenAi account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsonSchemaExample": "{\n\t\"Intent\": \"aaa\",\n\t\"Confidence\": \"0.8\",\n    \"reasoning\": \"....\",\n    \"Provider_name\" : \"....\",\n    \"Patient_name\" : \"....\",\n  \"corrected_bill_amount\": \"The corrected bill amount if status is bill correction, otherwise null\",\n  \"P_F\": \"Provider name with all spaces replaced by + signs (e.g. CMS+Medicare)\"\n}"
+      },
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        1888,
+        5120
+      ],
+      "id": "0a385c0a-7b9e-43b6-87c4-e1303c157cf7",
+      "name": "Structured Output Parser"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.output.Intent }}",
+                    "rightValue": "accepted",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "c6ef3c81-4c8f-44df-b59b-c6090b643172"
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "f2d68dcd-6c3d-47eb-85a0-cd61d808baf7",
+                    "leftValue": "={{ $json.output.Intent }}",
+                    "rightValue": "rejected",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "e8c16dff-361d-4c2e-ad67-7d5871c63b69",
+                    "leftValue": "={{ $json.output.Intent }}",
+                    "rightValue": "asked for clerance",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "0ab3faf4-dce1-40a7-a91b-ce8d8cdd4fbc",
+                    "leftValue": "={{ $json.output.Intent }}",
+                    "rightValue": "provided details",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "55941849-efba-4c4e-9036-9a4dc5d67e72",
+                    "leftValue": "={{ $json.output.Intent }}",
+                    "rightValue": "asking for payment",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "ac429709-a419-4efc-8afc-066fd73ea86a",
+                    "leftValue": "={{ $json.output.Intent }}",
+                    "rightValue": "unclear",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "3e2d7284-8454-4400-9207-d48b27a54329",
+                    "leftValue": "={{ $json.output.Intent }}",
+                    "rightValue": "Accepted and Provided details",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "61d2cfef-f673-43d5-b7e7-a9b51f0dc857",
+                    "leftValue": "={{ $json.output.Intent }}",
+                    "rightValue": "bill correction",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "733824e4-64c9-497a-9999-e189dfeeaca9",
+                    "leftValue": "={{ $json.output.Intent }}",
+                    "rightValue": "bill confirmation",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        2096,
+        4800
+      ],
+      "id": "9bf9ff9b-edf8-407f-b8f6-82879a106b50",
+      "name": "Switch"
+    },
+    {
+      "parameters": {
+        "url": "=https://casepeerai.onrender.com/case/{{ $json.id }}/settlement/negotiations/",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3040,
+        4064
+      ],
+      "id": "aea0e73f-a66f-407b-9a0f-4871fc8f136a",
+      "name": "HTTP Request"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are an expert HTML analyzer.\nYour task:\n- Review the following HTML.\n- Determine the Providers IDs and Providers names providers names can be found in this class \"nopad bottom wordbreak\".\nAnd also fetch the patient's name.\nAnd also fetch Actuall bill\n\nHere is the HTML\n{{ $json.response }}\n\nAlso get the Provider's name the MPID from this and the ammount offered {{ $('Merge').item.json.text }} the name to whome the message was sent. Beverly Law is our firm's name not the provider\n\nSchema:\n{\n  \"MPID\": [\n    {\n      \"providername\": \"string\",\n      \"Amountoffered\": \"string\",\n      \"PatientName\": \"string\",\n      \"ActualBill\": \"string\"\n    }\n  ],\n  \"PID\": [\n    {\n      \"Provider Name\": \"string\",\n      \"Provider ID\": \"string\"\n    }\n  ]\n}\n### Output Rules\n- Output **only** valid JSON.\n- Use **exactly** the property names shown.\n- Do not wrap the JSON in code blocks.\n- Do not include any extra words like “Here is the result”.\n- The output must start with `{` and end with `}`.",
+        "hasOutputParser": true,
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        3328,
+        3968
+      ],
+      "id": "8fc3f761-5dc7-4fa9-bbcc-c3cf525d79d1",
+      "name": "AI Agent1",
+      "retryOnFail": true,
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "o4-mini-2025-04-16",
+          "mode": "list",
+          "cachedResultName": "o4-mini-2025-04-16"
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        3344,
+        4192
+      ],
+      "id": "65b4100e-b163-43e7-b743-977f40323d81",
+      "name": "OpenAI Chat Model1",
+      "credentials": {
+        "openAiApi": {
+          "id": "7fbCuNCbBrhyTPqW",
+          "name": "OpenAi account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "messageId": "={{ $('Get a thread').item.json.messages[0].id }}",
+        "simple": false,
+        "options": {
+          "downloadAttachments": false
+        }
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        2096,
+        3696
+      ],
+      "id": "ca26413d-83b0-4b56-847c-6a8195adedb7",
+      "name": "Get a message",
+      "webhookId": "b641f19f-63e9-4627-b31b-6a9769e729e0",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "qu1bypdqFgmCNgVo",
+          "name": "Gmail account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineAll",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        2528,
+        4064
+      ],
+      "id": "827d67ff-1d05-48b7-8c67-1da1179cc23d",
+      "name": "Merge"
+    },
+    {
+      "parameters": {
+        "jsonSchemaExample": "{\n  \n  \"MPID\": [\n    {\n      \"providername\": \"string\",\n      \"Amountoffered\": \"string\",\n      \"PatientName\": \"string\",\n      \"ActualBill\": \"string\"\n    }\n  ],\n  \"PID\": [\n    {\n      \"Provider Name\": \"string\",\n      \"Provider ID\": \"string\"\n    }\n  ]\n}"
+      },
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        3472,
+        4192
+      ],
+      "id": "64c2688f-aab6-4303-82fc-ed717eaaca4c",
+      "name": "Structured Output Parser1"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get input JSON\nconst data = $input.first().json.output;\n\n// Normalize helper: lowercase, remove punctuation\nconst normalize = str =>\n  str?.toLowerCase().replace(/[^a-z\\s]/g, '').trim();\n\n// Extract meaningful tokens (ignore \"dr\", \"md\", etc.)\nconst getTokens = str =>\n  normalize(str)\n    ?.split(/\\s+/)\n    .filter(t => t && ![\"dr\", \"md\", \"mr\", \"mrs\", \"ms\"].includes(t));\n\n// Prepare tokens\nconst mpidTokens = getTokens(data.MPID[0].providername);\nconst pidList = data.PID;\n\n// Try to match using last-name or token overlap logic\nlet match = null;\n\n// 1️⃣ Try exact last name match first\nconst mpidLastName = mpidTokens[mpidTokens.length - 1];\nmatch = pidList.find(p => {\n  const pidTokens = getTokens(p[\"Provider Name\"]);\n  return pidTokens.includes(mpidLastName);\n});\n\n// 2️⃣ If no match found, try partial overlap\nif (!match) {\n  match = pidList.find(p => {\n    const pidTokens = getTokens(p[\"Provider Name\"]);\n    return mpidTokens.some(t => pidTokens.includes(t));\n  });\n}\n\n// Return both matched Provider ID and Amount offered\nreturn [{\n  matchedProviderID: match ? match[\"Provider ID\"] : null,\n  amountOffered: data.MPID[0].Amountoffered || null\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3680,
+        4064
+      ],
+      "id": "3649efe6-3f95-4a62-a24e-77dc1544770a",
+      "name": "Code"
+    },
+    {
+      "parameters": {
+        "url": "=https://casepeerai.onrender.com/case/{{ $('HTTP Request13').item.json.id }}/settlement/negotiations/",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3968,
+        4064
+      ],
+      "id": "4278144f-8d0c-4cec-964c-e4998ed23be5",
+      "name": "HTTP Request1"
+    },
+    {
+      "parameters": {
+        "url": "=https://casepeerai.onrender.com/case/{{ $('HTTP Request13').item.json.id }}/settlement/accept-unaccept-health-lien/{{ $('Code').item.json.matchedProviderID }}/",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        5760,
+        4064
+      ],
+      "id": "9adc736a-f307-4cde-9f52-b904299b9862",
+      "name": "HTTP Request2"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineAll",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        2528,
+        4368
+      ],
+      "id": "0f512dae-ac36-4f4b-a98c-900ae1f585e1",
+      "name": "Merge1"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are an expert lien negotiator named Alferd. The client has declined our previous offer.\nOriginal Bill: {{ $json.originalBill }}\nYour maximum offer this round is exactly 33% of the original bill.\n\nCalculate 33% of {{ $json.originalBill }} → this is your maximum offer amount.\nYour previous offer was 2/3 of 33% of {{ $json.originalBill }}.\n\nClient's Last Response: {{ $('Get a message3').item.json.text }}\n\nCRITICAL MATH INSTRUCTIONS — READ CAREFULLY:\nThe client may express a counter offer using words like \"half\", \"1/3\", \"quarter\", or other fractions instead of a specific dollar amount. You MUST calculate the actual dollar value yourself based on the original bill of {{ $json.originalBill }}.\nExamples (assuming original bill = $1510):\n\nClient says \"reduce by half\" or \"pay half\" → client counter offer = $1510 × 0.50 = $755\nClient says \"1/3\" → client counter offer = $1510 × 0.333 = $503.33\nClient says \"quarter\" → client counter offer = $1510 × 0.25 = $377.50\n\nAlways convert any fraction or descriptive word into an actual dollar amount before comparing.\nDecision Logic:\n\nFirst, calculate YOUR maximum offer = {{ $json.originalBill }} × 0.33 (round to 2 decimal places).\nThen, determine the client's counter offer dollar amount (convert fractions/words to dollars as shown above).\nIf the client's counter offer (in dollars) is less than or equal to your maximum offer → ACCEPT the client's counter offer amount.\nIf the client's counter offer (in dollars) is greater than your maximum offer → Offer your maximum amount (33% of original bill).\nNever offer more than 33% of the original bill under any circumstances.\nDo NOT mention percentages, fractions, or the 33% rule in your email. Only mention dollar amounts.\n\n\nEmail Rules:\n\nWrite a professional negotiation email to Dr. Ron J. Rudometkin regarding client Kanongataa, Lesieli.\nDo NOT use \\n — use </br> for line breaks.\nDo NOT include any contact information.\nDo NOT mention that you have a cap or limit on what you can offer.\nDo NOT mention any percentages or fractions — only dollar figures.\nSign off as: Alferd, Lien Negotiator",
+        "hasOutputParser": true,
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        3904,
+        4256
+      ],
+      "id": "a2877d80-62e1-4a0f-b1aa-390c322dc4ab",
+      "name": "AI Agent2",
+      "retryOnFail": true,
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "jsonSchemaExample": "{\n  \"Subject\": [\n      \"string\"\n  ],\n  \"Body\":\"Body\",\n  \"offeredbill\":\"amount\",\n  \"actualbill\":\"amount\",\n  \"Patientname\":\"string\"\n}"
+      },
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        4048,
+        4480
+      ],
+      "id": "e1f1447c-3661-406b-b36b-dc3008f4d2ee",
+      "name": "Structured Output Parser2"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-4.1-mini"
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        3920,
+        4480
+      ],
+      "id": "9f1e6fa4-23a7-4209-95eb-af4a76c8fdcf",
+      "name": "OpenAI Chat Model2",
+      "credentials": {
+        "openAiApi": {
+          "id": "7fbCuNCbBrhyTPqW",
+          "name": "OpenAi account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are an expert HTML analyzer.\nYour task:\n- Review the following HTML.\n- Determine the following details:\n\nhealth-liens-TOTAL_FORMS\n\nhealth-liens-INITIAL_FORMS\n\nhealth-liens-MIN_NUM_FORMS\n\nhealth-liens-MAX_NUM_FORMS\n\nsettlement-loans-TOTAL_FORMS\n\nsettlement-loans-INITIAL_FORMS\n\nsettlement-loans-MIN_NUM_FORMS\n\nsettlement-loans-MAX_NUM_FORMS\n\nhealth-insurance-liens-TOTAL_FORMS\n\nhealth-insurance-liens-INITIAL_FORMS\n\nhealth-insurance-liens-MIN_NUM_FORMS\n\nhealth-insurance-liens-MAX_NUM_FORMS\n\nmisc-liens-TOTAL_FORMS\n\nmisc-liens-INITIAL_FORMS\n\nmisc-liens-MIN_NUM_FORMS\n\nmisc-liens-MAX_NUM_FORMS\n\nattorney-liens-TOTAL_FORMS\n\nattorney-liens-INITIAL_FORMS\n\nattorney-liens-MIN_NUM_FORMS\n\nattorney-liens-MAX_NUM_FORMS\n\nhealth-liens-0-id\n\nhealth-liens-0-final_cost\n\nhealth-liens-1-id\n\nhealth-liens-1-final_cost\n\nhealth-liens-2-id\n\nhealth-liens-2-final_cost\n\nGet all the health-liens id and final_cost regardless of number they can range upto health-liens-100-id, health-liens-100-final_cost\n\n\nHere is the HTML\n{{ $json.response }}\n\n\n\n### Output Rules\n- Output **only** valid JSON.\n- Use **exactly** the property names shown.\n- Do not wrap the JSON in code blocks.\n- Do not include any extra words like “Here is the result”.\n- The output must start with `{` and end with `}`.",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        4256,
+        3968
+      ],
+      "id": "59abcfff-c451-448d-825e-424d6809e8bb",
+      "name": "AI Agent3",
+      "retryOnFail": true
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "o4-mini-2025-04-16",
+          "mode": "list",
+          "cachedResultName": "o4-mini-2025-04-16"
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        4336,
+        4192
+      ],
+      "id": "a22e8590-ed49-4126-a4eb-1889d228a091",
+      "name": "OpenAI Chat Model3",
+      "credentials": {
+        "openAiApi": {
+          "id": "7fbCuNCbBrhyTPqW",
+          "name": "OpenAi account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get input data\nconst aiOutput = JSON.parse($('AI Agent3').item.json.output);\nconst { matchedProviderID, amountOffered } = $('Code').item.json;\n\n// Clean amount (remove \"$\" and commas)\nconst cleanAmount = amountOffered.replace(/[^0-9.]/g, '');\n\n// Find matching lien ID and update its final_cost\nfor (const key in aiOutput) {\n  if (key.endsWith('-id') && aiOutput[key] === matchedProviderID) {\n    const index = key.match(/health-liens-(\\d+)-id/)[1];\n    const costKey = `health-liens-${index}-final_cost`;\n    aiOutput[costKey] = cleanAmount;\n    break;\n  }\n}\n\n// Return updated JSON as string\nreturn [{\n  updatedOutput: JSON.stringify(aiOutput)\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4672,
+        4064
+      ],
+      "id": "dfc07e7c-8ff1-41a5-9ac6-ad717f0655c5",
+      "name": "Code2"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse the updatedOutput JSON string\nconst parsed = JSON.parse($input.first().json.updatedOutput);\n\n// Return it as a real JSON object for the next node\nreturn [parsed];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4960,
+        4064
+      ],
+      "id": "7e1ec13b-8f17-4bf0-a857-1a6e49e394d6",
+      "name": "Code4"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://casepeerai.onrender.com/case/{{ $('HTTP Request13').item.json.id }}/settlement/negotiations/",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "specifyBody": "string",
+        "body": "={{ $json.body }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        5472,
+        4064
+      ],
+      "id": "6d357d6a-0065-4f51-a037-c7362d8655d4",
+      "name": "HTTP Request4"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get the cleaned JSON from the previous node\nconst data = $input.first().json;\n\n// Turn it into URL-encoded key=value pairs\nconst formBody = Object.entries(data)\n  .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value ?? '')}`)\n  .join('&');\n\n// Return as raw string for HTTP body\nreturn [{ body: formBody }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5184,
+        4064
+      ],
+      "id": "2996adf3-38a3-4ae0-bde0-21b3d847b6dc",
+      "name": "Code5"
+    },
+    {
+      "parameters": {
+        "resource": "thread",
+        "operation": "reply",
+        "threadId": "={{ $('Get a thread').item.json.messages[0].threadId }}",
+        "messageId": "={{ $('Get a thread').item.json.messages[1].id }}",
+        "message": "=Dear {{ $('AI Agent1').item.json.output.MPID[0].providername }},\n{{ $('AI Agent1').item.json.output.MPID[0].providername }}\nI hope you’re well. Following our recent agreement regarding the negotiated balance for {{ $('AI Agent1').item.json.output.MPID[0].PatientName }}, we’re preparing to issue payment.\n\nBefore sending it, could you please confirm the correct payee name and mailing address for the check? This will ensure prompt and accurate delivery. Also we will need \n\nThank you for your cooperation and assistance.\n\nBest regards,\nNegotiation Officer\nBawerly Law Firm",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        5984,
+        4064
+      ],
+      "id": "abffd283-022f-4264-affd-e9e4aee5f8a7",
+      "name": "Reply to a message",
+      "webhookId": "5e555b6a-997e-4c09-be0b-b229ead29333",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "qu1bypdqFgmCNgVo",
+          "name": "Gmail account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "thread",
+        "operation": "get",
+        "threadId": "={{ $node[\"Get a thread\"].json.messages[0].threadId }}",
+        "simple": false,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        2528,
+        4704
+      ],
+      "id": "7aaa636e-7142-4f96-8a96-f7210676bfce",
+      "name": "Get a thread1",
+      "webhookId": "3ce369d4-c00f-4054-85a9-3d02d4457a7a",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "qu1bypdqFgmCNgVo",
+          "name": "Gmail account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// ✅ Get Gmail thread data from \"Get a thread1\"\nconst threadNode = $node[\"Get a thread1\"];\nconst thread =\n  threadNode?.json?.messages ||\n  threadNode?.items?.[0]?.json?.messages;\n\nif (!Array.isArray(thread)) {\n  return [\n    {\n      json: {\n        error:\n          \"No Gmail messages found. Check if the node name 'Get a thread1' matches exactly or if output has 'messages' array.\",\n      },\n    },\n  ];\n}\n\n// ✅ Gmail Base64 decoder\nfunction decodeGmailBase64(data) {\n  if (!data) return \"\";\n  const normalized = data.replace(/-/g, \"+\").replace(/_/g, \"/\");\n  return Buffer.from(normalized, \"base64\").toString(\"utf-8\");\n}\n\n// ✅ Text cleaner: removes \\n, \\r, \\t, extra spaces\nfunction cleanText(text) {\n  return text\n    .replace(/[\\r\\n\\t]+/g, \" \") // replace newlines and tabs with spaces\n    .replace(/\\s{2,}/g, \" \") // collapse multiple spaces\n    .trim();\n}\n\n// ✅ Extract cleaned messages\nconst cleaned = thread.map((msg) => {\n  const headers = msg.payload?.headers || [];\n  const fromHeader = headers.find(\n    (h) => h.name?.toLowerCase() === \"from\"\n  );\n  const from = msg.From || fromHeader?.value || \"Unknown Sender\";\n\n  let body = \"\";\n  if (msg.payload?.body?.data) {\n    body = decodeGmailBase64(msg.payload.body.data);\n  } else if (msg.payload?.parts?.length) {\n    const textPart = msg.payload.parts.find(\n      (p) => p.mimeType === \"text/plain\"\n    );\n    if (textPart?.body?.data) {\n      body = decodeGmailBase64(textPart.body.data);\n    }\n  }\n\n  return {\n    json: {\n      from,\n      body: cleanText(body),\n    },\n  };\n});\n\n// ✅ Return formatted array of objects\nreturn cleaned;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3392,
+        4704
+      ],
+      "id": "8d09afde-9cb3-47f7-acc2-7f0fa3c350ef",
+      "name": "Code6"
+    },
+    {
+      "parameters": {
+        "jsCode": "return $json.messages.map(m => {\n  let body = '';\n  try {\n    const part = m.payload?.parts?.find(p => p.mimeType === 'text/plain');\n    if (part?.body?.data) {\n      body = Buffer.from(part.body.data, 'base64').toString('utf8');\n    } else {\n      body = m.snippet || '';\n    }\n  } catch (e) {\n    body = 'Error decoding body';\n  }\n\n  // Clean unwanted newlines, carriage returns, and extra spaces\n  body = body\n    .replace(/(\\r\\n|\\n|\\r)/g, ' ') // replace line breaks with spaces\n    .replace(/\\s+/g, ' ')          // collapse multiple spaces into one\n    .trim();                       // remove leading/trailing spaces\n\n  return {\n    from: m.From,\n    body\n  };\n});\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1808,
+        3696
+      ],
+      "id": "798e24e4-0ac5-4979-88a4-0dda2d747342",
+      "name": "Code8"
+    },
+    {
+      "parameters": {
+        "url": "=https://casepeerai.onrender.com/api/v1/case/case-search/?search={{ $('Switch').item.json.output.Patient_name }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3040,
+        4704
+      ],
+      "id": "9665341a-9460-4797-9583-6b4a897b8018",
+      "name": "HTTP Request6"
+    },
+    {
+      "parameters": {
+        "operation": "download",
+        "fileId": {
+          "__rl": true,
+          "value": "={{ $json.documentId }}",
+          "mode": "id"
+        },
+        "options": {
+          "googleFileConversion": {
+            "conversion": {
+              "docsToFormat": "application/pdf"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        4960,
+        4704
+      ],
+      "id": "116ffb09-7328-49ef-947a-179c5e1dd314",
+      "name": "Download file",
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "1FfoTHFvYJVC9Awc",
+          "name": "Google Drive account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "https://fissureless-arline-creepily.ngrok-free.dev/case/1850882/document/upload-file/",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        848,
+        6224
+      ],
+      "id": "3fb44252-afb6-4bfa-a74f-546181098c13",
+      "name": "HTTP Request8"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://casepeerai.onrender.com/case/1850882/document/upload-file/",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "parameterType": "formBinaryData",
+              "name": "=file",
+              "inputDataFieldName": "data"
+            },
+            {
+              "name": "docname",
+              "value": "={{$binary.data.fileName}}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        5184,
+        4704
+      ],
+      "id": "9ee4c032-11e1-4d59-970b-9755f51585e4",
+      "name": "HTTP Request9"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Combine all input items into one array inside a single item\nreturn [\n  {\n    json: {\n      emails: $input.all().map(item => item.json)\n    }\n  }\n];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3680,
+        4704
+      ],
+      "id": "abca67be-0391-45ca-a3c2-1a00f81555f8",
+      "name": "Code9"
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentURL": "={{ $json.id }}",
+        "actionsUi": {
+          "actionFields": [
+            {
+              "action": "insert",
+              "text": "={{ $('Code10').item.json.combined_text }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.googleDocs",
+      "typeVersion": 2,
+      "position": [
+        4672,
+        4704
+      ],
+      "id": "9983afb6-f711-4d21-9a99-9b84f8ca93cc",
+      "name": "Update a document",
+      "credentials": {
+        "googleDocsOAuth2Api": {
+          "id": "59zJhvgJ3cPOiPqT",
+          "name": "Google Docs account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get all emails from input\nconst emails = $input.item.json.emails;\n\n// Combine all into a single text string\nconst combinedText = emails.map(email => {\n  return `From: ${email.from}\\n${email.body}`;\n}).join('\\n\\n---\\n\\n');\n\n// Return one item with a clean text field\nreturn [\n  {\n    json: {\n      combined_text: combinedText\n    }\n  }\n];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3968,
+        4704
+      ],
+      "id": "6772648e-7d50-4218-816a-93b2f360d1f0",
+      "name": "Code10"
+    },
+    {
+      "parameters": {
+        "resource": "thread",
+        "operation": "get",
+        "threadId": "={{ $node[\"Get a thread\"].json.messages[0].threadId }}",
+        "simple": false,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        2528,
+        4992
+      ],
+      "id": "d00d2bde-b05f-4977-83aa-8557ef5e8587",
+      "name": "Get a thread2",
+      "webhookId": "3ce369d4-c00f-4054-85a9-3d02d4457a7a",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "qu1bypdqFgmCNgVo",
+          "name": "Gmail account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "=https://casepeerai.onrender.com/api/v1/case/case-search/?search={{ $('Switch').item.json.output.Patient_name }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2752,
+        4992
+      ],
+      "id": "fd039af5-351f-45b5-ad55-d62b747f0ca3",
+      "name": "HTTP Request7"
+    },
+    {
+      "parameters": {
+        "url": "=https://casepeerai.onrender.com/case/{{ $json.id }}/",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3040,
+        4992
+      ],
+      "id": "a47a723d-50a9-44c7-a629-54bd5300e8e1",
+      "name": "HTTP Request10"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get the HTML returned by your API\nconst html = $json.response;\n\n// --- Extract patient name from <title> ---\nlet patientName = null;\nconst titleMatch = html.match(/<title>\\s*(.*?)\\s*-\\s*Home\\s*<\\/title>/i);\nif (titleMatch) {\n  patientName = titleMatch[1].trim();\n}\n\n// --- Extract selected case status from the <select name=\"casestatus\"> ---\nlet caseStatus = null;\nconst selectRegex = /<select[^>]*name=[\"']casestatus[\"'][^>]*>([\\s\\S]*?)<\\/select>/i;\nconst selectMatch = html.match(selectRegex);\nif (selectMatch) {\n  const selectContent = selectMatch[1];\n  const selectedOptionMatch = selectContent.match(/<option[^>]*selected[^>]*>(.*?)<\\/option>/i);\n  if (selectedOptionMatch) {\n    caseStatus = selectedOptionMatch[1].trim();\n  }\n}\n\n// --- Return extracted results ---\nreturn [{\n  patientName: patientName || 'Unknown',\n  caseStatus: caseStatus || 'Unknown'\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3392,
+        4992
+      ],
+      "id": "63e0a428-1f95-4d8e-8a07-5a47267ad1bf",
+      "name": "Code11"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.caseStatus }}",
+                    "rightValue": "Lien Negotiations",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "29a87ad4-ed76-4825-a6aa-9bb4a14a15f8"
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "c9cd5bea-d731-412c-bab9-99e791c5104c",
+                    "leftValue": "={{ $json.caseStatus }}",
+                    "rightValue": "disbursement",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        3680,
+        4992
+      ],
+      "id": "e5d2426c-ece3-44a1-9cc2-6c62dec0ea3c",
+      "name": "Switch1"
+    },
+    {
+      "parameters": {
+        "resource": "thread",
+        "operation": "reply",
+        "threadId": "={{ $('Get a thread2').item.json.messages[0].threadId }}",
+        "messageId": "={{ $('Get a thread2').item.json.messages[$('Get a thread2').item.json.messages.length - 1].id }}",
+        "message": "=I hope you are doing well. I wanted to provide you with an update regarding the payment for our client’s case. We truly appreciate your cooperation and the price adjustment you agreed to during our negotiation.\n\nAt this time, the case is still in the lien-negotiation phase. We are currently coordinating with the other medical providers as well as the client to finalize all outstanding matters. Once these negotiations are completed and the final settlement amounts are confirmed, we will be able to process all payments.\n\nBased on the current progress, we anticipate that your payment will be issued within 1 to 2 months. If anything changes or if we are able to expedite the process, I will update you immediately.\n\nThank you again for your patience and collaboration. Please feel free to reach out if you have any questions or need further clarification.\n\nKind regards,",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        3968,
+        4896
+      ],
+      "id": "d2098640-1bd8-4cc4-8094-1f6b9fb3a6c8",
+      "name": "Reply to a message1",
+      "webhookId": "ce99d2f5-62bc-4436-8f59-88ce5c01afad",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "qu1bypdqFgmCNgVo",
+          "name": "Gmail account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "thread",
+        "operation": "reply",
+        "threadId": "={{ $('Get a thread2').item.json.messages[0].threadId }}",
+        "messageId": "={{ $('Get a thread2').item.json.messages[$('Get a thread2').item.json.messages.length - 1].id }}",
+        "message": "=I hope you are well. I am writing to update you regarding the payment for our client’s case.\n\nThe matter has now moved into the disbursement stage, and we are in the process of completing the final paperwork and internal approvals. Based on the current timeline, we anticipate that your payment will be issued within approximately one month.\n\nWe appreciate your patience and cooperation throughout this process. If you need any additional information, please feel free to reach out at any time.\n\nKind regards,",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        3968,
+        5088
+      ],
+      "id": "f5e1ad51-7c29-4540-8fa3-dec080c2971b",
+      "name": "Reply to a message2",
+      "webhookId": "ce99d2f5-62bc-4436-8f59-88ce5c01afad",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "qu1bypdqFgmCNgVo",
+          "name": "Gmail account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://casepeerai.onrender.com/case/{{ $('HTTP Request7').item.json.id }}/notes/add-case-note/",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "=note",
+              "value": "={{ $('Switch').item.json.output.Provider_name }} Asked for Payment Status"
+            },
+            {
+              "name": "time_worked"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4320,
+        4896
+      ],
+      "id": "a95e2437-c573-421c-abbf-63c5f4c983df",
+      "name": "HTTP Request11"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://casepeerai.onrender.com/case/{{ $('HTTP Request7').item.json.id }}/notes/add-case-note/",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "=note",
+              "value": "={{ $('Switch').item.json.output.Provider_name }} Asked for Payment Status"
+            },
+            {
+              "name": "time_worked"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4320,
+        5088
+      ],
+      "id": "16eccecb-bb25-4189-9984-7771467fa9ad",
+      "name": "HTTP Request12"
+    },
+    {
+      "parameters": {
+        "content": "## Getting the new Email's Thread"
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        1552,
+        3632
+      ],
+      "typeVersion": 1,
+      "id": "2b8c7b84-64cd-4685-bcbd-4de8e307ff06",
+      "name": "Sticky Note"
+    },
+    {
+      "parameters": {
+        "content": "## Marking The email as read so any email won't get processed twice"
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        2272,
+        3408
+      ],
+      "typeVersion": 1,
+      "id": "9de4516b-86d4-4b07-ae43-b613d93148c5",
+      "name": "Sticky Note1"
+    },
+    {
+      "parameters": {
+        "content": "## The Intent switch then used to select the path"
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        2928,
+        4064
+      ],
+      "typeVersion": 1,
+      "id": "01c8e6cb-1559-487b-a1da-f08f5fcdf91a",
+      "name": "Sticky Note3"
+    },
+    {
+      "parameters": {
+        "content": "## Requesting API to get Provider's ID and name Patient ID and Name"
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        3504,
+        3632
+      ],
+      "typeVersion": 1,
+      "id": "d448f504-385e-4e21-ac64-0abdd3f95ae9",
+      "name": "Sticky Note4"
+    },
+    {
+      "parameters": {
+        "content": "## Requesting API to get Provider Related Documents"
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        4304,
+        3680
+      ],
+      "typeVersion": 1,
+      "id": "ca1af3cf-92ec-42a8-b6ad-fc205bb8be6b",
+      "name": "Sticky Note5"
+    },
+    {
+      "parameters": {
+        "content": "## Accepting the Lien using api after provider has accepted"
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        5760,
+        3680
+      ],
+      "typeVersion": 1,
+      "id": "7a0d60c9-4d69-4241-bee3-2e08af71ee5e",
+      "name": "Sticky Note6"
+    },
+    {
+      "parameters": {
+        "content": "## Requesting API to get Provider Related Documents"
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        3488,
+        4496
+      ],
+      "typeVersion": 1,
+      "id": "8767f73d-b3d9-4dc9-91a9-d2745750ae41",
+      "name": "Sticky Note7"
+    },
+    {
+      "parameters": {
+        "content": "## Requesting API to create a folder in the case"
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        3856,
+        4480
+      ],
+      "typeVersion": 1,
+      "id": "1ccd3720-fa26-4fc9-adcc-8c9048035f8b",
+      "name": "Sticky Note8"
+    },
+    {
+      "parameters": {
+        "content": "## Converting the Email trail into a pdf"
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        4384,
+        4496
+      ],
+      "typeVersion": 1,
+      "id": "966df66d-1b7b-46bb-b268-74276deb4f25",
+      "name": "Sticky Note9"
+    },
+    {
+      "parameters": {
+        "operation": "copy",
+        "fileId": {
+          "__rl": true,
+          "value": "1W_DGsXmsokSLs-mmBSKiroLaZIYBWJnDz1_WYcB89Jg",
+          "mode": "list",
+          "cachedResultName": "BlankD",
+          "cachedResultUrl": "https://docs.google.com/document/d/1W_DGsXmsokSLs-mmBSKiroLaZIYBWJnDz1_WYcB89Jg/edit?usp=drivesdk"
+        },
+        "name": "=Acceptance Of {{ $('Switch').first().json.output.Provider_name }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        4320,
+        4704
+      ],
+      "id": "9acf2ce6-387e-4936-97f2-1f8f15eba37b",
+      "name": "Copy file",
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "1FfoTHFvYJVC9Awc",
+          "name": "Google Drive account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## Uploading the PDF in Casepeer"
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        5344,
+        4496
+      ],
+      "typeVersion": 1,
+      "id": "d4d19b45-a618-4816-8166-25eaa55e7bdf",
+      "name": "Sticky Note10"
+    },
+    {
+      "parameters": {
+        "url": "=https://casepeerai.onrender.com/api/v1/case/case-search/?search={{ $('Switch').item.json.output.Patient_name }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2752,
+        4064
+      ],
+      "id": "faee9aa0-d1ce-41f1-be43-b3f5bb4c9bdb",
+      "name": "HTTP Request13"
+    },
+    {
+      "parameters": {
+        "url": "=https://casepeerai.onrender.com/api/v1/case/case-search/?search={{ $('AI Agent1').item.json.output.MPID[0].PatientName }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        6432,
+        4064
+      ],
+      "id": "939171df-8225-4ffc-b2ba-84f2159e5780",
+      "name": "HTTP Request14"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://casepeerai.onrender.com/internal-api/negotiations",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"case_id\": \"{{$json.id}}\",\n  \"negotiation_type\": \"Accepted\",\n  \"email_body\": \"{{$('Get a message1').item.json.snippet}}\",\n  \"to\": \"{{ $('Get a message').item.json.headers.to.replace(/^To:\\s*/,'') }}\",\n  \"date\": \"{{$now}}\",\n  \"actual_bill\": {{ parseFloat($('AI Agent1').item.json.output.MPID[0].ActualBill.toString().replace(/[^0-9.]/g, '')) }},\n  \"offered_bill\": {{ parseFloat($('AI Agent1').item.json.output.MPID[0].Amountoffered.toString().replace(/[^0-9.]/g, '')) }},\n  \"sent_by_us\": false,\n  \"result\": \"Accepted\"\n}\n",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        6656,
+        4064
+      ],
+      "id": "64d95238-bdd7-41cf-9280-25c46d9f6826",
+      "name": "HTTP Request15"
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "messageId": "={{ $json.id }}"
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        6208,
+        4064
+      ],
+      "id": "b2f84547-2401-488a-a9d7-2ddfbbfabdfd",
+      "name": "Get a message1",
+      "webhookId": "a597213e-481f-43cf-a305-1f871e64b221",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "qu1bypdqFgmCNgVo",
+          "name": "Gmail account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "=https://casepeerai.onrender.com/api/v1/case/case-search/?search={{ $('AI Agent2').item.json.output.Patientname }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        5184,
+        4368
+      ],
+      "id": "5667f7c3-406d-4bb7-97dc-ff7d5e5bb706",
+      "name": "HTTP Request16"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://casepeerai.onrender.com/internal-api/negotiations",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "case_id",
+              "value": "={{$json.id.toString()}}"
+            },
+            {
+              "name": "negotiation_type",
+              "value": "Rejected"
+            },
+            {
+              "name": "email_body",
+              "value": "={{ $('AI Agent2').item.json.output.Body }}"
+            },
+            {
+              "name": "to",
+              "value": "={{ $('Get a message').item.json.headers.to.replace(/^To:\\s*/,'') }}"
+            },
+            {
+              "name": "date",
+              "value": "={{$now}}"
+            },
+            {
+              "name": "actual_bill",
+              "value": "={{ parseFloat($('AI Agent2').item.json.output.actualbill.replace(/,/g, '')) }}"
+            },
+            {
+              "name": "offered_bill",
+              "value": "={{ parseFloat($('AI Agent2').item.json.output.offeredbill.replace(/,/g, '')) }}\n"
+            },
+            {
+              "name": "sent_by_us",
+              "value": "true"
+            },
+            {
+              "name": "result",
+              "value": "Rejected"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        5472,
+        4368
+      ],
+      "id": "63bf6d7c-4fa5-49d5-87ed-144663b8efc1",
+      "name": "HTTP Request17"
+    },
+    {
+      "parameters": {
+        "url": "=https://casepeerai.onrender.com/api/v1/case/case-search/?search={{ $('AI Agent').first().json.output.Patient_name }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        5760,
+        4704
+      ],
+      "id": "f328a2fd-6515-41bb-ad82-90c8c5640dd6",
+      "name": "HTTP Request18"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://casepeerai.onrender.com/api/negotiations",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"case_id\": \"{{$json.id}}\",\n  \"negotiation_type\": \"Provided Details\",\n  \"email_body\": \"Approved\",\n  \"to\": \"{{ $('AI Agent4').item.json.output['Reciever Email'] }}\",\n  \"date\": \"{{$now}}\",\n  \"actual_bill\": {{ $('AI Agent4').item.json.output.actualbill }},\n  \"offered_bill\": {{ $('AI Agent4').item.json.output.offeredbill }},\n  \"sent_by_us\": false,\n  \"result\": \"Provided Details\"\n}\n",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        5984,
+        4704
+      ],
+      "id": "1e9e0e5e-10b6-4ac6-bc2b-a3bca6f008cd",
+      "name": "HTTP Request19"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are an expert negotiator. The client has approved our previous offer.\n\nYou can check the email thread here:\n\n{{ $('Code in JavaScript').first().json.formattedThread }}\n\nProvider has accepted the offer give me these details from the thresad\n\nFormat your response as:\n\n**Actual Bill:** amount\n**Offered Amount:** amount\n**Reciever Email:** Email\n",
+        "hasOutputParser": true,
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        5408,
+        4704
+      ],
+      "id": "f5c7cd34-8a57-4b2b-84aa-844cf84a5408",
+      "name": "AI Agent4",
+      "retryOnFail": true,
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "jsonSchemaExample": "{\n  \"offeredbill\":\"amount\",\n  \"actualbill\":\"amount\",\n  \"Reciever Email\":\"Email\"\n}"
+      },
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        5552,
+        4928
+      ],
+      "id": "7a59fe48-1c9b-4726-bae8-61ceb8542e0a",
+      "name": "Structured Output Parser3"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-4.1-mini"
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        5424,
+        4928
+      ],
+      "id": "0e069fba-4a36-4024-9dd0-19176f771f59",
+      "name": "OpenAI Chat Model4",
+      "credentials": {
+        "openAiApi": {
+          "id": "7fbCuNCbBrhyTPqW",
+          "name": "OpenAi account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get the thread data - it's an array at the root level\nconst threadData = items[0].json;\n\n// Check if threadData is an array and get the first element\nconst thread = Array.isArray(threadData) ? threadData[0] : threadData;\nconst messages = thread.messages;\n\n// Format each message\nconst formattedMessages = messages.map(m => {\n  let body = '';\n  \n  // Decode message body\n  if (m.payload.body && m.payload.body.data) {\n    body = Buffer.from(m.payload.body.data, 'base64').toString('utf-8');\n  } else if (m.payload.parts) {\n    body = m.payload.parts\n      .filter(p => p.mimeType === 'text/plain' && p.body.data)\n      .map(p => Buffer.from(p.body.data, 'base64').toString('utf-8'))\n      .join('\\n');\n  }\n  \n  return `From: ${m.From || 'Unknown'}\nTo: ${m.To || 'Unknown'}\nDate: ${m.Date || 'Unknown'}\nSubject: ${m.Subject || 'No Subject'}\n\n${body}`;\n}).join('\\n\\n========================================\\n\\n');\n\n// Return formatted thread\nreturn [{\n  json: {\n    threadId: thread.id,\n    formattedThread: formattedMessages\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2752,
+        4704
+      ],
+      "id": "33f35bc7-2b73-44a9-8f09-05ebceba659a",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://casepeerai.onrender.com/internal-api/cases",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"id\": \"{{ $json.id }}\",\n  \"patient_name\": \"{{ $('AI Agent1').item.json.output.MPID[0].PatientName }}\",\n  \"status\": \"Accepted\",\n  \"fees_taken\": {{ $('HTTP Request15').item.json.offered_bill }},\n  \"savings\": {{ parseFloat($('HTTP Request15').item.json.actual_bill) - parseFloat($('HTTP Request15').item.json.offered_bill) }}\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        7328,
+        4064
+      ],
+      "id": "ccd5cca1-9009-4571-9c3f-326484f7b007",
+      "name": "HTTP Request20"
+    },
+    {
+      "parameters": {
+        "url": "=https://casepeerai.onrender.com/internal-api/cases/{{ $json.case_id }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        6880,
+        4064
+      ],
+      "id": "b3e2d06a-3344-4eae-9557-f4139aaed7a6",
+      "name": "HTTP Request3"
+    },
+    {
+      "parameters": {
+        "url": "=https://casepeerai.onrender.com/api/v1/case/case-search/?search={{ $('AI Agent').item.json.output.Patient_name }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        7104,
+        4064
+      ],
+      "id": "a3525de8-6eee-420c-a082-46cd154759a7",
+      "name": "HTTP Request21"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://casepeerai.onrender.com/case/{{ $('HTTP Request21').item.json.id }}/notes/add-case-note/",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n  \"note\": \"<div>Test 2/18/2026</div>\",\n  \"directed_to\": \"33754\",\n  \"time_worked\": \"\"\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        7552,
+        4064
+      ],
+      "id": "1d4b9524-ae37-4b6b-86c9-0b329bf02372",
+      "name": "HTTP Request22"
+    },
+    {
+      "parameters": {
+        "resource": "thread",
+        "operation": "get",
+        "threadId": "={{ $node[\"Get a thread\"].json.messages[0].threadId }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        2528,
+        5376
+      ],
+      "id": "145c8193-da3b-4ff6-92b7-fe42688fb0bb",
+      "name": "Get a thread3",
+      "webhookId": "e0ca6377-0d07-4481-b992-0eb265416caf",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "qu1bypdqFgmCNgVo",
+          "name": "Gmail account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are an intelligent email analysis assistant for a law firm handling medical bill negotiations. Analyze the following email conversation between our law office and a health provider. The emails are in chronological order.\nYou will read the previous email and write a professional reply for our client's providers\n\nYou are analyzing an email thread.\n\nSubject: {{$node[\"Get a thread3\"].json[\"messages\"][0].Subject}}\n\nLatest Reply From: {{$node[\"Get a thread3\"].json[\"messages\"][$node[\"Get a thread3\"].json[\"messages\"].length - 1].From}}\n\nMessage:\n{{$node[\"Get a thread3\"].json[\"messages\"][$node[\"Get a thread3\"].json[\"messages\"].length - 1].snippet}}\nEmail Attachments:{{ $json.text }}\n\nKeep the reply simple\nMy name is alferd \nAnd my Organization is Beverly Law Firm\n\n",
+        "hasOutputParser": true,
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3,
+      "position": [
+        3328,
+        5376
+      ],
+      "id": "d2c3aca1-e98d-47f8-aa00-5cd9465ae69e",
+      "name": "AI Agent5"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "o4-mini",
+          "mode": "list",
+          "cachedResultName": "o4-mini"
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        3344,
+        5600
+      ],
+      "id": "264a411c-1f3f-484f-b6f3-3e3ab20742db",
+      "name": "OpenAI Chat Model5",
+      "credentials": {
+        "openAiApi": {
+          "id": "7fbCuNCbBrhyTPqW",
+          "name": "OpenAi account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "messageId": "={{ $json.messages[0].id }}",
+        "simple": false,
+        "options": {
+          "downloadAttachments": true
+        }
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        2752,
+        5376
+      ],
+      "id": "bd32e798-67be-42b0-a8a1-f37838a2a2c9",
+      "name": "Get a message2",
+      "webhookId": "da0e642d-cc13-491d-a3c5-4a5280edf068",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "qu1bypdqFgmCNgVo",
+          "name": "Gmail account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "pdf",
+        "binaryPropertyName": "attachment_0",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1.1,
+      "position": [
+        3040,
+        5376
+      ],
+      "id": "e46975e6-70b0-4fc9-a986-5ba1bcbb950c",
+      "name": "Extract from File"
+    },
+    {
+      "parameters": {
+        "jsonSchemaExample": "{\n\t\"subject\": \"California\",\n\t\"email-body\": \"\"\n}"
+      },
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        3472,
+        5600
+      ],
+      "id": "90485737-67bc-4013-a835-5f62a62a9473",
+      "name": "Structured Output Parser4"
+    },
+    {
+      "parameters": {
+        "resource": "thread",
+        "operation": "reply",
+        "threadId": "={{ $('Get a thread3').item.json.id }}",
+        "messageId": "={{ $('Get a thread3').item.json.messages.last().id }}",
+        "emailType": "html",
+        "message": "={{ $json.output['email-body'] }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        3680,
+        5376
+      ],
+      "id": "4b81802a-e177-4bd4-8ce8-818227e3fbad",
+      "name": "Reply to a message3",
+      "webhookId": "cc5653ab-501b-40a1-9b40-04e9d33ae8dd",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "qu1bypdqFgmCNgVo",
+          "name": "Gmail account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "thread",
+        "operation": "get",
+        "threadId": "={{ $node[\"Get a thread\"].json.messages[0].threadId }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        2528,
+        5184
+      ],
+      "id": "8e7d6381-6e36-4ba0-b243-c67876c6584f",
+      "name": "Get a thread4",
+      "webhookId": "45fcd10b-a690-4b54-afd9-bf1ae30eacff",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "qu1bypdqFgmCNgVo",
+          "name": "Gmail account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "messageId": "={{ $('Get a thread').item.json.messages.last().id }}",
+        "simple": false,
+        "options": {
+          "dataPropertyAttachmentsPrefixName": "data",
+          "downloadAttachments": true
+        }
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        2752,
+        4368
+      ],
+      "id": "c323c808-5868-492d-9363-0fdf02727b3b",
+      "name": "Get a message3",
+      "webhookId": "41b3745f-270c-49ca-9db3-eaf1bed39f16",
+      "executeOnce": true,
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "qu1bypdqFgmCNgVo",
+          "name": "Gmail account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## Ai To determine Email's Intent Of Email"
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        2576,
+        4064
+      ],
+      "typeVersion": 1,
+      "id": "e6765295-03e0-46cd-ac30-5421644d75bd",
+      "name": "Sticky Note2"
+    },
+    {
+      "parameters": {
+        "url": "=https://casepeerai.onrender.com/api/v1/case/case-search/?search={{ $('Switch').item.json.output.Patient_name }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3968,
+        3776
+      ],
+      "id": "fb645c5f-3c6d-4669-80a7-7aa3aad9dffb",
+      "name": "HTTP Request23",
+      "executeOnce": false
+    },
+    {
+      "parameters": {
+        "url": "=https://casepeerai.onrender.com/case/{{ $json.id }}/settlement/negotiations/",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        848,
+        6000
+      ],
+      "id": "34b0a05c-7f0f-4e61-8e44-9ed169c1803a",
+      "name": "HTTP Request5"
+    },
+    {
+      "parameters": {
+        "url": "=https://casepeerai.onrender.com/case/{{ $json.id }}/settlement/negotiations/",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4320,
+        3776
+      ],
+      "id": "ece7020a-c2f8-4645-9021-48ea29512a49",
+      "name": "HTTP Request24",
+      "executeOnce": false
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are an expert HTML analyzer.\nYour task:\n- Review the following HTML.\n- Determine the Providers IDs and Providers names providers names can be found in this class \"nopad bottom wordbreak\".\nAnd also fetch the patient's name.\nAnd also fetch Actuall bill\n\nHere is the HTML\n{{ $json.response }}\n\nAlso get the Provider's name the MPID from this and the ammount offered {{ $('Get a thread5').item.json.messages }}offered  the name to whome the message was sent. Beverly Law is our firm's name not the provider\nYou can find the offered ammount from here {{ $('Edit Fields').item.json.attachment0 }}\nSchema:\n{\n  \"MPID\": [\n    {\n      \"providername\": \"string\",\n      \"Amountoffered\": \"string\",\n      \"PatientName\": \"string\",\n      \"ActualBill\": \"string\"\n    }\n  ],\n  \"PID\": [\n    {\n      \"Provider Name\": \"string\",\n      \"Provider ID\": \"string\"\n    }\n  ]\n}\n### Output Rules\n- Output **only** valid JSON.\n- Use **exactly** the property names shown.\n- Do not wrap the JSON in code blocks.\n- Do not include any extra words like “Here is the result”.\n- The output must start with `{` and end with `}`.",
+        "hasOutputParser": true,
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        4608,
+        3664
+      ],
+      "id": "19d103ae-d21e-45e3-bc29-ab1a577f182e",
+      "name": "AI Agent6",
+      "retryOnFail": true,
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "o4-mini-2025-04-16",
+          "mode": "list",
+          "cachedResultName": "o4-mini-2025-04-16"
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        4624,
+        3888
+      ],
+      "id": "4728bfef-14d8-4298-8b59-5db0bf7d44ac",
+      "name": "OpenAI Chat Model6",
+      "credentials": {
+        "openAiApi": {
+          "id": "7fbCuNCbBrhyTPqW",
+          "name": "OpenAi account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsonSchemaExample": "{\n  \n  \"MPID\": [\n    {\n      \"providername\": \"string\",\n      \"Amountoffered\": \"string\",\n      \"PatientName\": \"string\",\n      \"ActualBill\": \"string\"\n    }\n  ],\n  \"PID\": [\n    {\n      \"Provider Name\": \"string\",\n      \"Provider ID\": \"string\"\n    }\n  ]\n}"
+      },
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        4752,
+        3888
+      ],
+      "id": "88c48b76-6dfe-463f-9db9-328392591165",
+      "name": "Structured Output Parser5"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineAll",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        2528,
+        3728
+      ],
+      "id": "39735974-a10f-47bd-a5e2-ad783583df79",
+      "name": "Merge2"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get input JSON\nconst data = $input.first().json.output;\n\n// Normalize helper: lowercase, remove punctuation\nconst normalize = str =>\n  str?.toLowerCase().replace(/[^a-z\\s]/g, '').trim();\n\n// Extract meaningful tokens (ignore \"dr\", \"md\", etc.)\nconst getTokens = str =>\n  normalize(str)\n    ?.split(/\\s+/)\n    .filter(t => t && ![\"dr\", \"md\", \"mr\", \"mrs\", \"ms\"].includes(t));\n\n// Prepare tokens\nconst mpidTokens = getTokens(data.MPID[0].providername);\nconst pidList = data.PID;\n\n// Try to match using last-name or token overlap logic\nlet match = null;\n\n// 1️⃣ Try exact last name match first\nconst mpidLastName = mpidTokens[mpidTokens.length - 1];\nmatch = pidList.find(p => {\n  const pidTokens = getTokens(p[\"Provider Name\"]);\n  return pidTokens.includes(mpidLastName);\n});\n\n// 2️⃣ If no match found, try partial overlap\nif (!match) {\n  match = pidList.find(p => {\n    const pidTokens = getTokens(p[\"Provider Name\"]);\n    return mpidTokens.some(t => pidTokens.includes(t));\n  });\n}\n\n// Return both matched Provider ID and Amount offered\nreturn [{\n  matchedProviderID: match ? match[\"Provider ID\"] : null,\n  amountOffered: data.MPID[0].Amountoffered || null\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4960,
+        3776
+      ],
+      "id": "6d0e8ab5-83fe-44a7-bb8e-8d48b2e0d262",
+      "name": "Code7"
+    },
+    {
+      "parameters": {
+        "url": "=https://casepeerai.onrender.com/case/{{ $('HTTP Request23').item.json.id }}/settlement/negotiations/",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        5184,
+        3776
+      ],
+      "id": "05693a9a-ee3f-4dde-b1a7-799faf73ff6b",
+      "name": "HTTP Request25"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are an expert HTML analyzer.\nYour task:\n- Review the following HTML.\n- Determine the following details:\n\nhealth-liens-TOTAL_FORMS\n\nhealth-liens-INITIAL_FORMS\n\nhealth-liens-MIN_NUM_FORMS\n\nhealth-liens-MAX_NUM_FORMS\n\nsettlement-loans-TOTAL_FORMS\n\nsettlement-loans-INITIAL_FORMS\n\nsettlement-loans-MIN_NUM_FORMS\n\nsettlement-loans-MAX_NUM_FORMS\n\nhealth-insurance-liens-TOTAL_FORMS\n\nhealth-insurance-liens-INITIAL_FORMS\n\nhealth-insurance-liens-MIN_NUM_FORMS\n\nhealth-insurance-liens-MAX_NUM_FORMS\n\nmisc-liens-TOTAL_FORMS\n\nmisc-liens-INITIAL_FORMS\n\nmisc-liens-MIN_NUM_FORMS\n\nmisc-liens-MAX_NUM_FORMS\n\nattorney-liens-TOTAL_FORMS\n\nattorney-liens-INITIAL_FORMS\n\nattorney-liens-MIN_NUM_FORMS\n\nattorney-liens-MAX_NUM_FORMS\n\nhealth-liens-0-id\n\nhealth-liens-0-final_cost\n\nhealth-liens-1-id\n\nhealth-liens-1-final_cost\n\nhealth-liens-2-id\n\nhealth-liens-2-final_cost\n\nGet all the health-liens id and final_cost regardless of number they can range upto health-liens-100-id, health-liens-100-final_cost\n\n\nHere is the HTML\n{{ $json.response }}\n\n\n\n### Output Rules\n- Output **only** valid JSON.\n- Use **exactly** the property names shown.\n- Do not wrap the JSON in code blocks.\n- Do not include any extra words like “Here is the result”.\n- The output must start with `{` and end with `}`.",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        5408,
+        3664
+      ],
+      "id": "ca53dbe0-351a-4b3a-a813-9d5c5bc2b908",
+      "name": "AI Agent7",
+      "retryOnFail": true
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "o4-mini-2025-04-16",
+          "mode": "list",
+          "cachedResultName": "o4-mini-2025-04-16"
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        5488,
+        3888
+      ],
+      "id": "c0abe770-168b-46c6-8d06-d84eca113ce9",
+      "name": "OpenAI Chat Model7",
+      "credentials": {
+        "openAiApi": {
+          "id": "7fbCuNCbBrhyTPqW",
+          "name": "OpenAi account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "messageId": "={{ $('Get a thread').item.json.messages[0].id }}",
+        "simple": false,
+        "options": {
+          "downloadAttachments": true
+        }
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        2752,
+        3728
+      ],
+      "id": "6c307766-9715-410d-b112-d19eb7764208",
+      "name": "Get a message4",
+      "webhookId": "2e318952-6769-461d-971d-62ea954469b4",
+      "executeOnce": true,
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "qu1bypdqFgmCNgVo",
+          "name": "Gmail account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "pdf",
+        "binaryPropertyName": "attachment_0",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1.1,
+      "position": [
+        3040,
+        3776
+      ],
+      "id": "3b0a4f43-7b6e-48ca-879a-44b931993ed1",
+      "name": "Extract from File2"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "74b8cb3c-3c7b-4f0e-b82a-4d603aef05b4",
+              "name": "attachment0",
+              "value": "={{ $json.text }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        3392,
+        3776
+      ],
+      "id": "d7255e05-7cbc-4fe3-8e8d-4713c95c8caa",
+      "name": "Edit Fields"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get input data\nconst aiOutput = JSON.parse($('AI Agent7').item.json.output);\nconst { matchedProviderID, amountOffered } = $('Code7').item.json;\n\n// Clean amount (remove \"$\" and commas)\nconst cleanAmount = amountOffered.replace(/[^0-9.]/g, '');\n\n// Find matching lien ID and update its final_cost\nfor (const key in aiOutput) {\n  if (key.endsWith('-id') && aiOutput[key] === matchedProviderID) {\n    const index = key.match(/health-liens-(\\d+)-id/)[1];\n    const costKey = `health-liens-${index}-final_cost`;\n    aiOutput[costKey] = cleanAmount;\n    break;\n  }\n}\n\n// Return updated JSON as string\nreturn [{\n  updatedOutput: JSON.stringify(aiOutput)\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5760,
+        3776
+      ],
+      "id": "3ae643b8-263e-4440-a55f-7b4dc1a4b8dd",
+      "name": "Code12"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse the updatedOutput JSON string\nconst parsed = JSON.parse($input.first().json.updatedOutput);\n\n// Return it as a real JSON object for the next node\nreturn [parsed];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5984,
+        3776
+      ],
+      "id": "fff5c0c4-5753-4cf5-86e3-4707031467c0",
+      "name": "Code13"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get the cleaned JSON from the previous node\nconst data = $input.first().json;\n\n// Turn it into URL-encoded key=value pairs\nconst formBody = Object.entries(data)\n  .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value ?? '')}`)\n  .join('&');\n\n// Return as raw string for HTTP body\nreturn [{ body: formBody }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        6208,
+        3776
+      ],
+      "id": "706efbd0-d80d-4b02-b5e3-e671b40b0887",
+      "name": "Code14"
+    },
+    {
+      "parameters": {
+        "url": "=https://casepeerai.onrender.com/case/{{ $('HTTP Request23').item.json.id }}/settlement/accept-unaccept-health-lien/{{ $('Code7').item.json.matchedProviderID }}/",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        6880,
+        3776
+      ],
+      "id": "4dd81753-4f4a-4071-b981-331f160b1f22",
+      "name": "HTTP Request26"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://casepeerai.onrender.com/case/{{ $('HTTP Request23').item.json.id }}/settlement/negotiations/",
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "specifyBody": "string",
+        "body": "={{ $json.body }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        6432,
+        3776
+      ],
+      "id": "1c5d7349-fa0f-4334-8078-7c06fd214e2c",
+      "name": "HTTP Request27"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://casepeerai.onrender.com/case/{{ $('HTTP Request23').item.json.id }}/notes/add-case-note/ ",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "note",
+              "value": "test"
+            },
+            {
+              "name": "directed_to",
+              "value": "33754"
+            },
+            {
+              "name": "time_worked"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        6656,
+        3776
+      ],
+      "id": "13517b15-cc58-417b-8647-b82b98f7f8d1",
+      "name": "HTTP Request28"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://casepeerai.onrender.com/case/1850882/document/upload-file/",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "parameterType": "formBinaryData",
+              "name": "=file",
+              "inputDataFieldName": "data"
+            },
+            {
+              "name": "save_to_linked",
+              "value": "0"
+            },
+            {
+              "name": "custom_categories",
+              "value": "4460"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3680,
+        3584
+      ],
+      "id": "cd55e4fc-064a-4b0e-ad82-304a89d7d61e",
+      "name": "HTTP Request30",
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://casepeerai.onrender.com/case/1850882/notes/add-case-note/ ",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "note",
+              "value": "test"
+            },
+            {
+              "name": "directed_to",
+              "value": "33754"
+            },
+            {
+              "name": "time_worked"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        848,
+        3120
+      ],
+      "id": "d5001cec-3c46-454a-8b6a-61cf74a32c8d",
+      "name": "HTTP Request29"
+    },
+    {
+      "parameters": {
+        "jsonSchemaExample": "{\n\t\"health-liens-TOTAL_FORMS\": \"10\",\n\t\"health-liens-INITIAL_FORMS\": \"3\"\n}"
+      },
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        848,
+        3344
+      ],
+      "id": "46adc5e5-5e36-4241-83ed-10c280f9885c",
+      "name": "Structured Output Parser6"
+    },
+    {
+      "parameters": {
+        "inputDataFieldName": "attachment_0",
+        "name": "=Acceptance Of {{ $('Switch').first().json.output.Provider_name }}",
+        "driveId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "My Drive"
+        },
+        "folderId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "root",
+          "cachedResultName": "/ (Root folder)"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        3040,
+        3584
+      ],
+      "id": "7fa12dea-e4d7-43de-bd0d-17dc15dad96a",
+      "name": "Upload file",
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "1FfoTHFvYJVC9Awc",
+          "name": "Google Drive account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "download",
+        "fileId": {
+          "__rl": true,
+          "value": "={{ $json.id }}",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        3392,
+        3584
+      ],
+      "id": "63d5ca84-1ac1-447d-a473-ba916034b614",
+      "name": "Download file1",
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "1FfoTHFvYJVC9Awc",
+          "name": "Google Drive account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "thread",
+        "operation": "reply",
+        "threadId": "={{ $('Get a thread').item.json.id }}",
+        "messageId": "={{ $('Get a message3').item.json.id }}",
+        "emailType": "html",
+        "message": "=Good morning,</br>\nWe understand and appreciate your position, and we can agree to the revised reduction amount of {{ $('AI Agent2').item.json.output.offeredbill }} as the maximum allowable adjustment.\n{{ $json.signature }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        4960,
+        4368
+      ],
+      "id": "18fe5d45-d283-4156-ae73-6a40587f4a46",
+      "name": "Reply to a message4",
+      "webhookId": "5e555b6a-997e-4c09-be0b-b229ead29333",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "qu1bypdqFgmCNgVo",
+          "name": "Gmail account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "https://gmail.googleapis.com/gmail/v1/users/me/settings/sendAs",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "gmailOAuth2",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        4320,
+        4368
+      ],
+      "id": "8c71f948-649e-4ef5-8494-8aabc09ddb33",
+      "name": "HTTP Request31",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "qu1bypdqFgmCNgVo",
+          "name": "Gmail account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "1bf7b14a-191a-41e0-b1f5-b460cca6a333",
+              "name": "signature",
+              "value": "={{ $json.sendAs[0].signature }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        4672,
+        4368
+      ],
+      "id": "e0406d5c-c068-4d6c-8267-dd1215dd4e22",
+      "name": "Edit Fields1",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "messageId": "={{ $('Get a thread').item.json.messages[0].id }}",
+        "simple": false,
+        "options": {
+          "downloadAttachments": true
+        }
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        3040,
+        4368
+      ],
+      "id": "a48bf6a6-af3a-464d-b9e2-31ca8c349db8",
+      "name": "Get a message5",
+      "webhookId": "2e318952-6769-461d-971d-62ea954469b4",
+      "executeOnce": true,
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "qu1bypdqFgmCNgVo",
+          "name": "Gmail account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "document",
+        "modelId": {
+          "__rl": true,
+          "value": "models/gemini-2.5-pro",
+          "mode": "list",
+          "cachedResultName": "models/gemini-2.5-pro"
+        },
+        "text": "{\"originalBill\": 2500.00, \"offeredAmount\": 466.00, \"totalBill\": 41722.80}\n```\n\n---\n\n**Regarding your Gemini parsing issues in n8n**, the problem is likely that Gemini is misreading the `$$` double-dollar signs in the PDF and treating them as formatting artifacts, causing digit concatenation. Here's a stronger prompt to fix it:\n```\nExtract exactly three dollar amounts from this legal settlement letter and return ONLY a valid JSON object with no markdown, no explanation, no extra text.\n\nRules:\n- \"originalBill\" = the amount billed to the specific patient (labeled as the amount billed to [patient name])\n- \"offeredAmount\" = the settlement offer amount made to the provider\n- \"totalBill\" = the \"Total Medical Bills\" amount\n\nCRITICAL: \n- Strip any \"$\" or \"$$\" symbols before parsing numbers\n- Preserve decimal points exactly as written (e.g. 41,722.80 → 41722.80, NOT 41722080)\n- Remove commas from numbers (e.g. 41,722.80 → 41722.80)\n- Return numbers as JSON numbers, not strings\n\nOutput format (and nothing else):\n{\"originalBill\": 0.00, \"offeredAmount\": 0.00, \"totalBill\": 0.00}",
+        "inputType": "binary",
+        "binaryPropertyName": "attachment_0",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.googleGemini",
+      "typeVersion": 1,
+      "position": [
+        3392,
+        4368
+      ],
+      "id": "cada0a51-dbc5-4acf-a88a-74703e8aeeb6",
+      "name": "Analyze document",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "x7ZPrgDwX7ePVe3R",
+          "name": "Google Gemini(PaLM) F"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const text = $input.item.json.content.parts[0].text;\nconst cleaned = text.replace(/```json|```/g, '').trim();\nreturn JSON.parse(cleaned);"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3680,
+        4368
+      ],
+      "id": "89c3eccd-408e-4795-91c4-fb222b7ca63f",
+      "name": "Code in JavaScript2"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://casepeerai.onrender.com/case/{{ $('HTTP Request23').item.json.id }}/settlement/negotiations/",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "health-liens-TOTAL_FORMS",
+              "value": "={{ $json[\"health-liens-TOTAL_FORMS\"] }}"
+            },
+            {
+              "name": "health-liens-INITIAL_FORMS",
+              "value": "={{ $json[\"health-liens-INITIAL_FORMS\"] }}"
+            },
+            {
+              "name": "health-liens-MIN_NUM_FORMS",
+              "value": "={{ $json[\"health-liens-MIN_NUM_FORMS\"] }}"
+            },
+            {
+              "name": "=health-liens-MAX_NUM_FORMS",
+              "value": "={{ $json[\"health-liens-MAX_NUM_FORMS\"] }}"
+            },
+            {
+              "name": "=settlement-loans-TOTAL_FORMS",
+              "value": "={{ $json[\"settlement-loans-TOTAL_FORMS\"] }}"
+            },
+            {
+              "name": "=settlement-loans-INITIAL_FORMS",
+              "value": "={{ $json[\"settlement-loans-INITIAL_FORMS\"] }}"
+            },
+            {
+              "name": "=settlement-loans-MIN_NUM_FORMS",
+              "value": "={{ $json[\"settlement-loans-MIN_NUM_FORMS\"] }}"
+            },
+            {
+              "name": "=settlement-loans-MAX_NUM_FORMS",
+              "value": "={{ $json[\"settlement-loans-MAX_NUM_FORMS\"] }}"
+            },
+            {
+              "name": "=health-insurance-liens-TOTAL_FORMS",
+              "value": "={{ $json[\"health-insurance-liens-TOTAL_FORMS\"] }}"
+            },
+            {
+              "name": "=health-insurance-liens-INITIAL_FORMS",
+              "value": "={{ $json[\"health-insurance-liens-INITIAL_FORMS\"] }}"
+            },
+            {
+              "name": "=health-insurance-liens-MIN_NUM_FORMS",
+              "value": "={{ $json[\"health-insurance-liens-MIN_NUM_FORMS\"] }}"
+            },
+            {
+              "name": "=health-insurance-liens-MAX_NUM_FORMS",
+              "value": "={{ $json[\"health-insurance-liens-MAX_NUM_FORMS\"] }}"
+            },
+            {
+              "name": "=misc-liens-TOTAL_FORMS",
+              "value": "={{ $json[\"misc-liens-TOTAL_FORMS\"] }}"
+            },
+            {
+              "name": "=misc-liens-INITIAL_FORMS",
+              "value": "={{ $json[\"misc-liens-INITIAL_FORMS\"] }}"
+            },
+            {
+              "name": "misc-liens-MIN_NUM_FORMS",
+              "value": "={{ $json['misc-liens-MIN_NUM_FORMS'] }}"
+            },
+            {
+              "name": "misc-liens-MAX_NUM_FORMS",
+              "value": "={{ $json['misc-liens-MAX_NUM_FORMS'] }}"
+            },
+            {
+              "name": "attorney-liens-TOTAL_FORMS",
+              "value": "={{ $json['attorney-liens-TOTAL_FORMS'] }}"
+            },
+            {
+              "name": "attorney-liens-INITIAL_FORMS",
+              "value": "={{ $json['attorney-liens-INITIAL_FORMS'] }}"
+            },
+            {
+              "name": "attorney-liens-MIN_NUM_FORMS",
+              "value": "={{ $json['attorney-liens-MIN_NUM_FORMS'] }}"
+            },
+            {
+              "name": "attorney-liens-MAX_NUM_FORMS",
+              "value": "={{ $json['attorney-liens-MAX_NUM_FORMS'] }}"
+            },
+            {
+              "name": "=health-liens-0-id",
+              "value": "={{ $json['health-liens-0-id'] }}"
+            },
+            {
+              "name": "health-liens-0-final_cost",
+              "value": "={{ $json['health-liens-0-final_cost'] }}"
+            },
+            {
+              "name": "health-liens-1-id",
+              "value": "={{ $json['health-liens-1-id'] }}"
+            },
+            {
+              "name": "health-liens-1-final_cost",
+              "value": "={{ $json['health-liens-1-final_cost'] }}"
+            },
+            {
+              "name": "health-liens-2-id",
+              "value": "={{ $json['health-liens-2-id'] }}"
+            },
+            {
+              "name": "health-liens-2-final_cost",
+              "value": "={{ $json['health-liens-2-final_cost'] }}"
+            },
+            {
+              "name": "health-liens-3-id",
+              "value": "={{ $json['health-liens-3-id'] }}"
+            },
+            {
+              "name": "health-liens-3-final_cost",
+              "value": "={{ $json['health-liens-3-final_cost'] }}"
+            },
+            {
+              "name": "health-liens-4-id",
+              "value": "={{ $json['health-liens-4-id'] }}"
+            },
+            {
+              "name": "health-liens-4-final_cost",
+              "value": "={{ $json['health-liens-4-final_cost'] }}"
+            },
+            {
+              "name": "health-liens-5-id",
+              "value": "={{ $json['health-liens-5-id'] }}"
+            },
+            {
+              "name": "health-liens-5-final_cost",
+              "value": "={{ $json['health-liens-5-final_cost'] }}"
+            },
+            {
+              "name": "health-liens-6-id",
+              "value": "={{ $json['health-liens-6-id'] }}"
+            },
+            {
+              "name": "health-liens-6-final_cost",
+              "value": "={{ $json['health-liens-6-final_cost'] }}"
+            },
+            {
+              "name": "health-liens-7-id",
+              "value": "={{ $json['health-liens-7-id'] }}"
+            },
+            {
+              "name": "health-liens-7-final_cost",
+              "value": "={{ $json['health-liens-7-final_cost'] }}"
+            },
+            {
+              "name": "health-liens-8-id",
+              "value": "={{ $json['health-liens-8-id'] }}"
+            },
+            {
+              "name": "health-liens-8-final_cost",
+              "value": "={{ $json['health-liens-8-final_cost'] }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1072,
+        2896
+      ],
+      "id": "e3185344-bff2-4f5c-9c19-34564d9010ca",
+      "name": "HTTP Request32"
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.output;\n\n// Parse the JSON string into an object\nconst parsed = JSON.parse(raw);\n\nreturn [{ json: parsed }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        848,
+        2896
+      ],
+      "id": "b8643f1a-7ad8-489c-8c01-1b518d82b036",
+      "name": "Code in JavaScript3"
+    },
+    {
+      "parameters": {
+        "resource": "thread",
+        "operation": "get",
+        "threadId": "={{ $('Get a message4').item.json.threadId }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        3680,
+        3776
+      ],
+      "id": "35236645-123f-4e6e-ad99-74198899f2db",
+      "name": "Get a thread5",
+      "webhookId": "1ad00fc0-d0c1-45bc-9234-f430326c6b91",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "qu1bypdqFgmCNgVo",
+          "name": "Gmail account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "NatalyaValencia@beverlylaw.org",
+        "subject": "Help ",
+        "emailType": "text",
+        "message": "=Hello,\n\nI just received an email from  {{ $json.messages[1].From }}\n\nProvider Name: {{ $('AI Agent').item.json.output.Provider_name }}\n\nFor the Client {{ $('AI Agent').item.json.output.Patient_name }}\n\nI can not determain the intent of their last email.",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        2752,
+        5184
+      ],
+      "id": "7d95689e-5407-4c88-84ae-40a1623d4a5c",
+      "name": "Send a message",
+      "webhookId": "f6f55175-41b8-418c-bbb4-ce109b53d332",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "qu1bypdqFgmCNgVo",
+          "name": "Gmail account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "=https://casepeerai.onrender.com/case/1850882/medical/treatment/",
+        "options": {}
+      },
+      "id": "0c534c55-aad0-4104-94e7-390f3b225799",
+      "name": "Scrape Website",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        848,
+        6448
+      ],
+      "typeVersion": 4.2
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get the raw text output from the previous node\nconst raw = $json[\"output\"];\n\n// Extract the JSON array inside the text\nconst match = raw.match(/\\[\\s*{[\\s\\S]*}\\s*\\]/);\nif (!match) {\n  throw new Error(\"No JSON array found in 'output'.\");\n}\n\n// Parse it into an array\nconst data = JSON.parse(match[0]);\n\n// Build one combined object like provider1, provider2, etc.\nconst combined = {};\n\ndata.forEach((provider, index) => {\n  combined[`provider${index + 1}`] = {\n    \"Provider Name\": provider[\"Provider Name\"],\n    \"Email\": provider[\"Email\"],\n    \"Phone Number\": provider[\"Phone Number\"],\n    \"Balance\": provider[\"Balance\"]\n  };\n});\n\n// Wrap all providers under a single key\nconst output = {\n  providers: combined\n};\n\n// Return as a single item\nreturn [{ json: output }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1424,
+        6448
+      ],
+      "id": "607c0839-a6c9-46d5-a615-e30182179aef",
+      "name": "Code15"
+    },
+    {
+      "parameters": {
+        "url": "=https://casepeerai.onrender.com/case/{{ $json.id }}/medical/treatment/",
+        "options": {}
+      },
+      "id": "5b2163de-a260-4ce1-a42a-8e82e0afd038",
+      "name": "Scrape Website1",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        2752,
+        5680
+      ],
+      "typeVersion": 4.2
+    },
+    {
+      "parameters": {
+        "url": "=https://casepeerai.onrender.com/api/v1/case/case-search/?search={{ $('Switch').item.json.output.Patient_name }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        2528,
+        5680
+      ],
+      "id": "ecc3ea6d-8042-4362-acd1-1a2edb3426f8",
+      "name": "HTTP Request33"
+    },
+    {
+      "parameters": {
+        "jsCode": "const html = $input.first().json.response;\n\n// Extract HEALTH_LIENS_DATA from the script tag\nconst match = html.match(/window\\.HEALTH_LIENS_DATA\\s*=\\s*JSON\\.parse\\(\"(.+?)\"\\);/s);\nif (!match) throw new Error(\"HEALTH_LIENS_DATA not found\");\n\n// Use a safer decoding approach\nlet decoded;\ntry {\n  decoded = JSON.parse('\"' + match[1] + '\"');\n} catch(e) {\n  throw new Error(\"Decoding failed: \" + e.message);\n}\n\nconst data = JSON.parse(decoded);\n\nconst providers = data.map(item => ({\n  \"Provider Name\": item.contact?.details?.company || \"\",\n  \"Email\": item.contact?.details?.addresses?.physical?.email || \"\",\n  \"Phone Number\": item.contact?.details?.addresses?.physical?.phone || \"\",\n  \"Original Bill\": item.original_cost ? `$${item.original_cost}` : \"bill not available\"\n}));\n\nreturn [{ json: { providers } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2960,
+        5680
+      ],
+      "id": "7471f9ee-39e2-4ffc-bd2b-8ee2854a434f",
+      "name": "Code in JavaScript1"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "b1db06b6-10e4-42fd-80ef-88a1057c6d4b",
+              "leftValue": "={{ $json[\"Provider Name\"] }}",
+              "rightValue": "={{ $('AI Agent').item.json.output.Provider_name }}",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            },
+            {
+              "id": "1e78a204-74ce-49eb-9c6a-a50a432c4ac1",
+              "leftValue": "={{ $json[\"Original Bill\"] }}",
+              "rightValue": "={{ $('AI Agent').item.json.output.corrected_bill_amount }}",
+              "operator": {
+                "type": "string",
+                "operation": "notEquals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        3408,
+        5760
+      ],
+      "id": "8bd3144e-58dd-415b-86b7-8bcec550e827",
+      "name": "If"
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "providers",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        3168,
+        5680
+      ],
+      "id": "00a421ba-b812-49d8-ba09-a18a13a95fc0",
+      "name": "Split Out"
+    },
+    {
+      "parameters": {
+        "url": "=https://casepeerai.onrender.com/contact-directory/?contact_type_id=4&draw=2&columns%5B0%5D%5Bdata%5D=0&columns%5B0%5D%5Bname%5D=&columns%5B0%5D%5Bsearchable%5D=true&columns%5B0%5D%5Borderable%5D=false&columns%5B0%5D%5Bsearch%5D%5Bvalue%5D=&columns%5B0%5D%5Bsearch%5D%5Bregex%5D=false&columns%5B1%5D%5Bdata%5D=1&columns%5B1%5D%5Bname%5D=&columns%5B1%5D%5Bsearchable%5D=true&columns%5B1%5D%5Borderable%5D=true&columns%5B1%5D%5Bsearch%5D%5Bvalue%5D=&columns%5B1%5D%5Bsearch%5D%5Bregex%5D=false&columns%5B2%5D%5Bdata%5D=2&columns%5B2%5D%5Bname%5D=&columns%5B2%5D%5Bsearchable%5D=true&columns%5B2%5D%5Borderable%5D=true&columns%5B2%5D%5Bsearch%5D%5Bvalue%5D=&columns%5B2%5D%5Bsearch%5D%5Bregex%5D=false&columns%5B3%5D%5Bdata%5D=3&columns%5B3%5D%5Bname%5D=&columns%5B3%5D%5Bsearchable%5D=true&columns%5B3%5D%5Borderable%5D=true&columns%5B3%5D%5Bsearch%5D%5Bvalue%5D=&columns%5B3%5D%5Bsearch%5D%5Bregex%5D=false&columns%5B4%5D%5Bdata%5D=4&columns%5B4%5D%5Bname%5D=&columns%5B4%5D%5Bsearchable%5D=true&columns%5B4%5D%5Borderable%5D=true&columns%5B4%5D%5Bsearch%5D%5Bvalue%5D=&columns%5B4%5D%5Bsearch%5D%5Bregex%5D=false&columns%5B5%5D%5Bdata%5D=5&columns%5B5%5D%5Bname%5D=&columns%5B5%5D%5Bsearchable%5D=true&columns%5B5%5D%5Borderable%5D=false&columns%5B5%5D%5Bsearch%5D%5Bvalue%5D=&columns%5B5%5D%5Bsearch%5D%5Bregex%5D=false&columns%5B6%5D%5Bdata%5D=6&columns%5B6%5D%5Bname%5D=&columns%5B6%5D%5Bsearchable%5D=true&columns%5B6%5D%5Borderable%5D=false&columns%5B6%5D%5Bsearch%5D%5Bvalue%5D=&columns%5B6%5D%5Bsearch%5D%5Bregex%5D=false&order%5B0%5D%5Bcolumn%5D=0&order%5B0%5D%5Bdir%5D=asc&start=0&length=25&search%5Bvalue%5D={{ $('AI Agent').item.json.output.P_F }}&search%5Bregex%5D=false&_=1760655718955",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3632,
+        5744
+      ],
+      "id": "4c779df2-6b43-4e55-8f59-76ff0dcf7b2c",
+      "name": "GPID"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get all phone numbers from \"if\" node\nconst ifPhones = $('If').all().map(item => item.json[\"Phone Number\"].replace(/\\D/g, ''));\nconst ifEmails = $('If').all().map(item => (item.json[\"Email\"] || '').toLowerCase().trim());\n\n// Get all items from Code16\nconst code2Items = $('Code16').all();\n\n// Clean functions\nconst cleanPhone = num => (num || '').replace(/\\D/g, '');\nconst cleanEmail = email => (email || '').toLowerCase().trim();\n\n// Score each item - higher score = better match\nconst scored = code2Items.map(item => {\n  let score = 0;\n  const phone1 = cleanPhone(item.json.phone1);\n  const phone2 = cleanPhone(item.json.phone2);\n  const email = cleanEmail(item.json.email);\n\n  if (ifPhones.includes(phone1) || ifPhones.includes(phone2)) score += 1;\n  if (ifEmails.includes(email)) score += 2; // email match is stronger signal\n\n  return { item, score };\n});\n\n// Filter only items that had at least a phone match\nconst matched = scored.filter(s => s.score > 0);\n\nif (matched.length === 0) {\n  return [{ json: { match: false, message: \"No matching phone numbers found\" } }];\n}\n\n// Sort by score descending and return best match only\nmatched.sort((a, b) => b.score - a.score);\nconst best = matched[0].item;\n\nreturn [{ json: { match: true, ...best.json } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4080,
+        5744
+      ],
+      "id": "5a0956a2-897b-4815-b317-b82043792be1",
+      "name": "Check_correct_provider"
+    },
+    {
+      "parameters": {
+        "jsCode": "return items.flatMap(item => {\n  const data = item.json.data || [];\n\n  return data.map(entry => {\n    const html = entry[entry.length - 1] || '';\n    const match = html.match(/health-provider\\/(\\d+)\\//);\n    const providerId = match ? match[1] : null;\n\n    // Return clean structured object (no HTML)\n    return {\n      json: {\n        id: entry[0],\n        name: entry[1],\n        email: entry[2],\n        phone1: entry[3],\n        phone2: entry[4],\n        address: entry[5],\n        providerId\n      }\n    };\n  });\n});\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3856,
+        5744
+      ],
+      "id": "c0a5aebe-9824-49c1-b3a3-1d927544608d",
+      "name": "Code16"
+    },
+    {
+      "parameters": {
+        "url": "=https://casepeerai.onrender.com/case/{{ $('HTTP Request33').first().json.id }}/medical/treatment/",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        4288,
+        5744
+      ],
+      "id": "f2416e8d-5b57-4011-8920-7089f9c9914a",
+      "name": "HTTP Request34"
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $input.first().json.response;\n\n// Get the provider name from Check_correct_provider node\nconst providerName = $('Check_correct_provider').first().json.name;\n\n// Extract HEALTH_LIENS_DATA\nconst match = response.match(/window\\.HEALTH_LIENS_DATA = JSON\\.parse\\(\"(.+?)\"\\);/s);\nif (!match) throw new Error('HEALTH_LIENS_DATA not found');\n\nconst jsonStr = JSON.parse('\"' + match[1] + '\"');\nconst healthLiensData = JSON.parse(jsonStr);\n\n// Find the entry where contact name matches\nconst entry = healthLiensData.find(item => \n  item.contact?.details?.company === providerName\n);\n\nif (!entry) throw new Error(`Provider \"${providerName}\" not found in HEALTH_LIENS_DATA`);\n\nreturn { id: entry.id };"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4496,
+        5744
+      ],
+      "id": "95b712bc-68c5-493d-a2b2-7b1718e36a3c",
+      "name": "Code in JavaScript4"
+    },
+    {
+      "parameters": {
+        "operation": "copy",
+        "fileId": {
+          "__rl": true,
+          "value": "1hDKjdIhQC79tUrqLjsWEt3nmZGHGlfKIwBzGSldRkQE",
+          "mode": "list",
+          "cachedResultName": "No Details Offer to Settle",
+          "cachedResultUrl": "https://docs.google.com/document/d/1hDKjdIhQC79tUrqLjsWEt3nmZGHGlfKIwBzGSldRkQE/edit?usp=drivesdk"
+        },
+        "name": "=Bill Correction from {{ $('AI Agent').first().json.output.Provider_name }} For {{ $('AI Agent').first().json.output.\nPatient_name }}.pdf",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        6512,
+        5728
+      ],
+      "id": "52fce7c2-1c8d-4636-8f4e-e04fb235b66c",
+      "name": "Copy file1",
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "1FfoTHFvYJVC9Awc",
+          "name": "Google Drive account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentURL": "={{ $json.id }}",
+        "actionsUi": {
+          "actionFields": [
+            {
+              "action": "replaceAll",
+              "text": "=[\"patient Name\"]",
+              "replaceText": "={{ $('AI Agent').first().json.output.\nPatient_name }}"
+            },
+            {
+              "action": "replaceAll",
+              "text": "[\"patientDOB\"]",
+              "replaceText": "={{ $('Code in JavaScript5').item.json.patientDOB }}"
+            },
+            {
+              "action": "replaceAll",
+              "text": "[\"injurydate\"]",
+              "replaceText": "={{ $('Code in JavaScript5').item.json.injurydate }}"
+            },
+            {
+              "action": "replaceAll",
+              "text": "[\"offered\"]",
+              "replaceText": "={{ $('AI Agent10').item.json.output.offeredamount }}"
+            },
+            {
+              "action": "replaceAll",
+              "text": "[\"orignal\"]",
+              "replaceText": "={{ $('AI Agent').first().json.output.corrected_bill_amount.replace('$', '').replace(',', '') }}"
+            },
+            {
+              "action": "replaceAll",
+              "text": "[\"total\"]",
+              "replaceText": "={{ $('Code in JavaScript5').item.json.total }}"
+            },
+            {
+              "action": "replaceAll",
+              "text": "[\"provider Name\"]",
+              "replaceText": "={{ $('Check_correct_provider').item.json.name }}"
+            },
+            {
+              "action": "replaceAll",
+              "text": "[\"provider address\"]",
+              "replaceText": "={{ $('Merge3').item.json.output.address }}"
+            },
+            {
+              "action": "replaceAll",
+              "text": "[\"date\"]",
+              "replaceText": "={{ $now.toFormat('MMMM dd, yyyy') }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.googleDocs",
+      "typeVersion": 2,
+      "position": [
+        6720,
+        5728
+      ],
+      "id": "95dbd98a-2fa9-4cea-b22a-7cfd2894ef40",
+      "name": "Update a document1",
+      "credentials": {
+        "googleDocsOAuth2Api": {
+          "id": "59zJhvgJ3cPOiPqT",
+          "name": "Google Docs account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "download",
+        "fileId": {
+          "__rl": true,
+          "value": "={{ $json.documentId }}",
+          "mode": "id"
+        },
+        "options": {
+          "googleFileConversion": {
+            "conversion": {
+              "docsToFormat": "application/pdf",
+              "drawingsToFormat": "application/pdf",
+              "slidesToFormat": "application/pdf",
+              "sheetsToFormat": "application/pdf"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        6928,
+        5728
+      ],
+      "id": "c223b61d-7c62-406a-b2fb-13d61dd9001e",
+      "name": "Download file2",
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "1FfoTHFvYJVC9Awc",
+          "name": "Google Drive account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "https://gmail.googleapis.com/gmail/v1/users/me/settings/sendAs",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "gmailOAuth2",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        4896,
+        5728
+      ],
+      "id": "1eb9ac8f-a119-4ec2-9659-0d2d66884de2",
+      "name": "HTTP Request35",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "qu1bypdqFgmCNgVo",
+          "name": "Gmail account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "1bf7b14a-191a-41e0-b1f5-b460cca6a333",
+              "name": "signature",
+              "value": "={{ $json.sendAs[0].signature }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        5104,
+        5728
+      ],
+      "id": "4692d849-682f-4133-a89c-a7c0bd1bc83c",
+      "name": "Edit Fields2"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://my.casepeer.com/case/{{ $('HTTP Request33').first().json.id }}/to/health/providers/contact/{{ $('Check_correct_provider').item.json.providerId }}/lien/{{ $json.id }}/",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "original_cost",
+              "value": "={{ $('AI Agent').first().json.output.corrected_bill_amount.replace('$', '').replace(',', '') }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        4704,
+        5744
+      ],
+      "id": "f8b0a9a8-7192-46d9-a4db-c7d5fd26e2df",
+      "name": "HTTP Request36"
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "messageId": "={{ $('Get a thread').first().json.messages[0].id }}",
+        "simple": false,
+        "options": {
+          "downloadAttachments": true
+        }
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        5312,
+        5728
+      ],
+      "id": "1efb4707-0b4c-40db-a281-3cc950e2d230",
+      "name": "Get a message6",
+      "webhookId": "82eda45e-e655-4115-b32e-45e38f8fa9fb",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "qu1bypdqFgmCNgVo",
+          "name": "Gmail account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "pdf",
+        "binaryPropertyName": "attachment_0",
+        "options": {
+          "maxPages": 2
+        }
+      },
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1.1,
+      "position": [
+        5520,
+        5728
+      ],
+      "id": "21abef08-dab0-4b38-8778-f2f3d0405686",
+      "name": "Extract from File1"
+    },
+    {
+      "parameters": {
+        "jsCode": "const text = $input.first().json.text; // adjust to your actual field name\n\n// Extract Patient DOB\nconst dobMatch = text.match(/Date of Birth:\\s*([\\d\\/]+)/i);\nconst patientDOB = dobMatch ? dobMatch[1] : null;\n\n// Extract Injury Date\nconst injuryMatch = text.match(/Date of Injury:\\s*([\\d\\/]+)/i);\nconst injurydate = injuryMatch ? injuryMatch[1] : null;\n\n// Extract Total Medical Bills\nconst totalMatch = text.match(/Total Medical Bills:\\s*\\$+([0-9,\\.]+)/i);\nconst total = totalMatch ? totalMatch[1] : null;\n\n// Extract Original billed amount (billed to patient)\nconst originalMatch = text.match(/billed\\s+[\\w]+\\s+[\\w]+\\s+for this case is:\\s*\\$+([0-9,\\.]+)/i);\nconst original = originalMatch ? originalMatch[1] : null;\n\n// Extract Offered amount\nconst offeredMatch = text.match(/offer\\s+\\$+([0-9,\\.]+)/i);\nconst offered = offeredMatch ? offeredMatch[1] : null;\n\n// Extract Provider/Doctor address (comes after VIA FACISMILE OR EMAIL line, before RE:)\nconst addressMatch = text.match(/VIA\\s+FAC?SIMILE[^\\n]*\\n([\\s\\S]*?)(?=\\nRE:)/i);\nlet providerAddress = null;\nif (addressMatch) {\n  // Clean up the extracted block — remove the fax/email line itself, trim\n  providerAddress = addressMatch[1]\n    .replace(/\\n/g, ' ')\n    .replace(/\\s{2,}/g, ' ')\n    .trim();\n}\n\nreturn [{\n  json: {\n    patientDOB,\n    injurydate,\n    total,\n    original,\n    offered,\n    providerAddress\n  }\n}];\n```\n\n**For your example it will extract:**\n```\nproviderAddress: \"Dr. Nourian 17525 Ventura Blvd. Suite 101, Encino, CA 91316\""
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5728,
+        5728
+      ],
+      "id": "71338d0a-bceb-4d79-8a30-f233c6c02b75",
+      "name": "Code in JavaScript5"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Use this text and fetch the provider's address from this:\n{{ $json.text }}\nImportant rules:\n\nThe address 4929 WILSHIRE BLVD, SUITE 960, LOS ANGELES, CA 90010 belongs to BEVERLY LAW and is the sender/law firm. Never return this as the provider's address.\nThe provider is the medical professional or clinic that treated the patient (e.g., a doctor's office, clinic, or hospital).\nThe provider's address is typically found near the doctor's name, preceded by terms like \"Dr.\", \"MD\", \"Clinic\", or after \"Dear Sir or Madam\" as the recipient of the letter.\nReturn only the provider's address. Do not include the provider's name.",
+        "hasOutputParser": true,
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3,
+      "position": [
+        5504,
+        5952
+      ],
+      "id": "095559a8-9881-4cfa-bff8-2568fe31ed98",
+      "name": "AI Agent9"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-4.1-mini"
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        5488,
+        6128
+      ],
+      "id": "4f23b00f-2154-4b70-b40f-d9548317ea2b",
+      "name": "OpenAI Chat Model8",
+      "credentials": {
+        "openAiApi": {
+          "id": "7fbCuNCbBrhyTPqW",
+          "name": "OpenAi account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsonSchemaExample": "{\n\t\"address\": \"California\"\n}"
+      },
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        5648,
+        6160
+      ],
+      "id": "eace5767-3c0e-48f1-9f20-b4ed1c58f567",
+      "name": "Structured Output Parser7"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineAll",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        5952,
+        5728
+      ],
+      "id": "19914011-2b9c-48bf-a097-4349f4b919b0",
+      "name": "Merge3"
+    },
+    {
+      "parameters": {
+        "jsonSchemaExample": "{\n        \n   \"offeredamount\" : \"$xxxxx\"\n}\n"
+      },
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        6256,
+        5952
+      ],
+      "id": "830ce7ea-83ee-4cf5-b1de-8513fac6d233",
+      "name": "Structured Output Parser8"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-5",
+          "mode": "list",
+          "cachedResultName": "gpt-5"
+        },
+        "options": {
+          "timeout": 180000
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        6128,
+        5952
+      ],
+      "id": "aedfe820-5bd4-4a01-a70e-fcf2dd8fc56d",
+      "name": "OpenAI Chat Model9",
+      "credentials": {
+        "openAiApi": {
+          "id": "7fbCuNCbBrhyTPqW",
+          "name": "OpenAi account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=you will have to calucalte offered bill which will be 2/3 of 27.96% of each provider's orignal bill\n\n\nHere is the orignal bill: {{ $('AI Agent').first().json.output.corrected_bill_amount }}\n",
+        "hasOutputParser": true,
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        6112,
+        5728
+      ],
+      "id": "48fe81d3-716d-466e-98c8-655b3ddfd911",
+      "name": "AI Agent10"
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $('Get a message6').item.json.to.value[0].address }}",
+        "subject": "Bill Negotiation",
+        "message": "=Good evening {{ $('AI Agent').first().json.output.Provider_name }}.<br><br>\n\nI hope this message finds you well. Attached is a payment offer for the case of our client {{ $('AI Agent').first().json.output.Patient_name}} for your consideration. We would greatly appreciate your assistance with this reduction, and we are eager to work together to schedule your payment.<br><br>\n\n\nPlease confirm receipt of this email when you have a moment.<br><br>\nThank you in advance for your support!<br><br>\n\nBest regards,\n{{ $('Edit Fields2').item.json.signature }}",
+        "options": {
+          "appendAttribution": false,
+          "attachmentsUi": {
+            "attachmentsBinary": [
+              {}
+            ]
+          }
+        }
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        7152,
+        5728
+      ],
+      "id": "65811bb0-6f44-4dfa-9dec-055d33d1e869",
+      "name": "Send a message1",
+      "webhookId": "1c8d771e-8ecd-42a4-917c-0c0d2783ad8a",
+      "executeOnce": false,
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "qu1bypdqFgmCNgVo",
+          "name": "Gmail account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "thread",
+        "operation": "reply",
+        "threadId": "={{ $(\"Get a thread\").first().json[\"messages\"][0].threadId }}",
+        "messageId": "={{ $(\"Get a thread\").first().json[\"messages\"][1].id }}",
+        "emailType": "html",
+        "message": "Thank you for the clarification we will update our records and get back to you shortly.",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        2304,
+        5232
+      ],
+      "id": "bce6f19a-6213-40cb-a2cd-a519ad133acc",
+      "name": "Reply to a message5",
+      "webhookId": "47e6e954-4c83-4789-8220-06038667640a",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "qu1bypdqFgmCNgVo",
+          "name": "Gmail account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract sender name and full email body (not snippet)\nconst output = [];\n\nfor (const item of $input.all()) {\n  const messages = item.json.messages || [];\n\n  for (const msg of messages) {\n    const from = msg.From || '';\n    const payload = msg.payload || {};\n    let body = '';\n\n    // Try to extract plain text body\n    if (payload.body && payload.body.data) {\n      // Gmail API encodes body in base64url format, so decode it\n      body = Buffer.from(payload.body.data, 'base64').toString('utf8');\n    } \n    // If body is nested in parts (multipart emails)\n    else if (payload.parts) {\n      for (const part of payload.parts) {\n        if (part.mimeType === 'text/plain' && part.body && part.body.data) {\n          body = Buffer.from(part.body.data, 'base64').toString('utf8');\n          break;\n        }\n      }\n    }\n\n    // Fallback to snippet if nothing found\n    if (!body) body = msg.snippet || '';\n\n    // Clean sender name\n    const nameMatch = from.match(/^(.*?)</);\n    const senderName = nameMatch ? nameMatch[1].trim() : from;\n\n    // Remove quoted replies (lines starting with “>” or \"On ... wrote:\")\n    body = body\n      .replace(/On\\s.+wrote:.+/gs, '')  // remove reply section\n      .replace(/>\\s?.+/g, '')           // remove quoted lines\n      .trim();\n\n    output.push({\n      json: {\n        sender: senderName,\n        body: body\n      }\n    });\n  }\n}\n\nreturn output;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2384,
+        5520
+      ],
+      "id": "c1a44934-200d-4bb8-9839-d4e712dfa4fa",
+      "name": "Code17"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Combine all previous items into a single conversation\nconst allMessages = $input.all().map(item => item.json);\n\n// Optionally merge into a single string conversation\nconst conversationText = allMessages.map(m => `${m.sender}: ${m.body}`).join('\\n---\\n');\n\nreturn [{\n  json: {\n    conversation: allMessages,    // full objects\n    combinedText: conversationText // readable text version\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2608,
+        5520
+      ],
+      "id": "6f4742e9-df71-4766-b2ea-06d5a307edbe",
+      "name": "Code18"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract sender name and full email body (not snippet)\nconst output = [];\n\nfor (const item of $input.all()) {\n  const messages = item.json.messages || [];\n\n  for (const msg of messages) {\n    const from = msg.From || '';\n    const payload = msg.payload || {};\n    let body = '';\n\n    // Try to extract plain text body\n    if (payload.body && payload.body.data) {\n      // Gmail API encodes body in base64url format, so decode it\n      body = Buffer.from(payload.body.data, 'base64').toString('utf8');\n    } \n    // If body is nested in parts (multipart emails)\n    else if (payload.parts) {\n      for (const part of payload.parts) {\n        if (part.mimeType === 'text/plain' && part.body && part.body.data) {\n          body = Buffer.from(part.body.data, 'base64').toString('utf8');\n          break;\n        }\n      }\n    }\n\n    // Fallback to snippet if nothing found\n    if (!body) body = msg.snippet || '';\n\n    // Clean sender name\n    const nameMatch = from.match(/^(.*?)</);\n    const senderName = nameMatch ? nameMatch[1].trim() : from;\n\n    // Remove quoted replies (lines starting with “>” or \"On ... wrote:\")\n    body = body\n      .replace(/On\\s.+wrote:.+/gs, '')  // remove reply section\n      .replace(/>\\s?.+/g, '')           // remove quoted lines\n      .trim();\n\n    output.push({\n      json: {\n        sender: senderName,\n        body: body\n      }\n    });\n  }\n}\n\nreturn output;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2272,
+        5888
+      ],
+      "id": "d35ea5d6-52bb-4e83-b3b9-a399556208b1",
+      "name": "Code19"
+    },
+    {
+      "parameters": {
+        "jsCode": "const allMessages = $input.all().map(item => item.json);\n\nfunction cleanBody(body) {\n  if (!body) return '';\n  \n  return body\n    .replace(/<[^>]*>/g, '')\n    .replace(/&amp;/g, '&')\n    .replace(/&lt;/g, '<')\n    .replace(/&gt;/g, '>')\n    .replace(/&nbsp;/g, ' ')\n    .replace(/&#39;/g, \"'\")\n    .replace(/&quot;/g, '\"')\n    .replace(/\\*\\*(.*?)\\*\\*/g, '$1')\n    .replace(/\\*(.*?)\\*/g, '$1')\n    .replace(/\\\\n/g, '\\n')\n    .replace(/<\\/br/gi, '')\n    .replace(/\\r\\n/g, '\\n').replace(/\\r/g, '\\n')\n    .replace(/\\n{3,}/g, '\\n\\n')\n    .replace(/\\n[-–—]{1,5}\\s*\\n[\\s\\S]*?(Direct Line|Main Line|Fax|Supervisor)[\\s\\S]*/i, '')\n    .trim();\n}\n\nconst cleanedMessages = allMessages.map(m => ({\n  sender: (m.sender || '').trim(),\n  label: m.sender && m.sender.toLowerCase().startsWith('salehai@') ? 'We said' : 'They said',\n  body: cleanBody(m.body)\n}));\n\nconst conversationText = cleanedMessages\n  .map(m => `${m.label}:\\n${m.body}`)\n  .join('\\n\\n---\\n\\n');\n\nreturn [{\n  json: {\n    conversation: cleanedMessages,\n    combinedText: conversationText\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2496,
+        5888
+      ],
+      "id": "9d134a00-7ab0-4007-bc07-6fc845df0f1f",
+      "name": "Code20"
+    },
+    {
+      "parameters": {
+        "resource": "thread",
+        "operation": "get",
+        "threadId": "={{ $(\"Gmail Trigger\").first().json.threadId }}",
+        "simple": false,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        2048,
+        5888
+      ],
+      "id": "ea806c52-7895-4334-9109-d403f8c8ea27",
+      "name": "Get a thread6",
+      "webhookId": "21187715-107e-400d-a5ac-4a75fa59b793",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "qu1bypdqFgmCNgVo",
+          "name": "Gmail account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "copy",
+        "fileId": {
+          "__rl": true,
+          "value": "1W_DGsXmsokSLs-mmBSKiroLaZIYBWJnDz1_WYcB89Jg",
+          "mode": "list",
+          "cachedResultName": "BlankD",
+          "cachedResultUrl": "https://docs.google.com/document/d/1W_DGsXmsokSLs-mmBSKiroLaZIYBWJnDz1_WYcB89Jg/edit?usp=drivesdk"
+        },
+        "name": "=Bill Conformation from {{ $('AI Agent').first().json.output.Provider_name }} For {{ $('AI Agent').first().json.output.\nPatient_name }}.pdf",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        2704,
+        5904
+      ],
+      "id": "bbc0f4bf-8e32-4873-a7d8-b8e73ff1ffd2",
+      "name": "Copy file2",
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "1FfoTHFvYJVC9Awc",
+          "name": "Google Drive account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentURL": "={{ $json.id }}",
+        "actionsUi": {
+          "actionFields": [
+            {
+              "action": "insert",
+              "text": "={{ $('Code20').item.json.combinedText }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.googleDocs",
+      "typeVersion": 2,
+      "position": [
+        2912,
+        5904
+      ],
+      "id": "19674c1c-1ea3-4642-9602-9706cd3dde62",
+      "name": "Update a document2",
+      "credentials": {
+        "googleDocsOAuth2Api": {
+          "id": "59zJhvgJ3cPOiPqT",
+          "name": "Google Docs account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "download",
+        "fileId": {
+          "__rl": true,
+          "value": "={{ $json.documentId }}",
+          "mode": "id"
+        },
+        "options": {
+          "googleFileConversion": {
+            "conversion": {
+              "docsToFormat": "application/pdf",
+              "drawingsToFormat": "application/pdf",
+              "slidesToFormat": "application/pdf",
+              "sheetsToFormat": "application/pdf"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        3120,
+        5904
+      ],
+      "id": "592068c1-22b7-4d58-9bb2-7f66400ca091",
+      "name": "Download file3",
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "1FfoTHFvYJVC9Awc",
+          "name": "Google Drive account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://casepeerai.onrender.com/case/1850882/document/upload-file/",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "parameterType": "formBinaryData",
+              "name": "=file",
+              "inputDataFieldName": "data"
+            },
+            {
+              "name": "save_to_linked",
+              "value": "0"
+            },
+            {
+              "name": "custom_categories",
+              "value": "4460"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3408,
+        5936
+      ],
+      "id": "f4bf4a8f-dbaa-48a8-85d7-8639e31db692",
+      "name": "HTTP Request37",
+      "executeOnce": true
+    }
+  ],
+  "pinData": {
+    "Gmail Trigger": [
+      {
+        "json": {
+          "id": "19c7d4a002c4d2ab",
+          "threadId": "19c7d2e418f340fd",
+          "snippet": "Hi, Balance is 9k Best, - Natalya Valencia - Executive Assistant 4929 Wilshire Blvd. Suite 960 Los Angeles, CA 90010 Direct Line: (310) 295-9556 Main Line: (310) 552-6959 Fax Number: (323) 421-9397",
+          "payload": {
+            "mimeType": "multipart/alternative"
+          },
+          "sizeEstimate": 13135,
+          "historyId": "170198",
+          "internalDate": "1771628501000",
+          "labels": [
+            {
+              "id": "INBOX",
+              "name": "INBOX"
+            },
+            {
+              "id": "IMPORTANT",
+              "name": "IMPORTANT"
+            },
+            {
+              "id": "CATEGORY_PERSONAL",
+              "name": "CATEGORY_PERSONAL"
+            },
+            {
+              "id": "UNREAD",
+              "name": "UNREAD"
+            }
+          ],
+          "From": "Natalya Valencia <NatalyaValencia@beverlylaw.org>",
+          "Subject": "Re: Bill Negotiation",
+          "To": "salehai@beverlylaw.org"
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      }
+    ]
+  },
+  "connections": {
+    "Gmail Trigger": {
+      "main": [
+        [
+          {
+            "node": "Get a thread",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get a thread": {
+      "main": [
+        [
+          {
+            "node": "Code1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Mark a message as read",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Code8",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code1": {
+      "main": [
+        [
+          {
+            "node": "Code3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code3": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Switch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structured Output Parser": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ],
+        [
+          {
+            "node": "Merge1",
+            "type": "main",
+            "index": 1
+          }
+        ],
+        [
+          {
+            "node": "Get a thread3",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Get a thread1",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Get a thread2",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Get a thread4",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Merge2",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reply to a message5",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Get a thread6",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request": {
+      "main": [
+        [
+          {
+            "node": "AI Agent1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent1": {
+      "main": [
+        [
+          {
+            "node": "Code",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model1": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent1",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get a message": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge2",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request13",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structured Output Parser1": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "AI Agent1",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request1": {
+      "main": [
+        [
+          {
+            "node": "AI Agent3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request2": {
+      "main": [
+        [
+          {
+            "node": "Reply to a message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge1": {
+      "main": [
+        [
+          {
+            "node": "Get a message3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent2": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request31",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structured Output Parser2": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "AI Agent2",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model2": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent2",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent3": {
+      "main": [
+        [
+          {
+            "node": "Code2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model3": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent3",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code2": {
+      "main": [
+        [
+          {
+            "node": "Code4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code4": {
+      "main": [
+        [
+          {
+            "node": "Code5",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request4": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code5": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reply to a message": {
+      "main": [
+        [
+          {
+            "node": "Get a message1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get a thread1": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code6": {
+      "main": [
+        [
+          {
+            "node": "Code9",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code8": {
+      "main": [
+        [
+          {
+            "node": "Get a message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request6": {
+      "main": [
+        [
+          {
+            "node": "Code6",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download file": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request9",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request9": {
+      "main": [
+        [
+          {
+            "node": "AI Agent4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code9": {
+      "main": [
+        [
+          {
+            "node": "Code10",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update a document": {
+      "main": [
+        [
+          {
+            "node": "Download file",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code10": {
+      "main": [
+        [
+          {
+            "node": "Copy file",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get a thread2": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request7",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request7": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request10",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request10": {
+      "main": [
+        [
+          {
+            "node": "Code11",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code11": {
+      "main": [
+        [
+          {
+            "node": "Switch1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch1": {
+      "main": [
+        [
+          {
+            "node": "Reply to a message1",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reply to a message2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reply to a message1": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request11",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reply to a message2": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request12",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Copy file": {
+      "main": [
+        [
+          {
+            "node": "Update a document",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request13": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request14": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request15",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request15": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get a message1": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request14",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request16": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request17",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request18": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request19",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent4": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request18",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structured Output Parser3": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "AI Agent4",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model4": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent4",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request6",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request20": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request22",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request3": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request21",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request21": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request20",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get a thread3": {
+      "main": [
+        [
+          {
+            "node": "Get a message2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent5": {
+      "main": [
+        [
+          {
+            "node": "Reply to a message3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model5": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent5",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get a message2": {
+      "main": [
+        [
+          {
+            "node": "Extract from File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract from File": {
+      "main": [
+        [
+          {
+            "node": "AI Agent5",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structured Output Parser4": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "AI Agent5",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get a message3": {
+      "main": [
+        [
+          {
+            "node": "Get a message5",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request23": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request24",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request24": {
+      "main": [
+        [
+          {
+            "node": "AI Agent6",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent6": {
+      "main": [
+        [
+          {
+            "node": "Code7",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model6": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent6",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structured Output Parser5": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "AI Agent6",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge2": {
+      "main": [
+        [
+          {
+            "node": "Get a message4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code7": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request25",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request25": {
+      "main": [
+        [
+          {
+            "node": "AI Agent7",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent7": {
+      "main": [
+        [
+          {
+            "node": "Code12",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model7": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent7",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get a message4": {
+      "main": [
+        [
+          {
+            "node": "Extract from File2",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Upload file",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract from File2": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit Fields": {
+      "main": [
+        [
+          {
+            "node": "Get a thread5",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code12": {
+      "main": [
+        [
+          {
+            "node": "Code13",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code13": {
+      "main": [
+        [
+          {
+            "node": "Code14",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request27": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request28",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request28": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request26",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload file": {
+      "main": [
+        [
+          {
+            "node": "Download file1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download file1": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request30",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reply to a message4": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request16",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request31": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit Fields1": {
+      "main": [
+        [
+          {
+            "node": "Reply to a message4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get a message5": {
+      "main": [
+        [
+          {
+            "node": "Analyze document",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analyze document": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript2": {
+      "main": [
+        [
+          {
+            "node": "AI Agent2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript3": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request32",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code14": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request27",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get a thread5": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request23",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get a thread4": {
+      "main": [
+        [
+          {
+            "node": "Send a message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Scrape Website": {
+      "main": [
+        [
+          {
+            "node": "Code15",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Scrape Website1": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request33": {
+      "main": [
+        [
+          {
+            "node": "Scrape Website1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript1": {
+      "main": [
+        [
+          {
+            "node": "Split Out",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Out": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "GPID",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check_correct_provider": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request34",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code16": {
+      "main": [
+        [
+          {
+            "node": "Check_correct_provider",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GPID": {
+      "main": [
+        [
+          {
+            "node": "Code16",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request34": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript4": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request36",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request19": {
+      "main": [
+        []
+      ]
+    },
+    "Copy file1": {
+      "main": [
+        [
+          {
+            "node": "Update a document1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update a document1": {
+      "main": [
+        [
+          {
+            "node": "Download file2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request35": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit Fields2": {
+      "main": [
+        [
+          {
+            "node": "Get a message6",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request36": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request35",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get a message6": {
+      "main": [
+        [
+          {
+            "node": "Extract from File1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract from File1": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript5",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "AI Agent9",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript5": {
+      "main": [
+        [
+          {
+            "node": "Merge3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model8": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent9",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structured Output Parser7": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "AI Agent9",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent9": {
+      "main": [
+        [
+          {
+            "node": "Merge3",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge3": {
+      "main": [
+        [
+          {
+            "node": "AI Agent10",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structured Output Parser8": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "AI Agent10",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model9": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent10",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent10": {
+      "main": [
+        [
+          {
+            "node": "Copy file1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download file2": {
+      "main": [
+        [
+          {
+            "node": "Send a message1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reply to a message5": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request33",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code17": {
+      "main": [
+        [
+          {
+            "node": "Code18",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code19": {
+      "main": [
+        [
+          {
+            "node": "Code20",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get a thread6": {
+      "main": [
+        [
+          {
+            "node": "Code19",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Copy file2": {
+      "main": [
+        [
+          {
+            "node": "Update a document2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update a document2": {
+      "main": [
+        [
+          {
+            "node": "Download file3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code20": {
+      "main": [
+        [
+          {
+            "node": "Copy file2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download file3": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request37",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "3ce3d593-8148-4aed-bd2a-a36fde68001c",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "e82d4abdd6eb816597dc8f426c7e69508cc13d63a41073edf573e73f22416c1b"
+  },
+  "id": "JdHn00W8SYXfq8Lj",
+  "tags": []
+}
