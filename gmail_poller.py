@@ -12,10 +12,12 @@ import email as email_lib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import asyncio
+import base64
 import json
 import logging
 import re
 import time
+import requests as http_requests
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 
@@ -269,60 +271,154 @@ def _parse_raw_email(msg: email_lib.message.Message, email_id: bytes = b"0") -> 
 
 
 # ---------------------------------------------------------------------------
-# SMTP: Send reply emails
+# Gmail OAuth2 helpers (for sending via Gmail REST API over HTTPS)
+# ---------------------------------------------------------------------------
+
+GMAIL_OAUTH2_SCOPES = "https://www.googleapis.com/auth/gmail.send"
+
+
+def _get_oauth2_creds() -> tuple:
+    """Get Gmail OAuth2 client credentials from Turso settings or env vars."""
+    from turso_client import get_setting
+    import os
+    client_id = get_setting("gmail_oauth2_client_id") or os.getenv("GMAIL_OAUTH2_CLIENT_ID", "")
+    client_secret = get_setting("gmail_oauth2_client_secret") or os.getenv("GMAIL_OAUTH2_CLIENT_SECRET", "")
+    return client_id, client_secret
+
+
+def get_gmail_oauth2_auth_url(redirect_uri: str) -> str:
+    """Build the Google OAuth2 authorization URL for the user to visit."""
+    client_id, _ = _get_oauth2_creds()
+    params = {
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
+        "response_type": "code",
+        "scope": GMAIL_OAUTH2_SCOPES,
+        "access_type": "offline",
+        "prompt": "consent",
+    }
+    qs = "&".join(f"{k}={http_requests.utils.quote(str(v))}" for k, v in params.items())
+    return f"https://accounts.google.com/o/oauth2/v2/auth?{qs}"
+
+
+def exchange_oauth2_code(code: str, redirect_uri: str) -> Dict:
+    """Exchange authorization code for access_token + refresh_token."""
+    client_id, client_secret = _get_oauth2_creds()
+    resp = http_requests.post("https://oauth2.googleapis.com/token", data={
+        "code": code,
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "redirect_uri": redirect_uri,
+        "grant_type": "authorization_code",
+    })
+    return resp.json()
+
+
+def _refresh_access_token(refresh_token: str) -> Optional[str]:
+    """Use refresh_token to get a fresh access_token."""
+    client_id, client_secret = _get_oauth2_creds()
+    try:
+        resp = http_requests.post("https://oauth2.googleapis.com/token", data={
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "refresh_token": refresh_token,
+            "grant_type": "refresh_token",
+        })
+        data = resp.json()
+        if "access_token" in data:
+            return data["access_token"]
+        logger.error(f"[Gmail API] Token refresh failed: {data}")
+        return None
+    except Exception as e:
+        logger.error(f"[Gmail API] Token refresh error: {e}")
+        return None
+
+
+def _send_via_gmail_api(gmail_email: str, to_address: str, subject: str,
+                        html_body: str, in_reply_to: str = "",
+                        references: str = "") -> bool:
+    """Send email via Gmail REST API over HTTPS (works on Render free tier)."""
+    from turso_client import get_setting
+    refresh_token = get_setting("gmail_oauth2_refresh_token", "")
+    if not refresh_token:
+        logger.warning("[Gmail API] No refresh token configured, skipping API send")
+        return False
+
+    access_token = _refresh_access_token(refresh_token)
+    if not access_token:
+        return False
+
+    # Build MIME message
+    msg = MIMEMultipart("alternative")
+    msg["From"] = gmail_email
+    msg["To"] = to_address
+    msg["Subject"] = subject if subject.lower().startswith("re:") else f"Re: {subject}"
+    if in_reply_to:
+        msg["In-Reply-To"] = in_reply_to
+    if references:
+        msg["References"] = references
+
+    clean_html = html_body.replace("</br>", "<br>")
+    full_html = f'<html><body style="font-family: Arial, sans-serif; font-size: 14px;">\n{clean_html}\n</body></html>'
+    msg.attach(MIMEText(full_html, "html"))
+
+    # Base64url-encode the MIME message
+    raw_message = base64.urlsafe_b64encode(msg.as_bytes()).decode("ascii")
+
+    # Send via Gmail API
+    resp = http_requests.post(
+        "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
+        headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
+        json={"raw": raw_message},
+    )
+
+    if resp.status_code == 200:
+        logger.info(f"[Gmail API] Reply sent to {to_address} | Subject: {msg['Subject']}")
+        return True
+    else:
+        logger.error(f"[Gmail API] Send failed ({resp.status_code}): {resp.text[:300]}")
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Send reply emails (Gmail API first, SMTP fallback)
 # ---------------------------------------------------------------------------
 
 def send_reply(gmail_email: str, gmail_password: str,
                to_address: str, subject: str, html_body: str,
                in_reply_to: str = "", references: str = "") -> bool:
     """
-    Send an HTML email reply via SMTP.
-
-    Args:
-        gmail_email: Sender email address
-        gmail_password: Gmail app password
-        to_address: Recipient email
-        subject: Email subject (will be prefixed with "Re:" if not already)
-        html_body: HTML content of the reply
-        in_reply_to: Message-ID of the email being replied to (for threading)
-        references: References header for threading
-
-    Returns:
-        True if sent successfully
+    Send an HTML email reply. Tries Gmail REST API first (works on Render
+    free tier where SMTP ports are blocked), falls back to SMTP.
     """
+    # Try Gmail API first (HTTPS, no port restrictions)
+    if _send_via_gmail_api(gmail_email, to_address, subject, html_body, in_reply_to, references):
+        return True
+
+    # Fallback: try SMTP (works on paid Render or local dev)
+    logger.info("[Poller] Gmail API unavailable, trying SMTP fallback...")
     try:
-        # Build the email
         msg = MIMEMultipart("alternative")
         msg["From"] = gmail_email
         msg["To"] = to_address
         msg["Subject"] = subject if subject.lower().startswith("re:") else f"Re: {subject}"
-
-        # Threading headers
         if in_reply_to:
             msg["In-Reply-To"] = in_reply_to
         if references:
             msg["References"] = references
 
-        # Convert </br> to <br> for proper HTML
         clean_html = html_body.replace("</br>", "<br>")
-
-        # Wrap in basic HTML structure
-        full_html = f"""<html><body style="font-family: Arial, sans-serif; font-size: 14px;">
-{clean_html}
-</body></html>"""
-
+        full_html = f'<html><body style="font-family: Arial, sans-serif; font-size: 14px;">\n{clean_html}\n</body></html>'
         msg.attach(MIMEText(full_html, "html"))
 
-        # Send via SMTP over SSL (port 465)
         with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT) as server:
             server.login(gmail_email, gmail_password)
             server.send_message(msg)
 
-        logger.info(f"[Poller] Reply sent to {to_address} | Subject: {msg['Subject']}")
+        logger.info(f"[Poller] Reply sent via SMTP to {to_address} | Subject: {msg['Subject']}")
         return True
-
     except Exception as e:
-        logger.error(f"[Poller] SMTP send failed: {e}", exc_info=True)
+        logger.error(f"[Poller] SMTP fallback also failed: {e}", exc_info=True)
         return False
 
 

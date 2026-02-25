@@ -1972,6 +1972,45 @@ async def poller_stop():
 
 
 # ============================================================================
+# Gmail OAuth2 Setup Endpoints
+# ============================================================================
+
+@app.get("/internal-api/gmail-oauth/login")
+async def gmail_oauth_login(request: Request):
+    """Redirects to Google's OAuth2 consent page. Visit this URL in your browser."""
+    from gmail_poller import get_gmail_oauth2_auth_url
+    base_url = str(request.base_url).rstrip("/")
+    redirect_uri = f"{base_url}/internal-api/gmail-oauth/callback"
+    auth_url = get_gmail_oauth2_auth_url(redirect_uri)
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(auth_url)
+
+@app.get("/internal-api/gmail-oauth/callback")
+async def gmail_oauth_callback(request: Request, code: str = None, error: str = None):
+    """Google redirects here after user authorizes. Saves refresh_token to Turso."""
+    if error:
+        return {"error": error}
+    if not code:
+        return {"error": "No authorization code received"}
+
+    from gmail_poller import exchange_oauth2_code
+    base_url = str(request.base_url).rstrip("/")
+    redirect_uri = f"{base_url}/internal-api/gmail-oauth/callback"
+    tokens = exchange_oauth2_code(code, redirect_uri)
+
+    if "error" in tokens:
+        return {"error": tokens.get("error_description", tokens["error"])}
+
+    refresh_token = tokens.get("refresh_token", "")
+    if refresh_token:
+        from turso_client import set_setting
+        set_setting("gmail_oauth2_refresh_token", refresh_token, "Gmail OAuth2 refresh token for sending emails via API")
+        logger.info("[Gmail OAuth2] Refresh token saved to database")
+        return {"status": "success", "message": "Gmail OAuth2 connected! Refresh token saved. Emails will now be sent via Gmail API."}
+    else:
+        return {"error": "No refresh_token received. Try again — make sure you see the consent screen (prompt=consent)."}
+
+# ============================================================================
 # Negotiation Agent Endpoint
 # ============================================================================
 
