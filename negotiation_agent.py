@@ -106,7 +106,9 @@ CLASSIFICATION INTENTS:
 
 MANDATORY ACTIONS FOR EVERY EMAIL:
 You MUST perform ALL of the following for EVERY email you process (except "no_action"):
-1. Call search_case with the patient name to find the case ID.
+1. FIRST call lookup_negotiation with the sender's email address. This gives you the case_id,
+   bill amounts, offer history — everything you need. Only if lookup_negotiation returns no
+   results, THEN fall back to search_case with the patient name.
 2. Call log_negotiation to record this interaction in the database with:
    - case_id, negotiation_type (matching the intent), email_body (summary),
    - to (provider email), actual_bill, offered_bill, result
@@ -131,8 +133,25 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "lookup_negotiation",
+            "description": "Look up existing negotiation history by provider email address. Returns case_id, patient name, bill amounts, offer amounts, and full negotiation history. ALWAYS call this FIRST before search_case — it gives you the exact case and provider context without guessing.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "provider_email": {
+                        "type": "string",
+                        "description": "The provider's email address (the sender of the incoming email)"
+                    }
+                },
+                "required": ["provider_email"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "search_case",
-            "description": "Search CasePeer for a case by patient name. Returns the case ID and basic info.",
+            "description": "Search CasePeer for a case by patient name. Only use this as a FALLBACK if lookup_negotiation returns no results.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -365,6 +384,50 @@ def _casepeer_post(endpoint: str, data: Dict = None, content_type: str = "applic
     except Exception as e:
         logger.error(f"CasePeer POST {endpoint} failed: {e}")
         return {"error": str(e)}
+
+
+def tool_lookup_negotiation(provider_email: str) -> str:
+    """Look up existing negotiation history by provider email. Returns case context."""
+    from turso_client import turso
+    try:
+        rows = turso.fetch_all(
+            'SELECT case_id, negotiation_type, email_body, actual_bill, offered_bill, result, date, sent_by_us FROM negotiations WHERE "to" = ? ORDER BY date DESC LIMIT 10',
+            [provider_email]
+        )
+
+        if not rows:
+            return json.dumps({"found": False, "message": f"No negotiation history for {provider_email}"})
+
+        # Get the most recent entry for context
+        latest = rows[0]
+        case_id = latest.get("case_id", "")
+
+        # Build negotiation history
+        history = []
+        for r in rows:
+            history.append({
+                "type": r.get("negotiation_type", ""),
+                "summary": (r.get("email_body", "") or "")[:200],
+                "actual_bill": r.get("actual_bill"),
+                "offered_bill": r.get("offered_bill"),
+                "result": r.get("result", ""),
+                "date": r.get("date", ""),
+                "sent_by_us": bool(r.get("sent_by_us", 0))
+            })
+
+        return json.dumps({
+            "found": True,
+            "case_id": str(case_id),
+            "provider_email": provider_email,
+            "latest_actual_bill": latest.get("actual_bill"),
+            "latest_offered_bill": latest.get("offered_bill"),
+            "negotiation_count": len(rows),
+            "history": history
+        })
+
+    except Exception as e:
+        logger.error(f"lookup_negotiation failed: {e}")
+        return json.dumps({"error": str(e)})
 
 
 def tool_search_case(patient_name: str) -> str:
@@ -649,6 +712,7 @@ def tool_generate_and_upload_pdf(case_id: str, document_title: str, document_typ
 
 # Tool dispatcher
 TOOL_FUNCTIONS = {
+    "lookup_negotiation": lambda args: tool_lookup_negotiation(args["provider_email"]),
     "search_case": lambda args: tool_search_case(args["patient_name"]),
     "get_settlement_page": lambda args: tool_get_settlement_page(args["case_id"]),
     "accept_lien": lambda args: tool_accept_lien(args["case_id"], args["provider_id"], args["offered_amount"]),
