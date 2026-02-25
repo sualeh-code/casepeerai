@@ -29,7 +29,7 @@ POLL_INTERVAL_SECONDS = 60  # Check every 60 seconds (same as n8n)
 IMAP_HOST = "imap.gmail.com"
 IMAP_PORT = 993
 SMTP_HOST = "smtp.gmail.com"
-SMTP_PORT = 587
+SMTP_PORT = 465  # SSL port (Render blocks 587/STARTTLS)
 
 # Sender filter — only process emails forwarded through this address
 # Set to None to process ALL unread emails (not recommended)
@@ -302,11 +302,8 @@ def send_reply(gmail_email: str, gmail_password: str,
 
         msg.attach(MIMEText(full_html, "html"))
 
-        # Send via SMTP
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
-            server.ehlo()
-            server.starttls()
-            server.ehlo()
+        # Send via SMTP over SSL (port 465)
+        with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT) as server:
             server.login(gmail_email, gmail_password)
             server.send_message(msg)
 
