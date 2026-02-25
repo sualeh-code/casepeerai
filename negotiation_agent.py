@@ -834,21 +834,62 @@ async def process_negotiation_email(thread_data: Dict) -> Dict[str, Any]:
     last_message_id = last_msg.get("id", "")
     sender_email = last_msg.get("From", "")
 
+    # Clean sender email (extract from "Name <email>" format)
+    email_match = re.search(r'<(.+?)>', sender_email)
+    clean_sender = email_match.group(1) if email_match else sender_email.strip()
+
+    # --- PRE-LOAD PROVIDER CONTEXT from database ---
+    # This gives the agent full history without needing to call tools first
+    provider_context = ""
+    pre_loaded_case_id = ""
+    try:
+        negotiation_history = tool_lookup_negotiation(clean_sender)
+        history_data = json.loads(negotiation_history)
+
+        if history_data.get("found"):
+            pre_loaded_case_id = history_data.get("case_id", "")
+            provider_context = f"""
+KNOWN PROVIDER CONTEXT (from database — this provider has prior negotiations):
+- Case ID: {history_data['case_id']}
+- Provider Email: {history_data['provider_email']}
+- Latest Actual Bill: ${history_data.get('latest_actual_bill', 'N/A')}
+- Latest Offered Amount: ${history_data.get('latest_offered_bill', 'N/A')}
+- Total Negotiations on Record: {history_data.get('negotiation_count', 0)}
+- Negotiation History (most recent first):
+"""
+            for h in history_data.get("history", []):
+                direction = "WE SENT" if h.get("sent_by_us") else "PROVIDER SENT"
+                provider_context += f"  [{h.get('date', '?')}] {direction} | Type: {h.get('type', '?')} | Bill: ${h.get('actual_bill', '?')} | Offer: ${h.get('offered_bill', '?')} | Result: {h.get('result', '')} | {h.get('summary', '')}\n"
+
+            provider_context += f"\nYou already have the case_id={history_data['case_id']}. Do NOT call search_case. Use this case_id for all tool calls."
+            logger.info(f"[Agent] Pre-loaded context for {clean_sender}: case_id={pre_loaded_case_id}, {history_data.get('negotiation_count', 0)} prior negotiations")
+        else:
+            provider_context = f"\nNO PRIOR NEGOTIATIONS FOUND for {clean_sender}. This may be a new provider. Call search_case with the patient name to find the case."
+            logger.info(f"[Agent] No prior negotiations for {clean_sender}")
+
+    except Exception as e:
+        logger.warning(f"[Agent] Failed to pre-load provider context: {e}")
+        provider_context = "\nCould not pre-load provider context. Use lookup_negotiation or search_case tools."
+
     user_message = f"""Analyze the following email thread and determine the appropriate action.
 
 EMAIL THREAD (chronological, oldest to newest):
 {conversation_text}
+{provider_context}
 
 METADATA:
 - Thread ID: {thread_id}
-- Last message from: {sender_email}
+- Last message from: {sender_email} ({clean_sender})
 - Total messages in thread: {len(messages)}
+{f'- Known Case ID: {pre_loaded_case_id}' if pre_loaded_case_id else '- Case ID: unknown — use search_case to find it'}
 
 INSTRUCTIONS:
 1. Classify the provider's MOST RECENT message intent.
-2. Use the available tools to look up the case in CasePeer, update records, etc.
-3. Compose a reply email if one is needed.
-4. Return your final decision as a JSON object with these fields:
+2. You already have the provider's negotiation history above. Use it to understand context
+   (what was our last offer, what did they counter, etc.).
+3. Use tools to update records (log_negotiation, add_case_note, etc.).
+4. Compose a reply email if one is needed.
+5. Return your final decision as a JSON object with these fields:
    - intent: the classification
    - reply_message: the HTML email to send back (or null if no reply needed)
    - provider_name: extracted from the conversation
