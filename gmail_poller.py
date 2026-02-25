@@ -378,6 +378,8 @@ async def _poll_loop():
                         last_msg = messages[-1] if messages else {}
                         to_address = last_msg.get("From", "")
 
+                        logger.info(f"[Poller] Raw From field: '{to_address}'")
+
                         # Extract just the email from "Name <email@domain.com>"
                         email_match = re.search(r'<(.+?)>', to_address)
                         if email_match:
@@ -387,6 +389,7 @@ async def _poll_loop():
                         message_id = last_msg.get("id", "")
 
                         if to_address:
+                            logger.info(f"[Poller] Sending reply to: {to_address} | Subject: {subject}")
                             sent = await asyncio.to_thread(
                                 send_reply,
                                 gmail_email, gmail_password,
@@ -395,6 +398,10 @@ async def _poll_loop():
                             )
                             if sent:
                                 _poller_stats["emails_replied"] += 1
+                            else:
+                                logger.error(f"[Poller] Failed to send reply to {to_address}")
+                        else:
+                            logger.warning(f"[Poller] No reply-to address found, skipping send")
 
                     # Log escalations
                     if intent == "escalate":

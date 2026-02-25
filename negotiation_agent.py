@@ -333,8 +333,9 @@ def _casepeer_get(endpoint: str) -> Dict[str, Any]:
     base = _get_local_base()
 
     # Use the local proxy to leverage existing auth session
+    # Timeout 90s to allow for CasePeer re-authentication if session expired
     try:
-        resp = req.get(f"{base}/{endpoint.lstrip('/')}", timeout=30)
+        resp = req.get(f"{base}/{endpoint.lstrip('/')}", timeout=90)
         resp.raise_for_status()
         return resp.json()
     except Exception as e:
@@ -351,13 +352,13 @@ def _casepeer_post(endpoint: str, data: Dict = None, content_type: str = "applic
             resp = req.post(
                 f"{base}/{endpoint.lstrip('/')}",
                 data=data,
-                timeout=30
+                timeout=90
             )
         else:
             resp = req.post(
                 f"{base}/{endpoint.lstrip('/')}",
                 json=data,
-                timeout=30
+                timeout=90
             )
         resp.raise_for_status()
         return resp.json()
@@ -467,12 +468,12 @@ def tool_accept_lien(case_id: str, provider_id: str, offered_amount: str) -> str
             f"{base}/case/{case_id}/settlement/negotiations/",
             data=form_body,
             headers={"Content-Type": "application/x-www-form-urlencoded"},
-            timeout=30
+            timeout=90
         )
         # Step 4: Toggle the accept flag
         resp2 = req.get(
             f"{base}/case/{case_id}/settlement/accept-unaccept-health-lien/{provider_id}/",
-            timeout=30
+            timeout=90
         )
         return json.dumps({"success": True, "provider_id": provider_id, "amount": clean_amount})
     except Exception as e:
@@ -487,7 +488,7 @@ def tool_add_case_note(case_id: str, note: str) -> str:
         resp = req.post(
             f"{base}/case/{case_id}/notes/add-case-note/",
             data={"note": note, "time_worked": ""},
-            timeout=30
+            timeout=90
         )
         return json.dumps({"success": True})
     except Exception as e:
