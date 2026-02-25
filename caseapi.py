@@ -2014,6 +2014,196 @@ async def gmail_oauth_callback(request: Request, code: str = None, error: str = 
 # Negotiation Agent Endpoint
 # ============================================================================
 
+# ============================================================================
+# Agent Activity Dashboard — per-case/per-provider history
+# ============================================================================
+
+@app.get("/internal-api/cases/{case_id}/agent/providers")
+async def get_agent_providers(case_id: str):
+    """
+    List all providers the AI agent has interacted with for a given case.
+    Combines data from negotiations table and conversation_history table.
+    """
+    providers = {}
+
+    # 1. From negotiations table — providers we emailed
+    try:
+        neg_rows = turso.fetch_all(
+            'SELECT DISTINCT "to", negotiation_type, COUNT(*) as count, '
+            'MAX(date) as last_date, '
+            'MAX(actual_bill) as latest_bill, MAX(offered_bill) as latest_offer '
+            'FROM negotiations WHERE case_id = ? GROUP BY "to"',
+            [case_id]
+        )
+        for row in neg_rows:
+            email = (row.get("to") or "").strip().lower()
+            if not email:
+                continue
+            providers[email] = {
+                "email": email,
+                "negotiation_count": row.get("count", 0),
+                "last_activity": row.get("last_date", ""),
+                "latest_bill": row.get("latest_bill", 0),
+                "latest_offer": row.get("latest_offer", 0),
+                "has_conversation": False,
+                "last_intent": "",
+            }
+    except Exception as e:
+        logger.warning(f"[AgentDashboard] Failed to query negotiations: {e}")
+
+    # 2. From conversation_history — threads the AI has processed
+    try:
+        conv_rows = turso.fetch_all(
+            "SELECT sender_email, thread_subject, tools_used, last_intent, updated_at "
+            "FROM conversation_history WHERE case_id = ?",
+            [case_id]
+        )
+        for row in conv_rows:
+            email = (row.get("sender_email") or "").strip().lower()
+            if not email:
+                continue
+            if email in providers:
+                providers[email]["has_conversation"] = True
+                providers[email]["last_intent"] = row.get("last_intent", "")
+                # Use most recent date
+                conv_date = row.get("updated_at", "")
+                if conv_date > (providers[email].get("last_activity") or ""):
+                    providers[email]["last_activity"] = conv_date
+            else:
+                tools_list = []
+                try:
+                    tools_list = json.loads(row.get("tools_used") or "[]")
+                except Exception:
+                    pass
+                providers[email] = {
+                    "email": email,
+                    "negotiation_count": 0,
+                    "last_activity": row.get("updated_at", ""),
+                    "latest_bill": 0,
+                    "latest_offer": 0,
+                    "has_conversation": True,
+                    "last_intent": row.get("last_intent", ""),
+                }
+    except Exception as e:
+        logger.warning(f"[AgentDashboard] Failed to query conversation_history: {e}")
+
+    return {
+        "case_id": case_id,
+        "provider_count": len(providers),
+        "providers": sorted(providers.values(), key=lambda p: p.get("last_activity", ""), reverse=True)
+    }
+
+
+@app.get("/internal-api/cases/{case_id}/agent/providers/{provider_email}/history")
+async def get_agent_provider_history(case_id: str, provider_email: str):
+    """
+    Full AI interaction history for a specific provider on a case.
+    Returns: timeline of tool calls, emails, negotiations, and AI decisions.
+    """
+    import urllib.parse
+    provider_email = urllib.parse.unquote(provider_email).strip().lower()
+
+    timeline = []
+
+    # 1. Negotiations (individual logged events)
+    try:
+        neg_rows = turso.fetch_all(
+            'SELECT id, negotiation_type, "to", email_body, date, actual_bill, offered_bill, sent_by_us, result '
+            'FROM negotiations WHERE case_id = ? AND LOWER("to") = ? ORDER BY date ASC',
+            [case_id, provider_email]
+        )
+        for row in neg_rows:
+            direction = "outbound" if row.get("sent_by_us") else "inbound"
+            timeline.append({
+                "type": "negotiation",
+                "timestamp": row.get("date", ""),
+                "direction": direction,
+                "negotiation_type": row.get("negotiation_type", ""),
+                "email_body": row.get("email_body", ""),
+                "actual_bill": row.get("actual_bill", 0),
+                "offered_bill": row.get("offered_bill", 0),
+                "result": row.get("result", ""),
+            })
+    except Exception as e:
+        logger.warning(f"[AgentDashboard] Failed to query negotiations for {provider_email}: {e}")
+
+    # 2. Conversation history — full AI chat + tool calls
+    conversations = []
+    try:
+        conv_rows = turso.fetch_all(
+            "SELECT id, thread_subject, messages_json, tools_used, last_intent, updated_at "
+            "FROM conversation_history WHERE case_id = ? AND sender_email = ? ORDER BY updated_at ASC",
+            [case_id, provider_email]
+        )
+        for row in conv_rows:
+            messages = []
+            try:
+                messages = json.loads(row.get("messages_json") or "[]")
+            except Exception:
+                pass
+
+            tools = []
+            try:
+                tools = json.loads(row.get("tools_used") or "[]")
+            except Exception:
+                pass
+
+            # Parse messages into a readable timeline
+            chat_entries = []
+            for msg in messages:
+                if not isinstance(msg, dict):
+                    continue
+                role = msg.get("role", "")
+                if role == "system":
+                    continue  # Skip system prompt
+                if role == "user":
+                    # The initial email content sent to the agent
+                    content = msg.get("content", "")
+                    if len(content) > 500:
+                        content = content[:500] + "..."
+                    chat_entries.append({"role": "user", "content": content})
+                elif role == "assistant":
+                    content = msg.get("content", "")
+                    tool_calls_data = msg.get("tool_calls", [])
+                    if tool_calls_data:
+                        for tc in tool_calls_data:
+                            fn = tc.get("function", {})
+                            chat_entries.append({
+                                "role": "tool_call",
+                                "function": fn.get("name", "unknown"),
+                                "arguments": fn.get("arguments", "{}"),
+                            })
+                    if content:
+                        chat_entries.append({"role": "assistant", "content": content})
+                elif role == "tool":
+                    content = msg.get("content", "")
+                    if len(content) > 300:
+                        content = content[:300] + "..."
+                    chat_entries.append({"role": "tool_result", "content": content})
+
+            conversations.append({
+                "thread_subject": row.get("thread_subject", ""),
+                "last_intent": row.get("last_intent", ""),
+                "updated_at": row.get("updated_at", ""),
+                "tools_used": tools,
+                "chat": chat_entries,
+            })
+    except Exception as e:
+        logger.warning(f"[AgentDashboard] Failed to query conversation_history for {provider_email}: {e}")
+
+    # Sort timeline by timestamp
+    timeline.sort(key=lambda x: x.get("timestamp", ""))
+
+    return {
+        "case_id": case_id,
+        "provider_email": provider_email,
+        "negotiation_count": len([t for t in timeline if t["type"] == "negotiation"]),
+        "conversation_count": len(conversations),
+        "timeline": timeline,
+        "conversations": conversations,
+    }
+
+
 @app.post("/internal-api/process-negotiation-email")
 async def process_negotiation_email(request: Request):
     """

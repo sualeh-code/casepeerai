@@ -72,10 +72,20 @@ class TursoClient:
             # Case Metrics
             {"sql": "CREATE TABLE IF NOT EXISTS case_metrics (id INTEGER PRIMARY KEY AUTOINCREMENT, case_name TEXT, status TEXT, emails_received INTEGER DEFAULT 0, emails_sent INTEGER DEFAULT 0, savings REAL DEFAULT 0, revenue REAL DEFAULT 0, start_date DATETIME, end_date DATETIME, completion_time TEXT)"},
             # Conversation History — full AI chat per sender/thread for continuity
-            {"sql": "CREATE TABLE IF NOT EXISTS conversation_history (id TEXT PRIMARY KEY, sender_email TEXT, thread_subject TEXT, messages_json TEXT, tools_used TEXT, last_intent TEXT, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP)"}
+            {"sql": "CREATE TABLE IF NOT EXISTS conversation_history (id TEXT PRIMARY KEY, case_id TEXT, sender_email TEXT, thread_subject TEXT, messages_json TEXT, tools_used TEXT, last_intent TEXT, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP)"}
+        ]
+        # Migration: add case_id column if table already exists without it
+        migration_stmts = [
+            {"sql": "ALTER TABLE conversation_history ADD COLUMN case_id TEXT"}
         ]
         try:
             self.execute_many(statements)
+            # Run migrations (ignore errors for already-applied migrations)
+            for m in migration_stmts:
+                try:
+                    self.execute(m["sql"])
+                except Exception:
+                    pass  # column already exists
             logger.info("[OK] Turso schema initialized")
             return True
         except Exception as e:

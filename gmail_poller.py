@@ -33,9 +33,10 @@ IMAP_PORT = 993
 SMTP_HOST = "smtp.gmail.com"
 SMTP_PORT = 465  # SSL port (Render blocks 587/STARTTLS)
 
-# Sender filter — only process emails forwarded through this address
-# Set to None to process ALL unread emails (not recommended)
-DEFAULT_SENDER_FILTER = "NatalyaValencia@beverlylaw.org,eyfectdesigns@gmail.com"
+# Sender filter — only process emails FROM these addresses (comma-separated).
+# These should be PROVIDER email addresses you're negotiating with.
+# Set in Turso as "negotiation_sender_filter".
+DEFAULT_SENDER_FILTER = ""
 
 
 # ---------------------------------------------------------------------------

@@ -762,7 +762,7 @@ def _load_conversation_history(sender_email: str, thread_subject: str) -> Option
 
 def _save_conversation_history(sender_email: str, thread_subject: str,
                                 messages: List[Dict], tools_used: List[str],
-                                intent: str):
+                                intent: str, case_id: str = ""):
     """Save the full AI conversation to Turso for next time."""
     from turso_client import turso
     try:
@@ -776,8 +776,8 @@ def _save_conversation_history(sender_email: str, thread_subject: str,
                 safe_messages.append(msg)
 
         turso.execute(
-            "INSERT OR REPLACE INTO conversation_history (id, sender_email, thread_subject, messages_json, tools_used, last_intent, updated_at) VALUES (?, ?, ?, ?, ?, ?, datetime('now'))",
-            [key, sender_email.lower(), thread_subject, json.dumps(safe_messages), json.dumps(tools_used), intent]
+            "INSERT OR REPLACE INTO conversation_history (id, case_id, sender_email, thread_subject, messages_json, tools_used, last_intent, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))",
+            [key, case_id, sender_email.lower(), thread_subject, json.dumps(safe_messages), json.dumps(tools_used), intent]
         )
         logger.info(f"[Agent] Saved conversation history for {sender_email} | {thread_subject[:30]}")
     except Exception as e:
@@ -1007,6 +1007,7 @@ IMPORTANT: After using tools and gathering information, you MUST return a final 
     ]
 
     actions_taken = []
+    discovered_case_id = pre_loaded_case_id  # may be updated by tool calls
     max_iterations = 10
     total_tokens = 0
 
@@ -1037,6 +1038,10 @@ IMPORTANT: After using tools and gathering information, you MUST return a final 
                 fn_args = json.loads(tool_call.function.arguments)
                 logger.info(f"[Agent] Tool call: {fn_name}({fn_args})")
 
+                # Track case_id from any tool that uses it
+                if not discovered_case_id and fn_args.get("case_id"):
+                    discovered_case_id = fn_args["case_id"]
+
                 # Execute the tool
                 if fn_name in TOOL_FUNCTIONS:
                     try:
@@ -1045,6 +1050,15 @@ IMPORTANT: After using tools and gathering information, you MUST return a final 
                         result = json.dumps({"error": str(e)})
                 else:
                     result = json.dumps({"error": f"Unknown tool: {fn_name}"})
+
+                # If search_case returned a case_id, capture it
+                if fn_name == "search_case" and not discovered_case_id:
+                    try:
+                        sr = json.loads(result)
+                        if sr.get("case_id"):
+                            discovered_case_id = sr["case_id"]
+                    except Exception:
+                        pass
 
                 actions_taken.append(f"{fn_name}({json.dumps(fn_args)})")
                 logger.info(f"[Agent] Tool result: {result[:200]}...")
@@ -1076,7 +1090,8 @@ IMPORTANT: After using tools and gathering information, you MUST return a final 
         _save_conversation_history(
             clean_sender, thread_subject,
             agent_messages, actions_taken,
-            result.get("intent", "unclear")
+            result.get("intent", "unclear"),
+            case_id=discovered_case_id
         )
 
         return result
