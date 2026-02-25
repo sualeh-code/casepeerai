@@ -320,15 +320,21 @@ TOOLS = [
 # Tool implementation functions — these call your existing CasePeer proxy
 # ---------------------------------------------------------------------------
 
+def _get_local_base() -> str:
+    """Get the local proxy URL, respecting Render's PORT env var."""
+    import os
+    port = os.getenv("PORT", "8000")
+    return f"http://localhost:{port}"
+
+
 def _casepeer_get(endpoint: str) -> Dict[str, Any]:
     """Make a GET request through the CasePeer proxy (internal)."""
     import requests as req
-    from turso_client import get_setting
-    base_url = get_setting("casepeer_base_url", "https://my.casepeer.com")
+    base = _get_local_base()
 
     # Use the local proxy to leverage existing auth session
     try:
-        resp = req.get(f"http://localhost:8000/{endpoint.lstrip('/')}", timeout=30)
+        resp = req.get(f"{base}/{endpoint.lstrip('/')}", timeout=30)
         resp.raise_for_status()
         return resp.json()
     except Exception as e:
@@ -339,16 +345,17 @@ def _casepeer_get(endpoint: str) -> Dict[str, Any]:
 def _casepeer_post(endpoint: str, data: Dict = None, content_type: str = "application/json") -> Dict[str, Any]:
     """Make a POST request through the CasePeer proxy (internal)."""
     import requests as req
+    base = _get_local_base()
     try:
         if content_type == "multipart/form-data":
             resp = req.post(
-                f"http://localhost:8000/{endpoint.lstrip('/')}",
+                f"{base}/{endpoint.lstrip('/')}",
                 data=data,
                 timeout=30
             )
         else:
             resp = req.post(
-                f"http://localhost:8000/{endpoint.lstrip('/')}",
+                f"{base}/{endpoint.lstrip('/')}",
                 json=data,
                 timeout=30
             )
@@ -454,16 +461,17 @@ def tool_accept_lien(case_id: str, provider_id: str, offered_amount: str) -> str
     # Step 3: POST the updated form
     form_body = "&".join(f"{k}={v}" for k, v in form_fields.items())
     import requests as req
+    base = _get_local_base()
     try:
         resp = req.post(
-            f"http://localhost:8000/case/{case_id}/settlement/negotiations/",
+            f"{base}/case/{case_id}/settlement/negotiations/",
             data=form_body,
             headers={"Content-Type": "application/x-www-form-urlencoded"},
             timeout=30
         )
         # Step 4: Toggle the accept flag
         resp2 = req.get(
-            f"http://localhost:8000/case/{case_id}/settlement/accept-unaccept-health-lien/{provider_id}/",
+            f"{base}/case/{case_id}/settlement/accept-unaccept-health-lien/{provider_id}/",
             timeout=30
         )
         return json.dumps({"success": True, "provider_id": provider_id, "amount": clean_amount})
@@ -474,9 +482,10 @@ def tool_accept_lien(case_id: str, provider_id: str, offered_amount: str) -> str
 def tool_add_case_note(case_id: str, note: str) -> str:
     """Add a note to a CasePeer case."""
     import requests as req
+    base = _get_local_base()
     try:
         resp = req.post(
-            f"http://localhost:8000/case/{case_id}/notes/add-case-note/",
+            f"{base}/case/{case_id}/notes/add-case-note/",
             data={"note": note, "time_worked": ""},
             timeout=30
         )
@@ -617,8 +626,9 @@ def tool_generate_and_upload_pdf(case_id: str, document_title: str, document_typ
         files = {"file": (filename, pdf_bytes, "application/pdf")}
         data = {"docname": filename}
 
+        base = _get_local_base()
         resp = req.post(
-            f"http://localhost:8000/internal-api/proxy_upload_file/{case_id}",
+            f"{base}/internal-api/proxy_upload_file/{case_id}",
             files=files,
             data=data,
             timeout=60
