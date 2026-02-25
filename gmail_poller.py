@@ -33,7 +33,7 @@ SMTP_PORT = 465  # SSL port (Render blocks 587/STARTTLS)
 
 # Sender filter — only process emails forwarded through this address
 # Set to None to process ALL unread emails (not recommended)
-DEFAULT_SENDER_FILTER = "NatalyaValencia@beverlylaw.org"
+DEFAULT_SENDER_FILTER = "NatalyaValencia@beverlylaw.org,eyfectdesigns@gmail.com"
 
 
 # ---------------------------------------------------------------------------
@@ -92,16 +92,27 @@ def fetch_unread_threads(gmail_email: str, gmail_password: str, sender_filter: s
         mail.login(gmail_email, gmail_password)
         mail.select("inbox")
 
-        # Search for unread emails from the sender
-        search_query = f'FROM "{sender_filter}" UNSEEN' if sender_filter else "UNSEEN"
-        status, message_ids = mail.search(None, search_query)
+        # Search for unread emails from the sender(s) — supports comma-separated list
+        email_ids = []
+        if sender_filter:
+            for sender in sender_filter.split(","):
+                sender = sender.strip()
+                if not sender:
+                    continue
+                status, message_ids = mail.search(None, f'FROM "{sender}" UNSEEN')
+                if status == "OK" and message_ids[0]:
+                    email_ids.extend(message_ids[0].split())
+            # Deduplicate (in case an email matches multiple senders)
+            email_ids = list(dict.fromkeys(email_ids))
+        else:
+            status, message_ids = mail.search(None, "UNSEEN")
+            if status == "OK" and message_ids[0]:
+                email_ids = message_ids[0].split()
 
-        if status != "OK" or not message_ids[0]:
+        if not email_ids:
             mail.close()
             mail.logout()
             return []
-
-        email_ids = message_ids[0].split()
         logger.info(f"[Poller] Found {len(email_ids)} unread email(s)")
 
         for eid in email_ids:
