@@ -112,6 +112,27 @@ def fetch_unread_threads(gmail_email: str, gmail_password: str, sender_filter: s
                 email_ids = message_ids[0].split()
 
         if not email_ids:
+            # Debug: check if there are ANY unread emails (regardless of sender)
+            # to help diagnose sender filter mismatches
+            try:
+                dbg_status, dbg_ids = mail.search(None, "UNSEEN")
+                if dbg_status == "OK" and dbg_ids[0]:
+                    all_unread = dbg_ids[0].split()
+                    if all_unread:
+                        # Show the FROM headers of up to 5 unread emails
+                        sample_froms = []
+                        for uid in all_unread[:5]:
+                            s, d = mail.fetch(uid, "(BODY.PEEK[HEADER.FIELDS (FROM)])")
+                            if s == "OK" and d[0]:
+                                raw_from = d[0][1].decode("utf-8", errors="replace").strip()
+                                sample_froms.append(raw_from.replace("From: ", "").strip())
+                        logger.warning(
+                            f"[Poller] Filter '{sender_filter}' matched 0, but {len(all_unread)} total unread exist. "
+                            f"Sample FROM headers: {sample_froms}"
+                        )
+            except Exception as dbg_err:
+                logger.debug(f"[Poller] Debug IMAP check failed: {dbg_err}")
+
             mail.close()
             mail.logout()
             return []
@@ -367,6 +388,12 @@ def _send_via_gmail_api(gmail_email: str, to_address: str, subject: str,
         msg["References"] = references
 
     clean_html = html_body.replace("</br>", "<br>")
+
+    # Append Gmail signature if configured
+    signature = get_setting("gmail_signature", "")
+    if signature:
+        clean_html += f"\n<br><br>{signature}"
+
     full_html = f'<html><body style="font-family: Arial, sans-serif; font-size: 14px;">\n{clean_html}\n</body></html>'
     msg.attach(MIMEText(full_html, "html"))
 
@@ -416,6 +443,13 @@ def send_reply(gmail_email: str, gmail_password: str,
             msg["References"] = references
 
         clean_html = html_body.replace("</br>", "<br>")
+
+        # Append Gmail signature if configured
+        from turso_client import get_setting as _get_sig
+        sig = _get_sig("gmail_signature", "")
+        if sig:
+            clean_html += f"\n<br><br>{sig}"
+
         full_html = f'<html><body style="font-family: Arial, sans-serif; font-size: 14px;">\n{clean_html}\n</body></html>'
         msg.attach(MIMEText(full_html, "html"))
 

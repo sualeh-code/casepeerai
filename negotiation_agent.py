@@ -261,6 +261,10 @@ TOOLS = [
                     "result": {
                         "type": "string",
                         "description": "Result of this negotiation step"
+                    },
+                    "sent_by_us": {
+                        "type": "boolean",
+                        "description": "True if this logs OUR reply/action, False if logging the provider's incoming message. Default: false (provider message)."
                     }
                 },
                 "required": ["case_id", "negotiation_type", "email_body"]
@@ -593,13 +597,13 @@ def tool_get_case_status(case_id: str) -> str:
 
 def tool_log_negotiation(case_id: str, negotiation_type: str, email_body: str,
                          to: str = "", actual_bill: float = 0, offered_bill: float = 0,
-                         result: str = "") -> str:
+                         result: str = "", sent_by_us: bool = False) -> str:
     """Log a negotiation event to the Turso database."""
     from turso_client import turso
     try:
         turso.execute(
             "INSERT INTO negotiations (case_id, negotiation_type, \"to\", email_body, date, actual_bill, offered_bill, sent_by_us, result) VALUES (?, ?, ?, ?, datetime('now'), ?, ?, ?, ?)",
-            [case_id, negotiation_type, to, email_body, actual_bill, offered_bill, 0, result]
+            [case_id, negotiation_type, to, email_body, actual_bill, offered_bill, 1 if sent_by_us else 0, result]
         )
         return json.dumps({"success": True})
     except Exception as e:
@@ -731,6 +735,56 @@ TOOL_FUNCTIONS = {
 
 
 # ---------------------------------------------------------------------------
+# Conversation history — persist full AI chat per sender for continuity
+# ---------------------------------------------------------------------------
+
+def _get_conversation_key(sender_email: str, thread_subject: str) -> str:
+    """Generate a stable key for a conversation (sender + cleaned subject)."""
+    clean_subj = re.sub(r'^(Re:|Fwd?:)\s*', '', thread_subject, flags=re.IGNORECASE).strip().lower()
+    return f"{sender_email.lower()}|{clean_subj}"
+
+
+def _load_conversation_history(sender_email: str, thread_subject: str) -> Optional[List[Dict]]:
+    """Load previous AI conversation for this sender+thread from Turso."""
+    from turso_client import turso
+    try:
+        key = _get_conversation_key(sender_email, thread_subject)
+        row = turso.fetch_one(
+            "SELECT messages_json, tools_used FROM conversation_history WHERE id = ?",
+            [key]
+        )
+        if row and row.get("messages_json"):
+            return json.loads(row["messages_json"])
+    except Exception as e:
+        logger.warning(f"[Agent] Failed to load conversation history: {e}")
+    return None
+
+
+def _save_conversation_history(sender_email: str, thread_subject: str,
+                                messages: List[Dict], tools_used: List[str],
+                                intent: str):
+    """Save the full AI conversation to Turso for next time."""
+    from turso_client import turso
+    try:
+        key = _get_conversation_key(sender_email, thread_subject)
+        # Only save serializable messages (strip tool_calls objects)
+        safe_messages = []
+        for msg in messages:
+            if hasattr(msg, 'model_dump'):
+                safe_messages.append(msg.model_dump())
+            elif isinstance(msg, dict):
+                safe_messages.append(msg)
+
+        turso.execute(
+            "INSERT OR REPLACE INTO conversation_history (id, sender_email, thread_subject, messages_json, tools_used, last_intent, updated_at) VALUES (?, ?, ?, ?, ?, ?, datetime('now'))",
+            [key, sender_email.lower(), thread_subject, json.dumps(safe_messages), json.dumps(tools_used), intent]
+        )
+        logger.info(f"[Agent] Saved conversation history for {sender_email} | {thread_subject[:30]}")
+    except Exception as e:
+        logger.warning(f"[Agent] Failed to save conversation history: {e}")
+
+
+# ---------------------------------------------------------------------------
 # Email thread parser — replaces Code1 + Code3 from n8n
 # ---------------------------------------------------------------------------
 
@@ -759,33 +813,37 @@ def parse_email_thread(thread_data: Dict) -> str:
         name_match = re.match(r'^(.*?)<', from_field)
         sender = name_match.group(1).strip() if name_match else from_field
 
-        # Extract body
-        body = ""
-        payload = msg.get("payload", {})
+        # Extract body — check _decoded_body first (set by IMAP poller),
+        # then try Gmail API format (base64 payload), then fall back to snippet
+        body = msg.get("_decoded_body", "")
 
-        if payload.get("body", {}).get("data"):
-            try:
-                raw = payload["body"]["data"].replace("-", "+").replace("_", "/")
-                body = base64.b64decode(raw).decode("utf-8", errors="replace")
-            except Exception:
-                body = ""
+        if not body:
+            payload = msg.get("payload", {})
+            if payload.get("body", {}).get("data"):
+                try:
+                    raw = payload["body"]["data"].replace("-", "+").replace("_", "/")
+                    body = base64.b64decode(raw).decode("utf-8", errors="replace")
+                except Exception:
+                    body = ""
 
-        if not body and payload.get("parts"):
-            for part in payload["parts"]:
-                if part.get("mimeType") == "text/plain" and part.get("body", {}).get("data"):
-                    try:
-                        raw = part["body"]["data"].replace("-", "+").replace("_", "/")
-                        body = base64.b64decode(raw).decode("utf-8", errors="replace")
-                        break
-                    except Exception:
-                        continue
+            if not body and payload.get("parts"):
+                for part in payload["parts"]:
+                    if part.get("mimeType") == "text/plain" and part.get("body", {}).get("data"):
+                        try:
+                            raw = part["body"]["data"].replace("-", "+").replace("_", "/")
+                            body = base64.b64decode(raw).decode("utf-8", errors="replace")
+                            break
+                        except Exception:
+                            continue
 
         if not body:
             body = msg.get("snippet", "")
 
         # Clean body: remove quoted replies and excessive whitespace
-        body = re.sub(r'On\s.+wrote:.+', '', body, flags=re.DOTALL)
-        body = re.sub(r'>\s?.+', '', body)
+        # Use non-greedy match and only strip from "On ... wrote:" to end
+        body = re.sub(r'\nOn [^\n]+wrote:\s*\n.*', '', body, flags=re.DOTALL)
+        # Remove quoted lines (lines starting with >)
+        body = re.sub(r'^>.*$', '', body, flags=re.MULTILINE)
         body = re.sub(r'\s+', ' ', body).strip()
 
         conversation_parts.append(f"{sender}: {body}")
@@ -896,11 +954,28 @@ KNOWN PROVIDER CONTEXT (from database — this provider has prior negotiations):
         logger.warning(f"[Agent] Failed to pre-load provider context: {e}")
         provider_context = "\nCould not pre-load provider context. Use search_case with the patient name to find the case."
 
+    # --- LOAD PREVIOUS CONVERSATION HISTORY ---
+    thread_subject = last_msg.get("Subject", "")
+    prev_conversation = _load_conversation_history(clean_sender, thread_subject)
+    prior_context_note = ""
+    if prev_conversation:
+        prior_context_note = f"\n\nPREVIOUS CONVERSATION HISTORY:\nYou have already interacted with this provider in a prior session. Below is a summary of your previous tool calls and decisions. Use this to maintain continuity — do NOT repeat actions you already performed (e.g. don't re-log the same negotiation, don't re-upload the same PDF).\n"
+        # Extract previous actions summary from the saved messages
+        for prev_msg in prev_conversation:
+            if isinstance(prev_msg, dict):
+                role = prev_msg.get("role", "")
+                if role == "assistant" and prev_msg.get("content"):
+                    prior_context_note += f"[YOUR PREVIOUS RESPONSE]: {prev_msg['content'][:500]}\n"
+                elif role == "tool":
+                    prior_context_note += f"[PREVIOUS TOOL RESULT]: {prev_msg.get('content', '')[:200]}\n"
+        logger.info(f"[Agent] Loaded previous conversation history for {clean_sender} | {thread_subject[:30]}")
+
     user_message = f"""Analyze the following email thread and determine the appropriate action.
 
 EMAIL THREAD (chronological, oldest to newest):
 {conversation_text}
 {provider_context}
+{prior_context_note}
 
 METADATA:
 - Thread ID: {thread_id}
@@ -913,6 +988,7 @@ INSTRUCTIONS:
 2. You already have the case_id and full negotiation history pre-loaded above. Use them directly
    — do NOT call search_case unless no case_id was provided.
 3. Use tools to update records (log_negotiation, add_case_note, etc.).
+   - When logging with log_negotiation, set sent_by_us=true when logging YOUR reply/action, and sent_by_us=false when logging the provider's incoming message.
 4. Compose a reply email if one is needed.
 5. Return your final decision as a JSON object with these fields:
    - intent: the classification
@@ -995,6 +1071,13 @@ IMPORTANT: After using tools and gathering information, you MUST return a final 
         result["tokens_used"] = total_tokens
         result["thread_id"] = thread_id
         result["last_message_id"] = last_message_id
+
+        # Save conversation history for future continuity
+        _save_conversation_history(
+            clean_sender, thread_subject,
+            agent_messages, actions_taken,
+            result.get("intent", "unclear")
+        )
 
         return result
 

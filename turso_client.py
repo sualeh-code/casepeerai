@@ -70,7 +70,9 @@ class TursoClient:
             # Token Usage
             {"sql": "CREATE TABLE IF NOT EXISTS token_usage (id INTEGER PRIMARY KEY AUTOINCREMENT, date DATETIME DEFAULT CURRENT_TIMESTAMP, tokens_used INTEGER, cost REAL, model_name TEXT)"},
             # Case Metrics
-            {"sql": "CREATE TABLE IF NOT EXISTS case_metrics (id INTEGER PRIMARY KEY AUTOINCREMENT, case_name TEXT, status TEXT, emails_received INTEGER DEFAULT 0, emails_sent INTEGER DEFAULT 0, savings REAL DEFAULT 0, revenue REAL DEFAULT 0, start_date DATETIME, end_date DATETIME, completion_time TEXT)"}
+            {"sql": "CREATE TABLE IF NOT EXISTS case_metrics (id INTEGER PRIMARY KEY AUTOINCREMENT, case_name TEXT, status TEXT, emails_received INTEGER DEFAULT 0, emails_sent INTEGER DEFAULT 0, savings REAL DEFAULT 0, revenue REAL DEFAULT 0, start_date DATETIME, end_date DATETIME, completion_time TEXT)"},
+            # Conversation History — full AI chat per sender/thread for continuity
+            {"sql": "CREATE TABLE IF NOT EXISTS conversation_history (id TEXT PRIMARY KEY, sender_email TEXT, thread_subject TEXT, messages_json TEXT, tools_used TEXT, last_intent TEXT, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP)"}
         ]
         try:
             self.execute_many(statements)
