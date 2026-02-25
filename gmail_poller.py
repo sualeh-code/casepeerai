@@ -117,17 +117,25 @@ def fetch_unread_threads(gmail_email: str, gmail_password: str, sender_filter: s
             return []
         logger.info(f"[Poller] Found {len(email_ids)} unread email(s)")
 
+        seen_threads = {}  # threadId -> thread dict (deduplicate by conversation)
         for eid in email_ids:
             try:
                 thread = _fetch_thread_for_email(mail, eid)
                 if thread:
-                    threads.append(thread)
+                    tid = thread["threadId"]
+                    # Keep the version with the most messages (fullest thread)
+                    if tid not in seen_threads or len(thread["messages"]) > len(seen_threads[tid]["messages"]):
+                        seen_threads[tid] = thread
 
-                    # Mark as read
+                    # Mark as read regardless (avoid re-processing)
                     mail.store(eid, "+FLAGS", "\\Seen")
 
             except Exception as e:
                 logger.error(f"[Poller] Error processing email {eid}: {e}")
+
+        threads = list(seen_threads.values())
+        if len(threads) < len(email_ids):
+            logger.info(f"[Poller] Deduplicated {len(email_ids)} emails into {len(threads)} unique thread(s)")
 
         mail.close()
         mail.logout()
