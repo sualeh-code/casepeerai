@@ -352,12 +352,15 @@ async def _poll_loop():
                 await asyncio.sleep(POLL_INTERVAL_SECONDS)
                 continue
 
+            logger.info(f"[Poller] Polling for: {sender_filter}")
+
             # Fetch unread threads (runs in thread to avoid blocking)
             threads = await asyncio.to_thread(
                 fetch_unread_threads, gmail_email, gmail_password, sender_filter
             )
 
             if not threads:
+                logger.info("[Poller] No unread emails found")
                 _poller_stats["status"] = "idle"
                 await asyncio.sleep(POLL_INTERVAL_SECONDS)
                 continue
@@ -428,7 +431,11 @@ async def _poll_loop():
             _poller_stats["status"] = f"error: {str(e)[:100]}"
             logger.error(f"[Poller] Poll cycle error: {e}", exc_info=True)
 
-        await asyncio.sleep(POLL_INTERVAL_SECONDS)
+        try:
+            await asyncio.sleep(POLL_INTERVAL_SECONDS)
+        except asyncio.CancelledError:
+            logger.info("[Poller] Sleep cancelled, shutting down")
+            break
 
     _poller_stats["status"] = "stopped"
     logger.info("[Poller] Stopped")
