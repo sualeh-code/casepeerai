@@ -106,9 +106,8 @@ CLASSIFICATION INTENTS:
 
 MANDATORY ACTIONS FOR EVERY EMAIL:
 You MUST perform ALL of the following for EVERY email you process (except "no_action"):
-1. FIRST call lookup_negotiation with the sender's email address. This gives you the case_id,
-   bill amounts, offer history — everything you need. Only if lookup_negotiation returns no
-   results, THEN fall back to search_case with the patient name.
+1. The case_id and negotiation history are PRE-LOADED in the context above. Use them directly.
+   Only call search_case if no case_id was provided in the pre-loaded context.
 2. Call log_negotiation to record this interaction in the database with:
    - case_id, negotiation_type (matching the intent), email_body (summary),
    - to (provider email), actual_bill, offered_bill, result
@@ -133,25 +132,8 @@ TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "lookup_negotiation",
-            "description": "Look up existing negotiation history by provider email address. Returns case_id, patient name, bill amounts, offer amounts, and full negotiation history. ALWAYS call this FIRST before search_case — it gives you the exact case and provider context without guessing.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "provider_email": {
-                        "type": "string",
-                        "description": "The provider's email address (the sender of the incoming email)"
-                    }
-                },
-                "required": ["provider_email"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "search_case",
-            "description": "Search CasePeer for a case by patient name. Only use this as a FALLBACK if lookup_negotiation returns no results.",
+            "description": "Search CasePeer for a case by patient name. Use this only if the pre-loaded context does not include a case_id.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -386,26 +368,34 @@ def _casepeer_post(endpoint: str, data: Dict = None, content_type: str = "applic
         return {"error": str(e)}
 
 
-def tool_lookup_negotiation(provider_email: str) -> str:
-    """Look up existing negotiation history by provider email. Returns case context."""
+def _lookup_negotiation_history(provider_email: str) -> str:
+    """Look up existing negotiation history by provider email, grouped by case_id.
+
+    A provider can have multiple clients/cases, so we group history per case
+    and return all of them so the agent can match the right one.
+    """
     from turso_client import turso
     try:
         rows = turso.fetch_all(
-            'SELECT case_id, negotiation_type, email_body, actual_bill, offered_bill, result, date, sent_by_us FROM negotiations WHERE "to" = ? ORDER BY date DESC LIMIT 10',
+            'SELECT case_id, negotiation_type, email_body, actual_bill, offered_bill, result, date, sent_by_us FROM negotiations WHERE "to" = ? ORDER BY date DESC LIMIT 30',
             [provider_email]
         )
 
         if not rows:
             return json.dumps({"found": False, "message": f"No negotiation history for {provider_email}"})
 
-        # Get the most recent entry for context
-        latest = rows[0]
-        case_id = latest.get("case_id", "")
-
-        # Build negotiation history
-        history = []
+        # Group negotiations by case_id (provider may have multiple clients)
+        cases = {}
         for r in rows:
-            history.append({
+            cid = str(r.get("case_id", ""))
+            if cid not in cases:
+                cases[cid] = {
+                    "case_id": cid,
+                    "latest_actual_bill": r.get("actual_bill"),
+                    "latest_offered_bill": r.get("offered_bill"),
+                    "history": []
+                }
+            cases[cid]["history"].append({
                 "type": r.get("negotiation_type", ""),
                 "summary": (r.get("email_body", "") or "")[:200],
                 "actual_bill": r.get("actual_bill"),
@@ -415,14 +405,29 @@ def tool_lookup_negotiation(provider_email: str) -> str:
                 "sent_by_us": bool(r.get("sent_by_us", 0))
             })
 
+        cases_list = list(cases.values())
+
+        # If only one case, return it directly
+        if len(cases_list) == 1:
+            c = cases_list[0]
+            return json.dumps({
+                "found": True,
+                "multiple_cases": False,
+                "case_id": c["case_id"],
+                "provider_email": provider_email,
+                "latest_actual_bill": c["latest_actual_bill"],
+                "latest_offered_bill": c["latest_offered_bill"],
+                "negotiation_count": len(c["history"]),
+                "history": c["history"]
+            })
+
+        # Multiple cases — return all so agent can match by patient name in email
         return json.dumps({
             "found": True,
-            "case_id": str(case_id),
+            "multiple_cases": True,
             "provider_email": provider_email,
-            "latest_actual_bill": latest.get("actual_bill"),
-            "latest_offered_bill": latest.get("offered_bill"),
-            "negotiation_count": len(rows),
-            "history": history
+            "case_count": len(cases_list),
+            "cases": cases_list
         })
 
     except Exception as e:
@@ -712,7 +717,6 @@ def tool_generate_and_upload_pdf(case_id: str, document_title: str, document_typ
 
 # Tool dispatcher
 TOOL_FUNCTIONS = {
-    "lookup_negotiation": lambda args: tool_lookup_negotiation(args["provider_email"]),
     "search_case": lambda args: tool_search_case(args["patient_name"]),
     "get_settlement_page": lambda args: tool_get_settlement_page(args["case_id"]),
     "accept_lien": lambda args: tool_accept_lien(args["case_id"], args["provider_id"], args["offered_amount"]),
@@ -843,12 +847,33 @@ async def process_negotiation_email(thread_data: Dict) -> Dict[str, Any]:
     provider_context = ""
     pre_loaded_case_id = ""
     try:
-        negotiation_history = tool_lookup_negotiation(clean_sender)
+        negotiation_history = _lookup_negotiation_history(clean_sender)
         history_data = json.loads(negotiation_history)
 
         if history_data.get("found"):
-            pre_loaded_case_id = history_data.get("case_id", "")
-            provider_context = f"""
+            if history_data.get("multiple_cases"):
+                # Provider has multiple clients — present each case separately
+                provider_context = f"""
+KNOWN PROVIDER CONTEXT (this provider has {history_data['case_count']} active cases with Beverly Law):
+- Provider Email: {history_data['provider_email']}
+- IMPORTANT: Match the patient name in the email to the correct case below.
+"""
+                for case_data in history_data.get("cases", []):
+                    cid = case_data["case_id"]
+                    provider_context += f"\n--- CASE {cid} ---\n"
+                    provider_context += f"  Latest Actual Bill: ${case_data.get('latest_actual_bill', 'N/A')}\n"
+                    provider_context += f"  Latest Offered Amount: ${case_data.get('latest_offered_bill', 'N/A')}\n"
+                    provider_context += f"  Negotiations: {len(case_data.get('history', []))}\n"
+                    for h in case_data.get("history", []):
+                        direction = "WE SENT" if h.get("sent_by_us") else "PROVIDER SENT"
+                        provider_context += f"    [{h.get('date', '?')}] {direction} | Type: {h.get('type', '?')} | Bill: ${h.get('actual_bill', '?')} | Offer: ${h.get('offered_bill', '?')} | Result: {h.get('result', '')} | {h.get('summary', '')}\n"
+
+                provider_context += "\nMatch the patient name from the email to the correct case above. Use ONLY that case_id for all tool calls."
+                logger.info(f"[Agent] Pre-loaded multi-case context for {clean_sender}: {history_data['case_count']} cases")
+            else:
+                # Single case — straightforward
+                pre_loaded_case_id = history_data.get("case_id", "")
+                provider_context = f"""
 KNOWN PROVIDER CONTEXT (from database — this provider has prior negotiations):
 - Case ID: {history_data['case_id']}
 - Provider Email: {history_data['provider_email']}
@@ -857,19 +882,19 @@ KNOWN PROVIDER CONTEXT (from database — this provider has prior negotiations):
 - Total Negotiations on Record: {history_data.get('negotiation_count', 0)}
 - Negotiation History (most recent first):
 """
-            for h in history_data.get("history", []):
-                direction = "WE SENT" if h.get("sent_by_us") else "PROVIDER SENT"
-                provider_context += f"  [{h.get('date', '?')}] {direction} | Type: {h.get('type', '?')} | Bill: ${h.get('actual_bill', '?')} | Offer: ${h.get('offered_bill', '?')} | Result: {h.get('result', '')} | {h.get('summary', '')}\n"
+                for h in history_data.get("history", []):
+                    direction = "WE SENT" if h.get("sent_by_us") else "PROVIDER SENT"
+                    provider_context += f"  [{h.get('date', '?')}] {direction} | Type: {h.get('type', '?')} | Bill: ${h.get('actual_bill', '?')} | Offer: ${h.get('offered_bill', '?')} | Result: {h.get('result', '')} | {h.get('summary', '')}\n"
 
-            provider_context += f"\nYou already have the case_id={history_data['case_id']}. Do NOT call search_case. Use this case_id for all tool calls."
-            logger.info(f"[Agent] Pre-loaded context for {clean_sender}: case_id={pre_loaded_case_id}, {history_data.get('negotiation_count', 0)} prior negotiations")
+                provider_context += f"\nYou already have the case_id={history_data['case_id']}. Do NOT call search_case. Use this case_id for all tool calls."
+                logger.info(f"[Agent] Pre-loaded context for {clean_sender}: case_id={pre_loaded_case_id}, {history_data.get('negotiation_count', 0)} prior negotiations")
         else:
             provider_context = f"\nNO PRIOR NEGOTIATIONS FOUND for {clean_sender}. This may be a new provider. Call search_case with the patient name to find the case."
             logger.info(f"[Agent] No prior negotiations for {clean_sender}")
 
     except Exception as e:
         logger.warning(f"[Agent] Failed to pre-load provider context: {e}")
-        provider_context = "\nCould not pre-load provider context. Use lookup_negotiation or search_case tools."
+        provider_context = "\nCould not pre-load provider context. Use search_case with the patient name to find the case."
 
     user_message = f"""Analyze the following email thread and determine the appropriate action.
 
@@ -885,8 +910,8 @@ METADATA:
 
 INSTRUCTIONS:
 1. Classify the provider's MOST RECENT message intent.
-2. You already have the provider's negotiation history above. Use it to understand context
-   (what was our last offer, what did they counter, etc.).
+2. You already have the case_id and full negotiation history pre-loaded above. Use them directly
+   — do NOT call search_case unless no case_id was provided.
 3. Use tools to update records (log_negotiation, add_case_note, etc.).
 4. Compose a reply email if one is needed.
 5. Return your final decision as a JSON object with these fields:
