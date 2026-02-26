@@ -1,14 +1,12 @@
 """
 Gmail Poller - Background task that replaces n8n entirely.
 
-Polls Gmail via IMAP for new negotiation emails, processes them through
-the negotiation agent, and sends replies via SMTP. Runs as a background
+Polls Gmail via REST API for new negotiation emails, processes them through
+the negotiation agent, and sends replies via Gmail API. Runs as a background
 task inside the FastAPI app on Render.
 """
 
-import imaplib
 import smtplib
-import email as email_lib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import asyncio
@@ -28,15 +26,14 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 POLL_INTERVAL_SECONDS = 60  # Check every 60 seconds (same as n8n)
-IMAP_HOST = "imap.gmail.com"
-IMAP_PORT = 993
 SMTP_HOST = "smtp.gmail.com"
 SMTP_PORT = 465  # SSL port (Render blocks 587/STARTTLS)
 
 # Sender filter — only process emails FROM these addresses (comma-separated).
-# These should be PROVIDER email addresses you're negotiating with.
 # Set in Turso as "negotiation_sender_filter".
 DEFAULT_SENDER_FILTER = ""
+
+GMAIL_API_BASE = "https://gmail.googleapis.com/gmail/v1/users/me"
 
 
 # ---------------------------------------------------------------------------
@@ -78,237 +75,10 @@ def _get_gmail_creds() -> tuple:
 
 
 # ---------------------------------------------------------------------------
-# IMAP: Fetch unread emails and full threads
+# Gmail OAuth2 helpers
 # ---------------------------------------------------------------------------
 
-def fetch_unread_threads(gmail_email: str, gmail_password: str, sender_filter: str) -> List[Dict]:
-    """
-    Connect to Gmail via IMAP, find unread emails matching the sender filter,
-    fetch the full thread for each, mark as read, and return thread data.
-
-    Returns a list of thread dicts, each containing messages in the thread.
-    """
-    threads = []
-
-    try:
-        mail = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT)
-        mail.login(gmail_email, gmail_password)
-        status, select_data = mail.select("inbox")
-        total_in_inbox = select_data[0].decode() if select_data and select_data[0] else "?"
-        logger.info(f"[Poller] Connected as {gmail_email} | INBOX has {total_in_inbox} total messages")
-
-        # Quick check: how many UNSEEN in entire inbox?
-        chk_status, chk_data = mail.search(None, "UNSEEN")
-        total_unseen = len(chk_data[0].split()) if chk_status == "OK" and chk_data[0] else 0
-        logger.info(f"[Poller] Total UNSEEN in inbox: {total_unseen}")
-
-        # Search for unread emails from the sender(s) — supports comma-separated list
-        email_ids = []
-        if sender_filter:
-            for sender in sender_filter.split(","):
-                sender = sender.strip()
-                if not sender:
-                    continue
-                status, message_ids = mail.search(None, f'FROM "{sender}" UNSEEN')
-                if status == "OK" and message_ids[0]:
-                    email_ids.extend(message_ids[0].split())
-            # Deduplicate (in case an email matches multiple senders)
-            email_ids = list(dict.fromkeys(email_ids))
-        else:
-            status, message_ids = mail.search(None, "UNSEEN")
-            if status == "OK" and message_ids[0]:
-                email_ids = message_ids[0].split()
-
-        if not email_ids:
-            if total_unseen > 0:
-                # There are unread emails but none match the sender filter
-                sample_froms = []
-                try:
-                    for uid in chk_data[0].split()[:5]:
-                        s, d = mail.fetch(uid, "(BODY.PEEK[HEADER.FIELDS (FROM)])")
-                        if s == "OK" and d[0]:
-                            raw_from = d[0][1].decode("utf-8", errors="replace").strip()
-                            sample_froms.append(raw_from.replace("From: ", "").strip())
-                except Exception:
-                    pass
-                logger.warning(
-                    f"[Poller] Filter '{sender_filter}' matched 0, but {total_unseen} total unread exist. "
-                    f"Sample FROM headers: {sample_froms}"
-                )
-            else:
-                logger.info(f"[Poller] IMAP reports 0 UNSEEN emails in INBOX for {gmail_email}")
-
-            mail.close()
-            mail.logout()
-            return []
-        logger.info(f"[Poller] Found {len(email_ids)} unread email(s)")
-
-        seen_threads = {}  # threadId -> thread dict (deduplicate by conversation)
-        for eid in email_ids:
-            try:
-                thread = _fetch_thread_for_email(mail, eid)
-                if thread:
-                    tid = thread["threadId"]
-                    # Keep the version with the most messages (fullest thread)
-                    if tid not in seen_threads or len(thread["messages"]) > len(seen_threads[tid]["messages"]):
-                        seen_threads[tid] = thread
-
-                    # Mark as read regardless (avoid re-processing)
-                    mail.store(eid, "+FLAGS", "\\Seen")
-
-            except Exception as e:
-                logger.error(f"[Poller] Error processing email {eid}: {e}")
-
-        threads = list(seen_threads.values())
-        if len(threads) < len(email_ids):
-            logger.info(f"[Poller] Deduplicated {len(email_ids)} emails into {len(threads)} unique thread(s)")
-
-        mail.close()
-        mail.logout()
-
-    except Exception as e:
-        logger.error(f"[Poller] IMAP connection failed: {e}", exc_info=True)
-
-    return threads
-
-
-def _fetch_thread_for_email(mail: imaplib.IMAP4_SSL, email_id: bytes) -> Optional[Dict]:
-    """
-    Fetch a single email and reconstruct its thread using References/In-Reply-To headers.
-    Returns a dict mimicking the Gmail API thread format that the agent expects.
-    """
-    status, msg_data = mail.fetch(email_id, "(RFC822)")
-    if status != "OK":
-        return None
-
-    raw_email = msg_data[0][1]
-    msg = email_lib.message_from_bytes(raw_email)
-
-    # Get thread identifiers
-    message_id = msg.get("Message-ID", "")
-    references = msg.get("References", "")
-    in_reply_to = msg.get("In-Reply-To", "")
-    subject = msg.get("Subject", "")
-
-    # Build thread by searching for related messages
-    thread_messages = []
-
-    # Find all messages in this thread using subject matching
-    # Gmail threads are grouped by subject, so search by subject
-    clean_subject = re.sub(r'^(Re:|Fwd?:)\s*', '', subject, flags=re.IGNORECASE).strip()
-    if clean_subject:
-        # Search for all messages with this subject (read and unread)
-        search_subject = clean_subject[:60]  # IMAP has limits
-        # Escape quotes in subject for IMAP search
-        search_subject = search_subject.replace('"', '\\"')
-        try:
-            status, thread_ids = mail.search(None, f'SUBJECT "{search_subject}"')
-            if status == "OK" and thread_ids[0]:
-                for tid in thread_ids[0].split():
-                    parsed = _parse_email_to_thread_format(mail, tid)
-                    if parsed:
-                        thread_messages.append(parsed)
-        except Exception as e:
-            logger.warning(f"[Poller] Thread search failed for subject '{clean_subject[:30]}': {e}")
-
-    # If thread search failed, at least include the original message
-    if not thread_messages:
-        parsed = _parse_raw_email(msg, email_id)
-        if parsed:
-            thread_messages.append(parsed)
-
-    # Sort by date (oldest first, like Gmail API)
-    thread_messages.sort(key=lambda m: m.get("internalDate", "0"))
-
-    # Use subject as thread ID (since IMAP doesn't have Gmail thread IDs)
-    thread_id = clean_subject or message_id
-
-    return {
-        "threadId": thread_id,
-        "messages": thread_messages,
-    }
-
-
-def _parse_email_to_thread_format(mail: imaplib.IMAP4_SSL, email_id: bytes) -> Optional[Dict]:
-    """Fetch and parse a single email into the format the agent expects."""
-    try:
-        status, msg_data = mail.fetch(email_id, "(RFC822)")
-        if status != "OK":
-            return None
-        raw = msg_data[0][1]
-        msg = email_lib.message_from_bytes(raw)
-        return _parse_raw_email(msg, email_id)
-    except Exception:
-        return None
-
-
-def _parse_raw_email(msg: email_lib.message.Message, email_id: bytes = b"0") -> Dict:
-    """Convert a parsed email.message.Message into the dict format the agent expects."""
-    from_addr = msg.get("From", "")
-    to_addr = msg.get("To", "")
-    subject = msg.get("Subject", "")
-    date_str = msg.get("Date", "")
-    message_id = msg.get("Message-ID", str(email_id))
-
-    # Extract body
-    body_text = ""
-    body_html = ""
-
-    if msg.is_multipart():
-        for part in msg.walk():
-            ct = part.get_content_type()
-            if ct == "text/plain" and not body_text:
-                payload = part.get_payload(decode=True)
-                if payload:
-                    body_text = payload.decode("utf-8", errors="replace")
-            elif ct == "text/html" and not body_html:
-                payload = part.get_payload(decode=True)
-                if payload:
-                    body_html = payload.decode("utf-8", errors="replace")
-    else:
-        payload = msg.get_payload(decode=True)
-        if payload:
-            body_text = payload.decode("utf-8", errors="replace")
-
-    # Use snippet (first 200 chars of plain text)
-    snippet = (body_text or body_html or "")[:200].replace("\n", " ").strip()
-
-    # Parse date to timestamp
-    internal_date = "0"
-    try:
-        parsed_date = email_lib.utils.parsedate_to_datetime(date_str)
-        internal_date = str(int(parsed_date.timestamp() * 1000))
-    except Exception:
-        pass
-
-    return {
-        "id": message_id,
-        "threadId": re.sub(r'^(Re:|Fwd?:)\s*', '', subject, flags=re.IGNORECASE).strip(),
-        "From": from_addr,
-        "To": to_addr,
-        "Subject": subject,
-        "snippet": snippet,
-        "internalDate": internal_date,
-        "payload": {
-            "headers": [
-                {"name": "From", "value": from_addr},
-                {"name": "To", "value": to_addr},
-                {"name": "Subject", "value": subject},
-                {"name": "Date", "value": date_str},
-            ],
-            "body": {},
-            "parts": []
-        },
-        # Store decoded body directly for the agent's parser
-        "_decoded_body": body_text or body_html or snippet,
-    }
-
-
-# ---------------------------------------------------------------------------
-# Gmail OAuth2 helpers (for sending via Gmail REST API over HTTPS)
-# ---------------------------------------------------------------------------
-
-GMAIL_OAUTH2_SCOPES = "https://www.googleapis.com/auth/gmail.send"
+GMAIL_OAUTH2_SCOPES = "https://www.googleapis.com/auth/gmail.modify"
 
 
 def _get_oauth2_creds() -> tuple:
@@ -368,6 +138,205 @@ def _refresh_access_token(refresh_token: str) -> Optional[str]:
         return None
 
 
+def _get_api_access_token() -> Optional[str]:
+    """Get a fresh Gmail API access token using the stored refresh token."""
+    from turso_client import get_setting
+    refresh_token = get_setting("gmail_oauth2_refresh_token", "")
+    if not refresh_token:
+        return None
+    return _refresh_access_token(refresh_token)
+
+
+# ---------------------------------------------------------------------------
+# Gmail API: Fetch unread emails and full threads
+# ---------------------------------------------------------------------------
+
+def fetch_unread_threads(gmail_email: str, gmail_password: str, sender_filter: str) -> List[Dict]:
+    """
+    Fetch unread emails via Gmail REST API, matching the sender filter.
+    Returns thread dicts with all messages, in the format the agent expects.
+    """
+    access_token = _get_api_access_token()
+    if not access_token:
+        logger.error("[Poller] No Gmail API access token — re-authorize OAuth2")
+        return []
+
+    headers = {"Authorization": f"Bearer {access_token}"}
+
+    # Build Gmail search query
+    if sender_filter:
+        senders = [s.strip() for s in sender_filter.split(",") if s.strip()]
+        from_query = " OR ".join(f"from:{s}" for s in senders)
+        query = f"is:unread ({from_query})"
+    else:
+        query = "is:unread"
+
+    logger.info(f"[Poller] Gmail API query: {query}")
+
+    # 1. List matching messages
+    try:
+        resp = http_requests.get(
+            f"{GMAIL_API_BASE}/messages",
+            headers=headers,
+            params={"q": query, "maxResults": 20},
+            timeout=30,
+        )
+        if resp.status_code != 200:
+            logger.error(f"[Poller] Gmail API list failed ({resp.status_code}): {resp.text[:200]}")
+            return []
+
+        data = resp.json()
+        messages = data.get("messages", [])
+        if not messages:
+            logger.info("[Poller] Gmail API: 0 messages match query")
+            return []
+
+        logger.info(f"[Poller] Gmail API: {len(messages)} message(s) found")
+    except Exception as e:
+        logger.error(f"[Poller] Gmail API list error: {e}")
+        return []
+
+    # 2. Group by threadId and fetch full threads
+    thread_ids = list(dict.fromkeys(m["threadId"] for m in messages))
+    logger.info(f"[Poller] {len(thread_ids)} unique thread(s) to process")
+
+    threads = []
+    for tid in thread_ids:
+        try:
+            thread_data = _fetch_thread_via_api(tid, headers)
+            if thread_data:
+                threads.append(thread_data)
+                # Mark all messages in this thread as read
+                _mark_thread_read(tid, headers)
+        except Exception as e:
+            logger.error(f"[Poller] Error fetching thread {tid}: {e}")
+
+    return threads
+
+
+def _fetch_thread_via_api(thread_id: str, headers: Dict) -> Optional[Dict]:
+    """Fetch a full thread from Gmail API and convert to agent format."""
+    resp = http_requests.get(
+        f"{GMAIL_API_BASE}/threads/{thread_id}",
+        headers=headers,
+        params={"format": "full"},
+        timeout=30,
+    )
+    if resp.status_code != 200:
+        logger.warning(f"[Poller] Thread fetch failed for {thread_id}: {resp.status_code}")
+        return None
+
+    thread = resp.json()
+    api_messages = thread.get("messages", [])
+    if not api_messages:
+        return None
+
+    # Convert each Gmail API message to the format the agent expects
+    parsed_messages = []
+    for msg in api_messages:
+        parsed = _parse_gmail_api_message(msg)
+        if parsed:
+            parsed_messages.append(parsed)
+
+    if not parsed_messages:
+        return None
+
+    return {
+        "threadId": thread_id,
+        "messages": parsed_messages,
+    }
+
+
+def _parse_gmail_api_message(msg: Dict) -> Optional[Dict]:
+    """Convert a Gmail API message object into the format the agent expects."""
+    msg_id = msg.get("id", "")
+    thread_id = msg.get("threadId", "")
+    snippet = msg.get("snippet", "")
+    internal_date = msg.get("internalDate", "")
+
+    # Extract headers
+    payload = msg.get("payload", {})
+    headers_list = payload.get("headers", [])
+    header_map = {}
+    for h in headers_list:
+        header_map[h["name"].lower()] = h["value"]
+
+    from_addr = header_map.get("from", "")
+    to_addr = header_map.get("to", "")
+    subject = header_map.get("subject", "")
+    date_str = header_map.get("date", "")
+
+    # Extract body (try plain text first, then HTML)
+    body_text = ""
+    body_html = ""
+
+    def _extract_body(part: Dict):
+        nonlocal body_text, body_html
+        mime = part.get("mimeType", "")
+        body_data = part.get("body", {}).get("data", "")
+
+        if body_data:
+            try:
+                decoded = base64.urlsafe_b64decode(body_data).decode("utf-8", errors="replace")
+                if mime == "text/plain" and not body_text:
+                    body_text = decoded
+                elif mime == "text/html" and not body_html:
+                    body_html = decoded
+            except Exception:
+                pass
+
+        # Recurse into multipart
+        for sub_part in part.get("parts", []):
+            _extract_body(sub_part)
+
+    _extract_body(payload)
+
+    # Build snippet from body if needed
+    if not snippet and (body_text or body_html):
+        if body_text:
+            snippet = body_text[:200]
+        elif body_html:
+            from bs4 import BeautifulSoup
+            try:
+                snippet = BeautifulSoup(body_html, "html.parser").get_text()[:200]
+            except Exception:
+                snippet = body_html[:200]
+
+    return {
+        "id": msg_id,
+        "threadId": thread_id,
+        "From": from_addr,
+        "To": to_addr,
+        "Subject": subject,
+        "Date": date_str,
+        "snippet": snippet,
+        "internalDate": internal_date,
+        "payload": payload,
+        "_decoded_body": body_text or body_html or snippet,
+    }
+
+
+def _mark_thread_read(thread_id: str, headers: Dict):
+    """Mark all messages in a thread as read via Gmail API."""
+    try:
+        resp = http_requests.post(
+            f"{GMAIL_API_BASE}/threads/{thread_id}/modify",
+            headers={**headers, "Content-Type": "application/json"},
+            json={"removeLabelIds": ["UNREAD"]},
+            timeout=15,
+        )
+        if resp.status_code == 200:
+            logger.info(f"[Poller] Marked thread {thread_id[:20]} as read")
+        else:
+            logger.warning(f"[Poller] Failed to mark thread read: {resp.status_code}")
+    except Exception as e:
+        logger.warning(f"[Poller] Error marking thread read: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Send reply emails (Gmail API first, SMTP fallback)
+# ---------------------------------------------------------------------------
+
 def _send_via_gmail_api(gmail_email: str, to_address: str, subject: str,
                         html_body: str, in_reply_to: str = "",
                         references: str = "") -> bool:
@@ -419,10 +388,6 @@ def _send_via_gmail_api(gmail_email: str, to_address: str, subject: str,
         logger.error(f"[Gmail API] Send failed ({resp.status_code}): {resp.text[:300]}")
         return False
 
-
-# ---------------------------------------------------------------------------
-# Send reply emails (Gmail API first, SMTP fallback)
-# ---------------------------------------------------------------------------
 
 def send_reply(gmail_email: str, gmail_password: str,
                to_address: str, subject: str, html_body: str,
@@ -489,15 +454,15 @@ async def _poll_loop():
 
             gmail_email, gmail_password, sender_filter = _get_gmail_creds()
 
-            if not gmail_email or not gmail_password:
-                logger.error("[Poller] Gmail credentials not configured")
+            if not gmail_email:
+                logger.error("[Poller] Gmail email not configured")
                 _poller_stats["status"] = "error: no credentials"
                 await asyncio.sleep(POLL_INTERVAL_SECONDS)
                 continue
 
-            logger.info(f"[Poller] Polling for: {sender_filter}")
+            logger.info(f"[Poller] Polling for: {sender_filter or '(all unread)'}")
 
-            # Fetch unread threads (runs in thread to avoid blocking)
+            # Fetch unread threads via Gmail API (runs in thread to avoid blocking)
             threads = await asyncio.to_thread(
                 fetch_unread_threads, gmail_email, gmail_password, sender_filter
             )
@@ -555,7 +520,7 @@ async def _poll_loop():
                             else:
                                 logger.error(f"[Poller] Failed to send reply to {to_address}")
                         else:
-                            logger.warning(f"[Poller] No reply-to address found, skipping send")
+                            logger.warning("[Poller] No reply-to address found, skipping send")
 
                     # Log escalations
                     if intent == "escalate":
