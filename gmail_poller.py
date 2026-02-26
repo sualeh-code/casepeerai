@@ -271,6 +271,9 @@ def _parse_gmail_api_message(msg: Dict) -> Optional[Dict]:
     to_addr = header_map.get("to", "")
     subject = header_map.get("subject", "")
     date_str = header_map.get("date", "")
+    # RFC Message-ID header (needed for In-Reply-To threading)
+    rfc_message_id = header_map.get("message-id", "")
+    rfc_references = header_map.get("references", "")
 
     # Extract body (try plain text first, then HTML)
     body_text = ""
@@ -333,6 +336,8 @@ def _parse_gmail_api_message(msg: Dict) -> Optional[Dict]:
         "To": to_addr,
         "Subject": subject,
         "Date": date_str,
+        "Message-ID": rfc_message_id,
+        "References": rfc_references,
         "snippet": snippet,
         "internalDate": internal_date,
         "payload": payload,
@@ -502,7 +507,7 @@ def process_thread_attachments(thread_data: Dict) -> List[Dict]:
 
 def _send_via_gmail_api(gmail_email: str, to_address: str, subject: str,
                         html_body: str, in_reply_to: str = "",
-                        references: str = "") -> bool:
+                        references: str = "", thread_id: str = "") -> bool:
     """Send email via Gmail REST API over HTTPS (works on Render free tier)."""
     from turso_client import get_setting
     refresh_token = get_setting("gmail_oauth2_refresh_token", "")
@@ -537,11 +542,15 @@ def _send_via_gmail_api(gmail_email: str, to_address: str, subject: str,
     # Base64url-encode the MIME message
     raw_message = base64.urlsafe_b64encode(msg.as_bytes()).decode("ascii")
 
-    # Send via Gmail API
+    # Send via Gmail API (include threadId to keep reply in same thread)
+    send_payload = {"raw": raw_message}
+    if thread_id:
+        send_payload["threadId"] = thread_id
+
     resp = http_requests.post(
         "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
         headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
-        json={"raw": raw_message},
+        json=send_payload,
     )
 
     if resp.status_code == 200:
@@ -554,13 +563,14 @@ def _send_via_gmail_api(gmail_email: str, to_address: str, subject: str,
 
 def send_reply(gmail_email: str, gmail_password: str,
                to_address: str, subject: str, html_body: str,
-               in_reply_to: str = "", references: str = "") -> bool:
+               in_reply_to: str = "", references: str = "",
+               thread_id: str = "") -> bool:
     """
     Send an HTML email reply. Tries Gmail REST API first (works on Render
     free tier where SMTP ports are blocked), falls back to SMTP.
     """
     # Try Gmail API first (HTTPS, no port restrictions)
-    if _send_via_gmail_api(gmail_email, to_address, subject, html_body, in_reply_to, references):
+    if _send_via_gmail_api(gmail_email, to_address, subject, html_body, in_reply_to, references, thread_id):
         return True
 
     # Fallback: try SMTP (works on paid Render or local dev)
@@ -668,15 +678,25 @@ async def _poll_loop():
                             to_address = email_match.group(1)
 
                         subject = last_msg.get("Subject", "Lien Negotiation")
-                        message_id = last_msg.get("id", "")
+                        # Use RFC Message-ID header for threading (NOT Gmail API id)
+                        rfc_msg_id = last_msg.get("Message-ID", "")
+                        rfc_references = last_msg.get("References", "")
+                        # Build References chain: existing refs + this message's ID
+                        if rfc_msg_id:
+                            refs = f"{rfc_references} {rfc_msg_id}".strip() if rfc_references else rfc_msg_id
+                        else:
+                            refs = rfc_references
+                        thread_id = thread_data.get("threadId", "")
 
                         if to_address:
-                            logger.info(f"[Poller] Sending reply to: {to_address} | Subject: {subject}")
+                            logger.info(f"[Poller] Sending reply to: {to_address} | Subject: {subject} | Thread: {thread_id[:15]}")
                             sent = await asyncio.to_thread(
                                 send_reply,
                                 gmail_email, gmail_password,
                                 to_address, subject, reply_message,
-                                in_reply_to=message_id
+                                in_reply_to=rfc_msg_id,
+                                references=refs,
+                                thread_id=thread_id,
                             )
                             if sent:
                                 _poller_stats["emails_replied"] += 1

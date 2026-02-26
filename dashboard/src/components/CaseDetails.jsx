@@ -4,8 +4,9 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { ArrowLeft, FileText, Bell, MessageSquare, Eye, RefreshCw, Globe, StickyNote, Trash2 } from 'lucide-react';
+import { ArrowLeft, FileText, Bell, MessageSquare, Eye, RefreshCw, Globe, StickyNote, Trash2, Bot, Wrench, ChevronRight } from 'lucide-react';
 import CaseNotes from './CaseNotes';
+import AgentActivity from './AgentActivity';
 import {
     Dialog,
     DialogContent,
@@ -132,6 +133,7 @@ const CaseDetails = ({ caseId, onBack }) => {
             <Tabs defaultValue="negotiations" className="w-full">
                 <TabsList>
                     <TabsTrigger value="negotiations">Negotiations</TabsTrigger>
+                    <TabsTrigger value="agent">Agent Activity</TabsTrigger>
                     <TabsTrigger value="notes">Notes</TabsTrigger>
                     <TabsTrigger value="classifications">Classifications</TabsTrigger>
                     <TabsTrigger value="reminders">Reminders</TabsTrigger>
@@ -207,6 +209,10 @@ const CaseDetails = ({ caseId, onBack }) => {
                     </Card>
                 </TabsContent>
 
+
+                <TabsContent value="agent">
+                    <AgentActivity caseId={caseId} />
+                </TabsContent>
 
                 <TabsContent value="notes">
                     <CaseNotes caseId={caseId} />

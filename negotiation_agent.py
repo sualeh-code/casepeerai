@@ -1148,19 +1148,23 @@ def _save_conversation_history(sender_email: str, thread_subject: str,
     from turso_client import turso
     try:
         key = _get_conversation_key(sender_email, thread_subject)
-        # Only save serializable messages (strip tool_calls objects)
+        # Serialize all messages including tool_calls
         safe_messages = []
         for msg in messages:
             if hasattr(msg, 'model_dump'):
-                safe_messages.append(msg.model_dump())
+                dumped = msg.model_dump()
+                # Ensure tool_calls are preserved
+                safe_messages.append(dumped)
             elif isinstance(msg, dict):
                 safe_messages.append(msg)
 
+        messages_json = json.dumps(safe_messages, default=str)
+
         turso.execute(
             "INSERT OR REPLACE INTO conversation_history (id, case_id, sender_email, thread_subject, messages_json, tools_used, last_intent, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))",
-            [key, case_id, sender_email.lower(), thread_subject, json.dumps(safe_messages), json.dumps(tools_used), intent]
+            [key, case_id, sender_email.lower(), thread_subject, messages_json, json.dumps(tools_used), intent]
         )
-        logger.info(f"[Agent] Saved conversation history for {sender_email} | {thread_subject[:30]}")
+        logger.info(f"[Agent] Saved {len(safe_messages)} messages to conversation history for {sender_email} | {thread_subject[:30]}")
     except Exception as e:
         logger.warning(f"[Agent] Failed to save conversation history: {e}")
 
@@ -1339,17 +1343,45 @@ KNOWN PROVIDER CONTEXT (from database — this provider has prior negotiations):
     thread_subject = last_msg.get("Subject", "")
     prev_conversation = _load_conversation_history(clean_sender, thread_subject)
     prior_context_note = ""
+    prior_messages_to_inject = []  # Full messages to prepend to agent context
     if prev_conversation:
-        prior_context_note = f"\n\nPREVIOUS CONVERSATION HISTORY:\nYou have already interacted with this provider in a prior session. Below is a summary of your previous tool calls and decisions. Use this to maintain continuity — do NOT repeat actions you already performed (e.g. don't re-log the same negotiation, don't re-upload the same PDF).\n"
-        # Extract previous actions summary from the saved messages
+        prior_context_note = "\n\nPREVIOUS SESSION: You handled this provider before. Your prior tool calls and decisions are included in the conversation below. Do NOT repeat actions already performed (e.g. don't re-log the same negotiation, don't re-upload the same PDF).\n"
+
+        # Build a detailed summary AND collect injectable messages
+        summary_parts = []
         for prev_msg in prev_conversation:
-            if isinstance(prev_msg, dict):
-                role = prev_msg.get("role", "")
-                if role == "assistant" and prev_msg.get("content"):
-                    prior_context_note += f"[YOUR PREVIOUS RESPONSE]: {prev_msg['content'][:500]}\n"
-                elif role == "tool":
-                    prior_context_note += f"[PREVIOUS TOOL RESULT]: {prev_msg.get('content', '')[:200]}\n"
-        logger.info(f"[Agent] Loaded previous conversation history for {clean_sender} | {thread_subject[:30]}")
+            if not isinstance(prev_msg, dict):
+                continue
+            role = prev_msg.get("role", "")
+
+            # Skip system messages (we'll use fresh system prompt)
+            if role == "system":
+                continue
+
+            # Collect tool calls from assistant messages
+            if role == "assistant":
+                tool_calls = prev_msg.get("tool_calls", [])
+                if tool_calls:
+                    for tc in tool_calls:
+                        fn = tc.get("function", {})
+                        summary_parts.append(f"[TOOL CALLED] {fn.get('name', '?')}({fn.get('arguments', '?')[:150]})")
+                elif prev_msg.get("content"):
+                    summary_parts.append(f"[YOUR DECISION]: {prev_msg['content'][:600]}")
+
+            elif role == "tool":
+                tool_id = prev_msg.get("tool_call_id", "")
+                content = prev_msg.get("content", "")
+                summary_parts.append(f"[TOOL RESULT ({tool_id[:15]})]: {content[:300]}")
+
+            elif role == "user":
+                # Skip the full user message (we're building a fresh one)
+                continue
+
+        # Build text summary of prior actions
+        if summary_parts:
+            prior_context_note += "PRIOR SESSION ACTIONS:\n" + "\n".join(summary_parts) + "\n"
+
+        logger.info(f"[Agent] Loaded previous conversation: {len(prev_conversation)} messages, {len(summary_parts)} actions for {clean_sender} | {thread_subject[:30]}")
 
     # --- PDF ATTACHMENT ANALYSIS (Gemini) ---
     pdf_context = ""
