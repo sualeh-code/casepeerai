@@ -113,9 +113,15 @@ You MUST perform ALL of the following for EVERY email you process (except "no_ac
    - to (provider email), actual_bill, offered_bill, result
 3. Call add_case_note to add a note summarizing what happened (e.g. "Provider Dr. Smith accepted $450 settlement" or "Provider rejected, counter-offered $800").
 4. For "accepted" or "accepted_and_provided_details": Also call accept_lien and generate_and_upload_pdf.
-5. For "bill_correction" or "bill_confirmation": Also call generate_and_upload_pdf to document it.
+5. For "bill_correction" or "bill_confirmation": Call generate_bill_correction_pdf with the corrected/confirmed amounts.
+   Use get_treatment_page if you need to look up the original bill or calculate the new offer.
 6. For "asking_for_payment": Also call get_case_status to check if case is in Lien Negotiations or Disbursement.
 7. For "escalate": Call add_case_note with "ESCALATE TO ASAEL: [reason]".
+
+PDF ATTACHMENT ANALYSIS:
+If PDF attachment analysis results are provided in the context (from Gemini), use those extracted
+amounts (originalBill, offeredAmount, totalBill) to verify bills and inform your negotiation decisions.
+If the provider sent a signed settlement letter PDF, check if the amounts match what was agreed upon.
 
 When composing reply emails:
 - Use </br> for line breaks (HTML email format).
@@ -316,6 +322,81 @@ TOOLS = [
                     }
                 },
                 "required": ["case_id", "document_title", "document_type", "content_sections"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_treatment_page",
+            "description": "Scrape the CasePeer treatment page for a case. Returns all providers with their names, categories, procedures, bill amounts, and calculated offer amounts (MRI=$400, X-Ray=$50, others=2/3 of 33% of bill). Also returns health lien IDs and letter template IDs.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "case_id": {
+                        "type": "string",
+                        "description": "The CasePeer case ID"
+                    }
+                },
+                "required": ["case_id"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "generate_bill_correction_pdf",
+            "description": "Generate a professional Bill Correction or Bill Confirmation letter as PDF and upload it to CasePeer. This replaces the Google Docs template. Use this when the provider corrects their bill amount or confirms a balance.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "case_id": {
+                        "type": "string",
+                        "description": "The CasePeer case ID"
+                    },
+                    "letter_type": {
+                        "type": "string",
+                        "enum": ["bill_correction", "bill_confirmation"],
+                        "description": "Type of letter"
+                    },
+                    "patient_name": {
+                        "type": "string",
+                        "description": "Full patient name"
+                    },
+                    "patient_dob": {
+                        "type": "string",
+                        "description": "Patient date of birth (optional)"
+                    },
+                    "injury_date": {
+                        "type": "string",
+                        "description": "Date of injury/incident (optional)"
+                    },
+                    "provider_name": {
+                        "type": "string",
+                        "description": "Provider/facility name"
+                    },
+                    "provider_address": {
+                        "type": "string",
+                        "description": "Provider mailing address (optional)"
+                    },
+                    "original_bill": {
+                        "type": "string",
+                        "description": "Original billed amount (e.g. '$5,400.00')"
+                    },
+                    "corrected_bill": {
+                        "type": "string",
+                        "description": "Corrected/confirmed bill amount (e.g. '$3,200.00')"
+                    },
+                    "offered_amount": {
+                        "type": "string",
+                        "description": "Our settlement offer based on the corrected amount (e.g. '$704.00')"
+                    },
+                    "total_medical_bills": {
+                        "type": "string",
+                        "description": "Total of all medical bills for the case (optional)"
+                    }
+                },
+                "required": ["case_id", "letter_type", "patient_name", "provider_name", "original_bill", "corrected_bill", "offered_amount"]
             }
         }
     }
@@ -719,10 +800,297 @@ def tool_generate_and_upload_pdf(case_id: str, document_title: str, document_typ
         return json.dumps({"error": str(e)})
 
 
+def tool_get_treatment_page(case_id: str) -> str:
+    """Scrape the CasePeer treatment page and extract provider/bill data with offer calculations."""
+    result = _casepeer_get(f"case/{case_id}/medical/treatment/")
+    html = result.get("response", "") if isinstance(result, dict) else ""
+    if not html:
+        return json.dumps({"error": "No HTML returned from treatment page"})
+
+    soup = BeautifulSoup(html, "html.parser")
+
+    # --- Extract patient info from page ---
+    patient_name = ""
+    patient_dob = ""
+    incident_date = ""
+
+    # Patient name from panel-title
+    panel_title = soup.select_one(".panel-title")
+    if panel_title:
+        patient_name = panel_title.get_text(strip=True)
+
+    # --- Extract HEALTH_LIENS_DATA from embedded script ---
+    health_liens_data = []
+    lien_letters = []
+    for script in soup.select("script"):
+        script_text = script.string or ""
+        # window.HEALTH_LIENS_DATA = [...]
+        liens_match = re.search(r'window\.HEALTH_LIENS_DATA\s*=\s*(\[.*?\]);', script_text, re.DOTALL)
+        if liens_match:
+            try:
+                health_liens_data = json.loads(liens_match.group(1))
+            except json.JSONDecodeError:
+                pass
+
+        # window.LIEN_LETTERS = [...]
+        letters_match = re.search(r'window\.LIEN_LETTERS\s*=\s*(\[.*?\]);', script_text, re.DOTALL)
+        if letters_match:
+            try:
+                lien_letters = json.loads(letters_match.group(1))
+            except json.JSONDecodeError:
+                pass
+
+    # --- Extract provider rows from treatment page HTML ---
+    providers = []
+
+    # Look for provider sections (MuiTypography or similar)
+    provider_sections = soup.select(".MuiTypography-root.sc-dSCufp.lfDujM.MuiTypography-body1")
+    if not provider_sections:
+        # Fallback: try table rows
+        provider_sections = soup.select("tr")
+
+    # Parse provider data from the treatment table
+    rows = soup.select("table tr, .treatment-row, [class*='provider']")
+    for row in rows:
+        cells = row.select("td")
+        if len(cells) >= 2:
+            # Try to extract provider name and amounts
+            text = row.get_text(separator=" ", strip=True)
+            amounts = re.findall(r'\$[\d,]+\.?\d*', text)
+            name_cell = cells[0] if cells else None
+            if name_cell:
+                name = name_cell.get_text(strip=True)
+                if name and len(name) > 2:
+                    providers.append({
+                        "name": name,
+                        "amounts_raw": amounts,
+                        "row_text": text[:200]
+                    })
+
+    # --- Calculate offers for each provider based on n8n logic ---
+    # MRI = $400, X-Ray/Xray = $50, others = 2/3 of 33% of bill
+    calculated_providers = []
+    for lien in health_liens_data:
+        provider_name = lien.get("provider_name", lien.get("name", "Unknown"))
+        category = lien.get("category", "")
+        bill_amount_str = str(lien.get("bill_amount", lien.get("amount", "0")))
+        bill_amount = float(re.sub(r'[^0-9.]', '', bill_amount_str) or "0")
+
+        # Determine offer
+        is_mri = "mri" in category.lower() or "mri" in provider_name.lower()
+        is_xray = "x-ray" in category.lower() or "xray" in category.lower() or "x-ray" in provider_name.lower()
+
+        if is_mri:
+            offered = 400.0
+            offer_reason = "MRI fixed rate"
+        elif is_xray:
+            offered = 50.0
+            offer_reason = "X-Ray fixed rate"
+        else:
+            max_offer = bill_amount * 0.33
+            offered = round(max_offer * (2 / 3), 2)
+            offer_reason = "2/3 of 33% of bill"
+
+        calculated_providers.append({
+            "provider_name": provider_name,
+            "category": category,
+            "bill_amount": bill_amount,
+            "offered_amount": offered,
+            "max_offer_33pct": round(bill_amount * 0.33, 2),
+            "offer_reason": offer_reason,
+            "lien_id": str(lien.get("id", "")),
+        })
+
+    # Find the "No Details Offer to Settle" letter template ID
+    offer_letter_id = ""
+    for letter in lien_letters:
+        letter_name = letter.get("name", "").lower()
+        if "no details" in letter_name and "offer" in letter_name:
+            offer_letter_id = str(letter.get("id", ""))
+            break
+
+    return json.dumps({
+        "patient_name": patient_name,
+        "patient_dob": patient_dob,
+        "incident_date": incident_date,
+        "health_liens_count": len(health_liens_data),
+        "health_liens_raw": health_liens_data[:20],  # cap at 20 to avoid token bloat
+        "providers_calculated": calculated_providers,
+        "lien_letters": [{"id": l.get("id"), "name": l.get("name")} for l in lien_letters],
+        "offer_letter_template_id": offer_letter_id,
+        "html_providers": providers[:20],
+    })
+
+
+def tool_generate_bill_correction_pdf(case_id: str, letter_type: str, patient_name: str,
+                                       provider_name: str, original_bill: str,
+                                       corrected_bill: str, offered_amount: str,
+                                       patient_dob: str = "", injury_date: str = "",
+                                       provider_address: str = "",
+                                       total_medical_bills: str = "") -> str:
+    """Generate a professional bill correction/confirmation letter and upload to CasePeer."""
+    import requests as req
+    from datetime import datetime
+
+    try:
+        pdf = FPDF()
+        pdf.set_auto_page_break(auto=True, margin=20)
+        pdf.add_page()
+
+        # --- Letterhead ---
+        pdf.set_font("Helvetica", "B", 18)
+        pdf.cell(0, 12, "Beverly Law", new_x="LMARGIN", new_y="NEXT", align="C")
+        pdf.set_font("Helvetica", "", 11)
+        pdf.cell(0, 6, "Lien Negotiations Department", new_x="LMARGIN", new_y="NEXT", align="C")
+        pdf.ln(8)
+
+        # --- Date ---
+        today = datetime.now().strftime("%B %d, %Y")
+        pdf.set_font("Helvetica", "", 10)
+        pdf.cell(0, 6, today, new_x="LMARGIN", new_y="NEXT")
+        pdf.ln(4)
+
+        # --- Provider address block ---
+        if provider_address:
+            for line in provider_address.split("\n"):
+                pdf.cell(0, 5, line.strip().encode("latin-1", errors="replace").decode("latin-1"),
+                         new_x="LMARGIN", new_y="NEXT")
+            pdf.ln(4)
+
+        # --- Title ---
+        type_title = "Bill Correction Notice" if letter_type == "bill_correction" else "Bill Confirmation Notice"
+        pdf.set_font("Helvetica", "B", 14)
+        pdf.cell(0, 10, type_title, new_x="LMARGIN", new_y="NEXT", align="C")
+        pdf.ln(4)
+
+        # --- Divider ---
+        pdf.set_draw_color(0, 0, 0)
+        pdf.line(10, pdf.get_y(), 200, pdf.get_y())
+        pdf.ln(6)
+
+        # --- Patient & case info ---
+        pdf.set_font("Helvetica", "", 10)
+        pdf.set_fill_color(245, 245, 245)
+
+        info_lines = [
+            f"Patient Name: {patient_name}",
+            f"Provider: {provider_name}",
+        ]
+        if patient_dob:
+            info_lines.append(f"Date of Birth: {patient_dob}")
+        if injury_date:
+            info_lines.append(f"Date of Injury: {injury_date}")
+
+        for line in info_lines:
+            safe = line.encode("latin-1", errors="replace").decode("latin-1")
+            pdf.cell(0, 6, safe, new_x="LMARGIN", new_y="NEXT", fill=True)
+        pdf.ln(6)
+
+        # --- Bill details table ---
+        pdf.set_font("Helvetica", "B", 11)
+        pdf.cell(0, 8, "Bill Details", new_x="LMARGIN", new_y="NEXT")
+        pdf.ln(2)
+
+        # Table header
+        pdf.set_font("Helvetica", "B", 10)
+        pdf.set_fill_color(220, 220, 220)
+        col_w = 63
+        pdf.cell(col_w, 7, "Original Bill", border=1, fill=True, align="C")
+        if letter_type == "bill_correction":
+            pdf.cell(col_w, 7, "Corrected Bill", border=1, fill=True, align="C")
+        else:
+            pdf.cell(col_w, 7, "Confirmed Bill", border=1, fill=True, align="C")
+        pdf.cell(col_w, 7, "Settlement Offer", border=1, fill=True, align="C")
+        pdf.ln()
+
+        # Table row
+        pdf.set_font("Helvetica", "", 10)
+        safe_orig = original_bill.encode("latin-1", errors="replace").decode("latin-1")
+        safe_corr = corrected_bill.encode("latin-1", errors="replace").decode("latin-1")
+        safe_offer = offered_amount.encode("latin-1", errors="replace").decode("latin-1")
+        pdf.cell(col_w, 7, safe_orig, border=1, align="C")
+        pdf.cell(col_w, 7, safe_corr, border=1, align="C")
+        pdf.cell(col_w, 7, safe_offer, border=1, align="C")
+        pdf.ln()
+
+        if total_medical_bills:
+            pdf.ln(2)
+            safe_total = total_medical_bills.encode("latin-1", errors="replace").decode("latin-1")
+            pdf.set_font("Helvetica", "I", 10)
+            pdf.cell(0, 6, f"Total Medical Bills: {safe_total}", new_x="LMARGIN", new_y="NEXT")
+
+        pdf.ln(8)
+
+        # --- Body text ---
+        pdf.set_font("Helvetica", "", 10)
+        if letter_type == "bill_correction":
+            body = (
+                f"This letter serves as a record that {provider_name} has corrected the billing for "
+                f"patient {patient_name}. The original amount billed was {original_bill}, which has been "
+                f"corrected to {corrected_bill}. Based on the corrected amount, our client's settlement "
+                f"offer is {offered_amount}."
+            )
+        else:
+            body = (
+                f"This letter serves as a record that {provider_name} has confirmed the outstanding balance "
+                f"for patient {patient_name}. The confirmed amount is {corrected_bill} (originally billed "
+                f"as {original_bill}). Based on this confirmation, our client's settlement offer is "
+                f"{offered_amount}."
+            )
+
+        safe_body = body.encode("latin-1", errors="replace").decode("latin-1")
+        pdf.multi_cell(0, 5, safe_body)
+
+        pdf.ln(12)
+
+        # --- Signature ---
+        pdf.set_font("Helvetica", "", 10)
+        pdf.cell(0, 6, "Sincerely,", new_x="LMARGIN", new_y="NEXT")
+        pdf.ln(4)
+        pdf.set_font("Helvetica", "B", 10)
+        pdf.cell(0, 6, "Lien Negotiations Department", new_x="LMARGIN", new_y="NEXT")
+        pdf.cell(0, 6, "Beverly Law", new_x="LMARGIN", new_y="NEXT")
+
+        # --- Footer ---
+        pdf.ln(10)
+        pdf.set_font("Helvetica", "I", 8)
+        pdf.cell(0, 5, f"Generated on {datetime.now().strftime('%Y-%m-%d %H:%M')} by Beverly Law Lien Negotiations",
+                 new_x="LMARGIN", new_y="NEXT", align="C")
+
+        # --- Output and upload ---
+        pdf_bytes = pdf.output()
+
+        type_label = "Bill Correction" if letter_type == "bill_correction" else "Bill Conformation"
+        filename = f"{type_label} from {provider_name} For {patient_name}.pdf"
+
+        files = {"file": (filename, pdf_bytes, "application/pdf")}
+        data = {"docname": filename}
+
+        base = _get_local_base()
+        resp = req.post(
+            f"{base}/internal-api/proxy_upload_file/{case_id}",
+            files=files,
+            data=data,
+            timeout=60,
+        )
+
+        if resp.status_code == 200:
+            logger.info(f"[PDF] Uploaded bill correction: '{filename}' to case {case_id}")
+            return json.dumps({"success": True, "filename": filename, "size_bytes": len(pdf_bytes)})
+        else:
+            logger.error(f"[PDF] Upload failed: {resp.status_code} - {resp.text[:200]}")
+            return json.dumps({"error": f"Upload failed with status {resp.status_code}"})
+
+    except Exception as e:
+        logger.error(f"[PDF] Bill correction PDF error: {e}", exc_info=True)
+        return json.dumps({"error": str(e)})
+
+
 # Tool dispatcher
 TOOL_FUNCTIONS = {
     "search_case": lambda args: tool_search_case(args["patient_name"]),
     "get_settlement_page": lambda args: tool_get_settlement_page(args["case_id"]),
+    "get_treatment_page": lambda args: tool_get_treatment_page(args["case_id"]),
     "accept_lien": lambda args: tool_accept_lien(args["case_id"], args["provider_id"], args["offered_amount"]),
     "add_case_note": lambda args: tool_add_case_note(args["case_id"], args["note"]),
     "get_case_status": lambda args: tool_get_case_status(args["case_id"]),
@@ -730,6 +1098,19 @@ TOOL_FUNCTIONS = {
     "generate_and_upload_pdf": lambda args: tool_generate_and_upload_pdf(
         args["case_id"], args["document_title"], args["document_type"],
         args["content_sections"], args.get("metadata")
+    ),
+    "generate_bill_correction_pdf": lambda args: tool_generate_bill_correction_pdf(
+        case_id=args["case_id"],
+        letter_type=args["letter_type"],
+        patient_name=args["patient_name"],
+        provider_name=args["provider_name"],
+        original_bill=args["original_bill"],
+        corrected_bill=args["corrected_bill"],
+        offered_amount=args["offered_amount"],
+        patient_dob=args.get("patient_dob", ""),
+        injury_date=args.get("injury_date", ""),
+        provider_address=args.get("provider_address", ""),
+        total_medical_bills=args.get("total_medical_bills", ""),
     ),
 }
 
@@ -970,12 +1351,30 @@ KNOWN PROVIDER CONTEXT (from database — this provider has prior negotiations):
                     prior_context_note += f"[PREVIOUS TOOL RESULT]: {prev_msg.get('content', '')[:200]}\n"
         logger.info(f"[Agent] Loaded previous conversation history for {clean_sender} | {thread_subject[:30]}")
 
+    # --- PDF ATTACHMENT ANALYSIS (Gemini) ---
+    pdf_context = ""
+    pdf_analyses = thread_data.get("_pdf_analyses", [])
+    if pdf_analyses:
+        pdf_context = "\n\nPDF ATTACHMENTS ANALYZED (via Gemini):\n"
+        for pa in pdf_analyses:
+            pdf_context += f"- File: {pa.get('filename', '?')} | From: {pa.get('from', '?')}\n"
+            analysis = pa.get("analysis")
+            if analysis:
+                pdf_context += f"  Original Bill: ${analysis.get('originalBill', 'N/A')}\n"
+                pdf_context += f"  Offered Amount: ${analysis.get('offeredAmount', 'N/A')}\n"
+                pdf_context += f"  Total Medical Bills: ${analysis.get('totalBill', 'N/A')}\n"
+            else:
+                pdf_context += "  (Gemini could not extract amounts from this PDF)\n"
+        pdf_context += "\nUse these amounts when they are relevant to the negotiation (e.g. verifying bills, checking offers against the 33% cap).\n"
+        logger.info(f"[Agent] Injecting {len(pdf_analyses)} PDF analysis result(s) into context")
+
     user_message = f"""Analyze the following email thread and determine the appropriate action.
 
 EMAIL THREAD (chronological, oldest to newest):
 {conversation_text}
 {provider_context}
 {prior_context_note}
+{pdf_context}
 
 METADATA:
 - Thread ID: {thread_id}

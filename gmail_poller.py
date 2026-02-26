@@ -205,6 +205,12 @@ def fetch_unread_threads(gmail_email: str, gmail_password: str, sender_filter: s
         try:
             thread_data = _fetch_thread_via_api(tid, headers)
             if thread_data:
+                # Analyze any PDF attachments with Gemini
+                pdf_results = process_thread_attachments(thread_data)
+                if pdf_results:
+                    thread_data["_pdf_analyses"] = pdf_results
+                    logger.info(f"[Poller] {len(pdf_results)} PDF(s) analyzed in thread {tid[:15]}")
+
                 threads.append(thread_data)
                 # Mark all messages in this thread as read
                 _mark_thread_read(tid, headers)
@@ -302,6 +308,24 @@ def _parse_gmail_api_message(msg: Dict) -> Optional[Dict]:
             except Exception:
                 snippet = body_html[:200]
 
+    # Detect PDF attachments
+    pdf_attachments = []
+
+    def _find_pdf_parts(part: Dict):
+        mime = part.get("mimeType", "")
+        filename = part.get("filename", "")
+        att_id = part.get("body", {}).get("attachmentId", "")
+        if att_id and (mime == "application/pdf" or filename.lower().endswith(".pdf")):
+            pdf_attachments.append({
+                "attachmentId": att_id,
+                "filename": filename,
+                "mimeType": mime,
+            })
+        for sub in part.get("parts", []):
+            _find_pdf_parts(sub)
+
+    _find_pdf_parts(payload)
+
     return {
         "id": msg_id,
         "threadId": thread_id,
@@ -313,6 +337,7 @@ def _parse_gmail_api_message(msg: Dict) -> Optional[Dict]:
         "internalDate": internal_date,
         "payload": payload,
         "_decoded_body": body_text or body_html or snippet,
+        "_pdf_attachments": pdf_attachments,
     }
 
 
@@ -331,6 +356,144 @@ def _mark_thread_read(thread_id: str, headers: Dict):
             logger.warning(f"[Poller] Failed to mark thread read: {resp.status_code}")
     except Exception as e:
         logger.warning(f"[Poller] Error marking thread read: {e}")
+
+
+# ---------------------------------------------------------------------------
+# PDF attachment download + Gemini analysis
+# ---------------------------------------------------------------------------
+
+def _download_attachment(message_id: str, attachment_id: str, headers: Dict) -> Optional[bytes]:
+    """Download a Gmail attachment and return raw bytes."""
+    try:
+        resp = http_requests.get(
+            f"{GMAIL_API_BASE}/messages/{message_id}/attachments/{attachment_id}",
+            headers=headers,
+            timeout=30,
+        )
+        if resp.status_code != 200:
+            logger.warning(f"[Poller] Attachment download failed: {resp.status_code}")
+            return None
+        data = resp.json().get("data", "")
+        if not data:
+            return None
+        return base64.urlsafe_b64decode(data)
+    except Exception as e:
+        logger.error(f"[Poller] Attachment download error: {e}")
+        return None
+
+
+def analyze_pdf_with_gemini(pdf_bytes: bytes, filename: str = "attachment.pdf") -> Optional[Dict]:
+    """
+    Send a PDF to Gemini 2.5 Pro to extract settlement amounts.
+    Returns {"originalBill": float, "offeredAmount": float, "totalBill": float} or None.
+    """
+    from turso_client import get_setting
+    import os
+
+    api_key = get_setting("gemini_api_key") or os.getenv("GEMINI_API_KEY", "")
+    if not api_key:
+        logger.warning("[Gemini] No API key configured — skipping PDF analysis")
+        return None
+
+    pdf_b64 = base64.standard_b64encode(pdf_bytes).decode("ascii")
+
+    prompt = (
+        "Extract exactly three dollar amounts from this legal settlement letter and return "
+        "ONLY a valid JSON object with no markdown, no explanation, no extra text.\n\n"
+        "Rules:\n"
+        '- "originalBill" = the amount billed to the specific patient (labeled as the amount billed to [patient name])\n'
+        '- "offeredAmount" = the settlement offer amount made to the provider\n'
+        '- "totalBill" = the "Total Medical Bills" amount\n\n'
+        "CRITICAL:\n"
+        '- Strip any "$" or "$$" symbols before parsing numbers\n'
+        "- Preserve decimal points exactly as written (e.g. 41,722.80 → 41722.80, NOT 41722080)\n"
+        "- Remove commas from numbers (e.g. 41,722.80 → 41722.80)\n"
+        "- Return numbers as JSON numbers, not strings\n\n"
+        'Output format (and nothing else):\n'
+        '{"originalBill": 0.00, "offeredAmount": 0.00, "totalBill": 0.00}'
+    )
+
+    try:
+        resp = http_requests.post(
+            f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key={api_key}",
+            headers={"Content-Type": "application/json"},
+            json={
+                "contents": [{
+                    "parts": [
+                        {"inline_data": {"mime_type": "application/pdf", "data": pdf_b64}},
+                        {"text": prompt}
+                    ]
+                }]
+            },
+            timeout=60,
+        )
+
+        if resp.status_code != 200:
+            logger.error(f"[Gemini] API error ({resp.status_code}): {resp.text[:300]}")
+            return None
+
+        result = resp.json()
+        text = result.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+        if not text:
+            logger.warning("[Gemini] Empty response from model")
+            return None
+
+        # Clean markdown fences if present
+        cleaned = re.sub(r'```json\s*|```\s*', '', text).strip()
+        parsed = json.loads(cleaned)
+        logger.info(f"[Gemini] PDF analysis result: {parsed}")
+        return parsed
+
+    except json.JSONDecodeError as e:
+        logger.error(f"[Gemini] Failed to parse response as JSON: {e} — raw: {text[:200]}")
+        return None
+    except Exception as e:
+        logger.error(f"[Gemini] PDF analysis error: {e}")
+        return None
+
+
+def process_thread_attachments(thread_data: Dict) -> List[Dict]:
+    """
+    Download and analyze all PDF attachments in a thread via Gemini.
+    Returns list of analysis results with source message info.
+    """
+    access_token = _get_api_access_token()
+    if not access_token:
+        return []
+
+    headers = {"Authorization": f"Bearer {access_token}"}
+    results = []
+
+    for msg in thread_data.get("messages", []):
+        pdf_atts = msg.get("_pdf_attachments", [])
+        if not pdf_atts:
+            continue
+
+        msg_id = msg.get("id", "")
+        from_addr = msg.get("From", "")
+
+        for att in pdf_atts:
+            att_id = att.get("attachmentId", "")
+            filename = att.get("filename", "attachment.pdf")
+            logger.info(f"[Poller] Downloading PDF '{filename}' from message {msg_id[:15]}")
+
+            pdf_bytes = _download_attachment(msg_id, att_id, headers)
+            if not pdf_bytes:
+                continue
+
+            logger.info(f"[Poller] Analyzing PDF '{filename}' ({len(pdf_bytes)} bytes) with Gemini")
+            analysis = analyze_pdf_with_gemini(pdf_bytes, filename)
+
+            results.append({
+                "filename": filename,
+                "from": from_addr,
+                "message_id": msg_id,
+                "size_bytes": len(pdf_bytes),
+                "analysis": analysis,  # may be None if Gemini fails
+                "_pdf_bytes": pdf_bytes,  # keep raw bytes for upload to CasePeer
+            })
+
+    return results
 
 
 # ---------------------------------------------------------------------------
