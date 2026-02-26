@@ -93,7 +93,14 @@ def fetch_unread_threads(gmail_email: str, gmail_password: str, sender_filter: s
     try:
         mail = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT)
         mail.login(gmail_email, gmail_password)
-        mail.select("inbox")
+        status, select_data = mail.select("inbox")
+        total_in_inbox = select_data[0].decode() if select_data and select_data[0] else "?"
+        logger.info(f"[Poller] Connected as {gmail_email} | INBOX has {total_in_inbox} total messages")
+
+        # Quick check: how many UNSEEN in entire inbox?
+        chk_status, chk_data = mail.search(None, "UNSEEN")
+        total_unseen = len(chk_data[0].split()) if chk_status == "OK" and chk_data[0] else 0
+        logger.info(f"[Poller] Total UNSEEN in inbox: {total_unseen}")
 
         # Search for unread emails from the sender(s) — supports comma-separated list
         email_ids = []
@@ -113,26 +120,23 @@ def fetch_unread_threads(gmail_email: str, gmail_password: str, sender_filter: s
                 email_ids = message_ids[0].split()
 
         if not email_ids:
-            # Debug: check if there are ANY unread emails (regardless of sender)
-            # to help diagnose sender filter mismatches
-            try:
-                dbg_status, dbg_ids = mail.search(None, "UNSEEN")
-                if dbg_status == "OK" and dbg_ids[0]:
-                    all_unread = dbg_ids[0].split()
-                    if all_unread:
-                        # Show the FROM headers of up to 5 unread emails
-                        sample_froms = []
-                        for uid in all_unread[:5]:
-                            s, d = mail.fetch(uid, "(BODY.PEEK[HEADER.FIELDS (FROM)])")
-                            if s == "OK" and d[0]:
-                                raw_from = d[0][1].decode("utf-8", errors="replace").strip()
-                                sample_froms.append(raw_from.replace("From: ", "").strip())
-                        logger.warning(
-                            f"[Poller] Filter '{sender_filter}' matched 0, but {len(all_unread)} total unread exist. "
-                            f"Sample FROM headers: {sample_froms}"
-                        )
-            except Exception as dbg_err:
-                logger.debug(f"[Poller] Debug IMAP check failed: {dbg_err}")
+            if total_unseen > 0:
+                # There are unread emails but none match the sender filter
+                sample_froms = []
+                try:
+                    for uid in chk_data[0].split()[:5]:
+                        s, d = mail.fetch(uid, "(BODY.PEEK[HEADER.FIELDS (FROM)])")
+                        if s == "OK" and d[0]:
+                            raw_from = d[0][1].decode("utf-8", errors="replace").strip()
+                            sample_froms.append(raw_from.replace("From: ", "").strip())
+                except Exception:
+                    pass
+                logger.warning(
+                    f"[Poller] Filter '{sender_filter}' matched 0, but {total_unseen} total unread exist. "
+                    f"Sample FROM headers: {sample_froms}"
+                )
+            else:
+                logger.info(f"[Poller] IMAP reports 0 UNSEEN emails in INBOX for {gmail_email}")
 
             mail.close()
             mail.logout()
