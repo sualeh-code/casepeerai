@@ -531,7 +531,10 @@ def _send_via_gmail_api(gmail_email: str, to_address: str, subject: str,
 
     clean_html = html_body.replace("</br>", "<br>")
 
-    # Append Gmail signature if configured
+    # Always append the firm signature
+    clean_html += "<br><br>Sincerely,<br>Lien Negotiations Department<br>Beverly Law"
+
+    # Append additional Gmail signature if configured (e.g. contact info, logo)
     signature = get_setting("gmail_signature", "")
     if signature:
         clean_html += f"\n<br><br>{signature}"
@@ -587,7 +590,10 @@ def send_reply(gmail_email: str, gmail_password: str,
 
         clean_html = html_body.replace("</br>", "<br>")
 
-        # Append Gmail signature if configured
+        # Always append the firm signature
+        clean_html += "<br><br>Sincerely,<br>Lien Negotiations Department<br>Beverly Law"
+
+        # Append additional Gmail signature if configured (e.g. contact info, logo)
         from turso_client import get_setting as _get_sig
         sig = _get_sig("gmail_signature", "")
         if sig:

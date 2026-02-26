@@ -47,13 +47,13 @@ class AppSetting(AppSettingBase):
 # Case Schemas
 class CaseBase(BaseModel):
     id: str  # User provided ID
-    patient_name: str
-    status: str
-    fees_taken: float
-    savings: float
-    revenue: float = 0.0
-    emails_received: int = 0
-    emails_sent: int = 0
+    patient_name: Optional[str] = ""
+    status: Optional[str] = ""
+    fees_taken: Optional[float] = 0.0
+    savings: Optional[float] = 0.0
+    revenue: Optional[float] = 0.0
+    emails_received: Optional[int] = 0
+    emails_sent: Optional[int] = 0
 
 class CaseCreate(CaseBase):
     pass
@@ -66,15 +66,15 @@ class Case(CaseBase):
 
 # Negotiation Schemas
 class NegotiationBase(BaseModel):
-    case_id: str
-    negotiation_type: str
-    to: str
-    email_body: str
-    date: str
-    actual_bill: float
-    offered_bill: float
-    sent_by_us: bool
-    result: str
+    case_id: Optional[str] = ""
+    negotiation_type: Optional[str] = ""
+    to: Optional[str] = ""
+    email_body: Optional[str] = ""
+    date: Optional[str] = ""
+    actual_bill: Optional[float] = 0.0
+    offered_bill: Optional[float] = 0.0
+    sent_by_us: Optional[bool] = True
+    result: Optional[str] = ""
 
 class NegotiationCreate(NegotiationBase):
     pass

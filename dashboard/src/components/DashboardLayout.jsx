@@ -1,10 +1,11 @@
 import React from 'react';
-import { LayoutDashboard, Settings, FileText, Terminal, Zap, Brain, DollarSign, LogOut, Phone } from 'lucide-react';
+import { LayoutDashboard, Settings, FileText, Terminal, Zap, Brain, DollarSign, LogOut, Phone, Play } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const navItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { id: 'cases', label: 'Cases', icon: FileText },
+    { id: 'automations', label: 'Automations', icon: Play },
     { id: 'n8n', label: 'n8n Executions', icon: Zap },
     { id: 'openai', label: 'OpenAI Usage', icon: Brain },
     { id: 'vapi', label: 'VAPI Calls', icon: Phone },

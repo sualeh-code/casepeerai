@@ -32,10 +32,6 @@ ROLE & IDENTITY:
 - You are not emotional. You are not robotic.
 - You NEVER mention AI, automation, internal calculations, Pro Rata, or CasePeer.
 - You NEVER mention percentages, fractions, or internal caps/limits in emails.
-- Every email you write must be signed EXACTLY as:
-  Sincerely,
-  Lien Negotiations Department
-  Beverly Law
 
 NEGOTIATION PLAYBOOK:
 
@@ -104,19 +100,20 @@ CLASSIFICATION INTENTS:
 - "escalate" — Threats, legal demands, phone-only insistence → route to Asael
 - "unclear" — Cannot determine intent
 
-MANDATORY ACTIONS FOR EVERY EMAIL:
-You MUST perform ALL of the following for EVERY email you process (except "no_action"):
+WHAT YOU DO (AI only):
 1. The case_id and negotiation history are PRE-LOADED in the context above. Use them directly.
    Only call search_case if no case_id was provided in the pre-loaded context.
-2. Call log_negotiation to record this interaction in the database with:
-   - case_id, negotiation_type (matching the intent), email_body (summary),
-   - to (provider email), actual_bill, offered_bill, result
-3. Call add_case_note to add a note summarizing what happened (e.g. "Provider Dr. Smith accepted $450 settlement" or "Provider rejected, counter-offered $800").
-4. For "accepted" or "accepted_and_provided_details": Also call accept_lien and generate_and_upload_pdf.
-5. For "bill_correction" or "bill_confirmation": Call generate_bill_correction_pdf with the corrected/confirmed amounts.
+2. Classify the provider's intent.
+3. Compose a reply email if one is needed.
+4. For "bill_correction" or "bill_confirmation": Call generate_bill_correction_pdf with the corrected/confirmed amounts.
    Use get_treatment_page if you need to look up the original bill or calculate the new offer.
-6. For "asking_for_payment": Also call get_case_status to check if case is in Lien Negotiations or Disbursement.
-7. For "escalate": Call add_case_note with "ESCALATE TO ASAEL: [reason]".
+5. For "asking_for_payment": Call get_case_status to check if case is in Lien Negotiations or Disbursement.
+
+WHAT THE SYSTEM HANDLES AUTOMATICALLY (do NOT do these yourself):
+- Logging the negotiation (log_negotiation) — done by code after you return.
+- Adding a case note (add_case_note) — done by code after you return.
+- Accepting liens (get_settlement_page + accept_lien) — done by code for "accepted" intents.
+- Appending the email signature — done by code when sending.
 
 PDF ATTACHMENT ANALYSIS:
 If PDF attachment analysis results are provided in the context (from Gemini), use those extracted
@@ -126,6 +123,7 @@ If the provider sent a signed settlement letter PDF, check if the amounts match 
 When composing reply emails:
 - Use </br> for line breaks (HTML email format).
 - Do NOT include phone numbers or physical addresses in your reply.
+- Do NOT include a closing signature — the system appends it automatically.
 - Keep emails concise and professional.
 - Follow the scenario templates from the playbook.
 """
@@ -408,49 +406,20 @@ TOOLS = [
 
 def _get_local_base() -> str:
     """Get the local proxy URL, respecting Render's PORT env var."""
-    import os
-    port = os.getenv("PORT", "8000")
-    return f"http://localhost:{port}"
+    from casepeer_helpers import get_local_base
+    return get_local_base()
 
 
 def _casepeer_get(endpoint: str) -> Dict[str, Any]:
     """Make a GET request through the CasePeer proxy (internal)."""
-    import requests as req
-    base = _get_local_base()
-
-    # Use the local proxy to leverage existing auth session
-    # Timeout 90s to allow for CasePeer re-authentication if session expired
-    try:
-        resp = req.get(f"{base}/{endpoint.lstrip('/')}", timeout=90)
-        resp.raise_for_status()
-        return resp.json()
-    except Exception as e:
-        logger.error(f"CasePeer GET {endpoint} failed: {e}")
-        return {"error": str(e)}
+    from casepeer_helpers import casepeer_get
+    return casepeer_get(endpoint)
 
 
 def _casepeer_post(endpoint: str, data: Dict = None, content_type: str = "application/json") -> Dict[str, Any]:
     """Make a POST request through the CasePeer proxy (internal)."""
-    import requests as req
-    base = _get_local_base()
-    try:
-        if content_type == "multipart/form-data":
-            resp = req.post(
-                f"{base}/{endpoint.lstrip('/')}",
-                data=data,
-                timeout=90
-            )
-        else:
-            resp = req.post(
-                f"{base}/{endpoint.lstrip('/')}",
-                json=data,
-                timeout=90
-            )
-        resp.raise_for_status()
-        return resp.json()
-    except Exception as e:
-        logger.error(f"CasePeer POST {endpoint} failed: {e}")
-        return {"error": str(e)}
+    from casepeer_helpers import casepeer_post
+    return casepeer_post(endpoint, data, content_type)
 
 
 def _lookup_negotiation_history(provider_email: str) -> str:
@@ -1418,16 +1387,17 @@ INSTRUCTIONS:
 1. Classify the provider's MOST RECENT message intent.
 2. You already have the case_id and full negotiation history pre-loaded above. Use them directly
    — do NOT call search_case unless no case_id was provided.
-3. Use tools to update records (log_negotiation, add_case_note, etc.).
-   - When logging with log_negotiation, set sent_by_us=true when logging YOUR reply/action, and sent_by_us=false when logging the provider's incoming message.
+3. Use tools only when needed (e.g. get_treatment_page for bill lookup, generate_bill_correction_pdf for corrections).
+   Do NOT call log_negotiation, add_case_note, accept_lien, or get_settlement_page — the system handles these automatically.
 4. Compose a reply email if one is needed.
 5. Return your final decision as a JSON object with these fields:
    - intent: the classification
    - reply_message: the HTML email to send back (or null if no reply needed)
    - provider_name: extracted from the conversation
    - patient_name: extracted from the conversation
+   - actual_bill: the provider's total bill amount (number, e.g. 1500.00)
+   - offered_bill: the settlement amount being discussed (number, e.g. 450.00)
    - reasoning: brief explanation of your decision
-   - actions_taken: list of what you did
 
 IMPORTANT: After using tools and gathering information, you MUST return a final text response containing the JSON object. Do not end on a tool call."""
 
@@ -1517,6 +1487,75 @@ IMPORTANT: After using tools and gathering information, you MUST return a final 
         result["thread_id"] = thread_id
         result["last_message_id"] = last_message_id
 
+        # --- AUTOMATED POST-PROCESSING (code, not AI) ---
+        intent = result.get("intent", "unclear")
+        case_id = discovered_case_id
+
+        if intent not in ("no_action", "unclear") and case_id:
+            # 1. Always log the negotiation
+            try:
+                tool_log_negotiation(
+                    case_id=case_id,
+                    negotiation_type=intent,
+                    email_body=result.get("reasoning", "")[:500],
+                    to=clean_sender,
+                    actual_bill=float(result.get("actual_bill") or 0),
+                    offered_bill=float(result.get("offered_bill") or 0),
+                    result=intent,
+                    sent_by_us=False,
+                )
+                actions_taken.append("auto:log_negotiation(provider incoming)")
+                logger.info(f"[PostProcess] Logged negotiation for {clean_sender} | intent={intent}")
+            except Exception as e:
+                logger.error(f"[PostProcess] Failed to log negotiation: {e}")
+
+            # 2. Always add a case note
+            try:
+                provider_name = result.get("provider_name", "Unknown")
+                note_map = {
+                    "accepted": f"Provider {provider_name} accepted settlement of ${result.get('offered_bill', '?')}",
+                    "accepted_and_provided_details": f"Provider {provider_name} accepted and provided payment details. Amount: ${result.get('offered_bill', '?')}",
+                    "rejected": f"Provider {provider_name} rejected/countered our offer. {result.get('reasoning', '')[:200]}",
+                    "provided_details": f"Provider {provider_name} sent payment/mailing details",
+                    "asked_for_clarification": f"Provider {provider_name} asked a question",
+                    "asking_for_payment": f"Provider {provider_name} is requesting payment status",
+                    "bill_correction": f"Provider {provider_name} says billed amount is wrong",
+                    "bill_confirmation": f"Provider {provider_name} responded to balance confirmation",
+                    "escalate": f"ESCALATE TO ASAEL: Provider {provider_name} — {result.get('reasoning', '')[:200]}",
+                }
+                note = note_map.get(intent, f"Provider {provider_name}: {intent} — {result.get('reasoning', '')[:200]}")
+                tool_add_case_note(case_id, note)
+                actions_taken.append("auto:add_case_note")
+                logger.info(f"[PostProcess] Added case note for case {case_id}")
+            except Exception as e:
+                logger.error(f"[PostProcess] Failed to add case note: {e}")
+
+            # 3. For accepted intents: auto-call get_settlement_page + accept_lien
+            if intent in ("accepted", "accepted_and_provided_details"):
+                try:
+                    settlement_json = tool_get_settlement_page(case_id)
+                    settlement = json.loads(settlement_json)
+                    providers_list = settlement.get("providers", [])
+                    provider_name_lower = (result.get("provider_name") or "").lower()
+
+                    # Match provider by name (fuzzy)
+                    matched_provider = None
+                    for sp in providers_list:
+                        sp_name = (sp.get("name") or "").lower()
+                        if provider_name_lower and (provider_name_lower in sp_name or sp_name in provider_name_lower):
+                            matched_provider = sp
+                            break
+
+                    if matched_provider:
+                        offered = result.get("offered_bill") or matched_provider.get("offered", "0")
+                        accept_result = tool_accept_lien(case_id, matched_provider["id"], str(offered))
+                        actions_taken.append(f"auto:accept_lien(provider_id={matched_provider['id']}, amount={offered})")
+                        logger.info(f"[PostProcess] Accepted lien for {matched_provider.get('name')} | {accept_result[:200]}")
+                    else:
+                        logger.warning(f"[PostProcess] Could not match provider '{result.get('provider_name')}' in settlement page ({len(providers_list)} providers)")
+                except Exception as e:
+                    logger.error(f"[PostProcess] accept_lien flow failed: {e}")
+
         # Save conversation history for future continuity
         _save_conversation_history(
             clean_sender, thread_subject,
@@ -1553,6 +1592,8 @@ def _parse_agent_response(text: str) -> Dict[str, Any]:
                 "provider_name": parsed.get("provider_name", "Unknown"),
                 "patient_name": parsed.get("patient_name", "Unknown"),
                 "reasoning": parsed.get("reasoning", ""),
+                "actual_bill": parsed.get("actual_bill"),
+                "offered_bill": parsed.get("offered_bill"),
             }
         except json.JSONDecodeError:
             pass

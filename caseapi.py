@@ -175,12 +175,30 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Failed to start email poller: {e}", exc_info=True)
 
+    # 4. START WORKFLOW SCHEDULER (daily tasks: case checker, follow-ups)
+    try:
+        from turso_client import get_setting as _gs2
+        scheduler_enabled = (_gs2("workflow_scheduler_enabled", "true") or "").lower() == "true"
+        if scheduler_enabled:
+            from workflow_scheduler import start_scheduler
+            await start_scheduler()
+            logger.info("[OK] Workflow scheduler started")
+        else:
+            logger.info("[SKIP] Workflow scheduler disabled (set workflow_scheduler_enabled=true)")
+    except Exception as e:
+        logger.error(f"Failed to start workflow scheduler: {e}", exc_info=True)
+
     yield
 
-    # Shutdown: stop the poller
+    # Shutdown: stop the poller and scheduler
     try:
         from gmail_poller import stop_poller
         await stop_poller()
+    except Exception:
+        pass
+    try:
+        from workflow_scheduler import stop_scheduler
+        await stop_scheduler()
     except Exception:
         pass
     logger.info("Shutting down CasePeer API Wrapper...")
@@ -2245,6 +2263,93 @@ async def process_negotiation_email(request: Request):
     except Exception as e:
         logger.error(f"[NegotiationAgent] Error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Agent processing failed: {e}")
+
+
+# ============================================================================
+# Workflow Trigger Endpoints
+# ============================================================================
+
+@app.post("/internal-api/workflows/initial-negotiation/{case_id}")
+async def trigger_initial_negotiation(case_id: str):
+    """Trigger initial negotiation offers for a case (runs in background)."""
+    from workflow_scheduler import trigger_workflow
+    result = await trigger_workflow("initial_negotiation", case_id, triggered_by="manual")
+    return result
+
+
+@app.post("/internal-api/workflows/classification/{case_id}")
+async def trigger_classification(case_id: str):
+    """Trigger document classification for a case (runs in background)."""
+    from workflow_scheduler import trigger_workflow
+    result = await trigger_workflow("classification", case_id, triggered_by="manual")
+    return result
+
+
+@app.post("/internal-api/workflows/thirdparty/{case_id}")
+async def trigger_thirdparty(case_id: str):
+    """Trigger defendant settlement processing (runs in background)."""
+    from workflow_scheduler import trigger_workflow
+    result = await trigger_workflow("thirdparty", case_id, triggered_by="manual")
+    return result
+
+
+@app.post("/internal-api/workflows/get-mail-sub/{case_id}")
+async def trigger_get_mail_sub(case_id: str):
+    """Trigger Vapi phone calls for missing provider emails (runs in background)."""
+    from workflow_scheduler import trigger_workflow
+    result = await trigger_workflow("get_mail_sub", case_id, triggered_by="manual")
+    return result
+
+
+@app.post("/internal-api/workflows/case-checker/run")
+async def trigger_case_checker():
+    """Manually trigger the case checker scan."""
+    from workflow_scheduler import trigger_workflow
+    result = await trigger_workflow("case_checker", triggered_by="manual")
+    return result
+
+
+@app.post("/internal-api/workflows/followup/run")
+async def trigger_followup():
+    """Manually trigger follow-up reminder processing."""
+    from workflow_scheduler import trigger_workflow
+    result = await trigger_workflow("followup", triggered_by="manual")
+    return result
+
+
+@app.get("/internal-api/workflows/scheduler/status")
+async def get_scheduler_status():
+    """Get the workflow scheduler status."""
+    from workflow_scheduler import get_scheduler_stats
+    return get_scheduler_stats()
+
+
+@app.post("/internal-api/workflows/scheduler/start")
+async def start_workflow_scheduler():
+    """Start the daily workflow scheduler."""
+    from workflow_scheduler import start_scheduler
+    return await start_scheduler()
+
+
+@app.post("/internal-api/workflows/scheduler/stop")
+async def stop_workflow_scheduler():
+    """Stop the daily workflow scheduler."""
+    from workflow_scheduler import stop_scheduler
+    return await stop_scheduler()
+
+
+@app.get("/internal-api/workflows/runs")
+async def get_workflow_runs(limit: int = 50, workflow: str = ""):
+    """Get workflow execution history."""
+    from workflow_scheduler import get_workflow_runs as _get_runs
+    return {"runs": _get_runs(limit, workflow)}
+
+
+@app.get("/internal-api/workflows/known-cases")
+async def get_known_cases():
+    """Get all tracked cases from the case checker."""
+    rows = turso.fetch_all("SELECT * FROM known_cases ORDER BY discovered_at DESC LIMIT 100")
+    return {"cases": rows}
 
 
 # ============================================================================

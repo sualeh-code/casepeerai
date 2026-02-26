@@ -9,6 +9,7 @@ import CostDashboard from './components/CostDashboard';
 import N8nExecutions from './components/N8nExecutions';
 import OpenAiUsage from './components/OpenAiUsage';
 import VapiAnalytics from './components/VapiAnalytics';
+import Automations from './components/Automations';
 import LoginPage from './components/LoginPage';
 
 function App() {
@@ -39,6 +40,7 @@ function App() {
           <CaseTable onCaseSelect={setSelectedCaseId} />
         )
       )}
+      {activeTab === 'automations' && <Automations />}
       {activeTab === 'n8n' && <N8nExecutions />}
       {activeTab === 'openai' && <OpenAiUsage />}
       {activeTab === 'vapi' && <VapiAnalytics />}
