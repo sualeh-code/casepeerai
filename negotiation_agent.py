@@ -1416,7 +1416,7 @@ IMPORTANT: After using tools and gathering information, you MUST return a final 
         try:
             response = await asyncio.to_thread(
                 client.chat.completions.create,
-                model="gpt-4.1",
+                model="gpt-5.2",
                 messages=agent_messages,
                 tools=TOOLS,
                 tool_choice="auto",
@@ -1478,7 +1478,7 @@ IMPORTANT: After using tools and gathering information, you MUST return a final 
 
         # Log token usage
         cost = (total_tokens / 1000) * 0.002  # Approximate cost
-        log_token_usage(total_tokens, cost, "gpt-4.1")
+        log_token_usage(total_tokens, cost, "gpt-5.2")
 
         # Parse the JSON from the response
         result = _parse_agent_response(raw_text)
