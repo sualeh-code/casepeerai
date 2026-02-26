@@ -540,7 +540,11 @@ def _send_via_gmail_api(gmail_email: str, to_address: str, subject: str,
         clean_html += f"\n<br><br>{signature}"
 
     logger.info(f"[Gmail API] Signature appended. gmail_signature configured: {'yes' if signature else 'no'}")
-    logger.info(f"[Gmail API] Threading: In-Reply-To={in_reply_to[:40] if in_reply_to else '(empty)'} | References={references[:40] if references else '(empty)'} | threadId={thread_id[:20] if thread_id else '(empty)'}")
+    logger.info(f"[Gmail API] Threading headers: In-Reply-To='{in_reply_to}' | threadId='{thread_id}'")
+    if not in_reply_to:
+        logger.warning("[Gmail API] In-Reply-To is EMPTY — this will likely break threading!")
+    if not references:
+        logger.warning("[Gmail API] References is EMPTY")
 
     full_html = f'<html><body style="font-family: Arial, sans-serif; font-size: 14px;">\n{clean_html}\n</body></html>'
     msg.attach(MIMEText(full_html, "html"))
@@ -563,7 +567,14 @@ def _send_via_gmail_api(gmail_email: str, to_address: str, subject: str,
     )
 
     if resp.status_code == 200:
-        logger.info(f"[Gmail API] Reply sent to {to_address} | Subject: {msg['Subject']} | Thread: {thread_id[:15]}")
+        # Verify Gmail actually threaded the reply
+        resp_data = resp.json()
+        returned_thread = resp_data.get("threadId", "")
+        if thread_id and returned_thread != thread_id:
+            logger.warning(f"[Gmail API] THREAD MISMATCH! Sent threadId={thread_id} but Gmail returned threadId={returned_thread}")
+        else:
+            logger.info(f"[Gmail API] Reply sent and threaded correctly | threadId={returned_thread}")
+        logger.info(f"[Gmail API] Reply sent to {to_address} | Subject: {msg['Subject']}")
         return True
     else:
         logger.error(f"[Gmail API] Send failed ({resp.status_code}): {resp.text[:300]}")
