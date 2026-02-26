@@ -65,9 +65,13 @@ const SettingsForm = () => {
         { key: 'otp_retry_count', label: 'OTP Retry Count', type: 'number' },
         { key: 'otp_retry_delay', label: 'OTP Retry Delay (seconds)', type: 'number' },
         { key: 'openai_api_key', label: 'OpenAI API Key', type: 'password' },
+        { key: 'gemini_api_key', label: 'Gemini API Key (PDF analysis)', type: 'password' },
         { key: 'n8n_api_key', label: 'n8n API Key', type: 'password' },
         { key: 'n8n_webhook_url', label: 'n8n Webhook/Base URL', type: 'text' },
         { key: 'vapi_api_key', label: 'VAPI API Key', type: 'password' },
+        { key: 'vapi_assistant_id', label: 'VAPI Assistant ID', type: 'text' },
+        { key: 'vapi_phone_id', label: 'VAPI Phone Number ID', type: 'text' },
+        { key: 'gmail_signature', label: 'Gmail Signature (HTML)', type: 'text' },
     ];
 
     return (
