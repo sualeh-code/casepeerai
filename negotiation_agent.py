@@ -1547,8 +1547,14 @@ def _parse_agent_response(text: str) -> Dict[str, Any]:
 
             # Strip any AI-added signature (the system appends the real one)
             if reply:
+                # Remove sign-offs like "Sincerely,\nLien Negotiations..." or "Best regards,\n..."
                 reply = re.sub(
-                    r'(<br\s*/?>){1,3}\s*(Sincerely|Best regards|Regards|Thank you|Warm regards),?\s*(<br\s*/?>.*)?$',
+                    r'(<br\s*/?>|\n){1,3}\s*(Sincerely|Best regards|Regards|Thank you|Warm regards|Kind regards|Respectfully),?\s*(<br\s*/?>|\n).*$',
+                    '', reply, flags=re.IGNORECASE | re.DOTALL
+                ).rstrip()
+                # Also strip trailing "Lien Negotiations Department" if AI included it standalone
+                reply = re.sub(
+                    r'(<br\s*/?>|\n){1,3}\s*Lien Negotiations\s*(Department)?\s*(<br\s*/?>|\n)?\s*Beverly Law\s*$',
                     '', reply, flags=re.IGNORECASE | re.DOTALL
                 ).rstrip()
 

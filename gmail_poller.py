@@ -519,11 +519,15 @@ def _send_via_gmail_api(gmail_email: str, to_address: str, subject: str,
     if not access_token:
         return False
 
+    # Normalize subject: strip multiple Re:/RE:/Fwd: prefixes, then add single "Re: "
+    clean_subject = re.sub(r'^(Re:\s*|RE:\s*|Fwd?:\s*)+', '', subject, flags=re.IGNORECASE).strip()
+    final_subject = f"Re: {clean_subject}" if clean_subject else subject
+
     # Build MIME message
     msg = MIMEMultipart("alternative")
     msg["From"] = gmail_email
     msg["To"] = to_address
-    msg["Subject"] = subject if subject.lower().startswith("re:") else f"Re: {subject}"
+    msg["Subject"] = final_subject
     if in_reply_to:
         msg["In-Reply-To"] = in_reply_to
     if references:
@@ -539,26 +543,31 @@ def _send_via_gmail_api(gmail_email: str, to_address: str, subject: str,
     if signature:
         clean_html += f"\n<br><br>{signature}"
 
-    logger.info(f"[Gmail API] Signature appended. gmail_signature configured: {'yes' if signature else 'no'}")
-    logger.info(f"[Gmail API] Threading headers: In-Reply-To='{in_reply_to}' | threadId='{thread_id}'")
+    logger.info(f"[Gmail API] Sending reply | To={to_address} | Subject={final_subject}")
+    logger.info(f"[Gmail API] Threading: threadId={thread_id} | In-Reply-To={in_reply_to[:80] if in_reply_to else 'EMPTY'} | References={references[:80] if references else 'EMPTY'}")
     if not in_reply_to:
-        logger.warning("[Gmail API] In-Reply-To is EMPTY — this will likely break threading!")
-    if not references:
-        logger.warning("[Gmail API] References is EMPTY")
+        logger.warning("[Gmail API] In-Reply-To is EMPTY — threading may not work!")
+    if not thread_id:
+        logger.warning("[Gmail API] threadId is EMPTY — reply will create a new thread!")
 
     full_html = f'<html><body style="font-family: Arial, sans-serif; font-size: 14px;">\n{clean_html}\n</body></html>'
+
+    # Add both plain text and HTML parts (proper multipart/alternative)
+    from bs4 import BeautifulSoup as _BS
+    try:
+        plain_text = _BS(full_html, "html.parser").get_text(separator="\n")
+    except Exception:
+        plain_text = re.sub(r'<[^>]+>', '', full_html)
+    msg.attach(MIMEText(plain_text, "plain"))
     msg.attach(MIMEText(full_html, "html"))
 
     # Base64url-encode the MIME message
     raw_message = base64.urlsafe_b64encode(msg.as_bytes()).decode("ascii")
 
-    # Send via Gmail API (include threadId to keep reply in same thread)
-    # threadId is REQUIRED to keep replies in the same Gmail thread
+    # Send via Gmail API — threadId is REQUIRED to keep reply in the same thread
     send_payload = {"raw": raw_message}
     if thread_id:
         send_payload["threadId"] = thread_id
-    else:
-        logger.warning("[Gmail API] No threadId — reply may create a new thread!")
 
     resp = http_requests.post(
         "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
@@ -567,14 +576,13 @@ def _send_via_gmail_api(gmail_email: str, to_address: str, subject: str,
     )
 
     if resp.status_code == 200:
-        # Verify Gmail actually threaded the reply
         resp_data = resp.json()
         returned_thread = resp_data.get("threadId", "")
+        returned_id = resp_data.get("id", "")
         if thread_id and returned_thread != thread_id:
-            logger.warning(f"[Gmail API] THREAD MISMATCH! Sent threadId={thread_id} but Gmail returned threadId={returned_thread}")
+            logger.warning(f"[Gmail API] THREAD MISMATCH! Requested threadId={thread_id} but Gmail placed in threadId={returned_thread}")
         else:
-            logger.info(f"[Gmail API] Reply sent and threaded correctly | threadId={returned_thread}")
-        logger.info(f"[Gmail API] Reply sent to {to_address} | Subject: {msg['Subject']}")
+            logger.info(f"[Gmail API] Reply sent & threaded OK | threadId={returned_thread} | msgId={returned_id}")
         return True
     else:
         logger.error(f"[Gmail API] Send failed ({resp.status_code}): {resp.text[:300]}")
@@ -594,12 +602,16 @@ def send_reply(gmail_email: str, gmail_password: str,
         return True
 
     # Fallback: try SMTP (works on paid Render or local dev)
-    logger.info("[Poller] Gmail API unavailable, trying SMTP fallback...")
+    logger.warning("[Poller] Gmail API send failed — trying SMTP fallback (NO threadId support)...")
     try:
+        # Normalize subject same as Gmail API path
+        clean_subject = re.sub(r'^(Re:\s*|RE:\s*|Fwd?:\s*)+', '', subject, flags=re.IGNORECASE).strip()
+        final_subject = f"Re: {clean_subject}" if clean_subject else subject
+
         msg = MIMEMultipart("alternative")
         msg["From"] = gmail_email
         msg["To"] = to_address
-        msg["Subject"] = subject if subject.lower().startswith("re:") else f"Re: {subject}"
+        msg["Subject"] = final_subject
         if in_reply_to:
             msg["In-Reply-To"] = in_reply_to
         if references:
@@ -617,13 +629,22 @@ def send_reply(gmail_email: str, gmail_password: str,
             clean_html += f"\n<br><br>{sig}"
 
         full_html = f'<html><body style="font-family: Arial, sans-serif; font-size: 14px;">\n{clean_html}\n</body></html>'
+
+        # Add both plain text and HTML parts
+        from bs4 import BeautifulSoup as _BS2
+        try:
+            plain_text = _BS2(full_html, "html.parser").get_text(separator="\n")
+        except Exception:
+            plain_text = re.sub(r'<[^>]+>', '', full_html)
+        msg.attach(MIMEText(plain_text, "plain"))
         msg.attach(MIMEText(full_html, "html"))
 
         with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT) as server:
             server.login(gmail_email, gmail_password)
             server.send_message(msg)
 
-        logger.info(f"[Poller] Reply sent via SMTP to {to_address} | Subject: {msg['Subject']}")
+        logger.info(f"[Poller] Reply sent via SMTP to {to_address} | Subject: {final_subject}")
+        logger.warning("[Poller] SMTP does NOT support threadId — reply may appear as a new thread in Gmail!")
         return True
     except Exception as e:
         logger.error(f"[Poller] SMTP fallback also failed: {e}", exc_info=True)
@@ -688,28 +709,44 @@ async def _poll_loop():
 
                     # Send reply if the agent generated one
                     if reply_message and intent not in ("no_action", "escalate"):
-                        # Determine reply-to address
-                        messages = thread_data.get("messages", [])
-                        last_msg = messages[-1] if messages else {}
-                        to_address = last_msg.get("From", "")
+                        thread_messages = thread_data.get("messages", [])
+                        thread_id = thread_data.get("threadId", "")
 
-                        logger.info(f"[Poller] Raw From field: '{to_address}'")
+                        # Find the latest message NOT from us (the provider's message)
+                        provider_msg = None
+                        gmail_lower = gmail_email.lower()
+                        for m in reversed(thread_messages):
+                            msg_from = m.get("From", "").lower()
+                            if gmail_lower not in msg_from:
+                                provider_msg = m
+                                break
+                        if not provider_msg:
+                            provider_msg = thread_messages[-1] if thread_messages else {}
+
+                        to_address = provider_msg.get("From", "")
 
                         # Extract just the email from "Name <email@domain.com>"
                         email_match = re.search(r'<(.+?)>', to_address)
                         if email_match:
                             to_address = email_match.group(1)
 
-                        subject = last_msg.get("Subject", "Lien Negotiation")
-                        # Use RFC Message-ID header for threading (NOT Gmail API id)
-                        rfc_msg_id = last_msg.get("Message-ID", "")
-                        rfc_references = last_msg.get("References", "")
+                        subject = provider_msg.get("Subject", "Lien Negotiation")
+
+                        # RFC Message-ID for In-Reply-To threading
+                        rfc_msg_id = provider_msg.get("Message-ID", "")
+                        # Fallback: construct Message-ID from Gmail's internal id
+                        if not rfc_msg_id:
+                            gmail_internal_id = provider_msg.get("id", "")
+                            if gmail_internal_id:
+                                rfc_msg_id = f"<{gmail_internal_id}@mail.gmail.com>"
+                                logger.warning(f"[Poller] No RFC Message-ID found, constructed fallback: {rfc_msg_id}")
+
+                        rfc_references = provider_msg.get("References", "")
                         # Build References chain: existing refs + this message's ID
                         if rfc_msg_id:
                             refs = f"{rfc_references} {rfc_msg_id}".strip() if rfc_references else rfc_msg_id
                         else:
                             refs = rfc_references
-                        thread_id = thread_data.get("threadId", "")
 
                         if to_address:
                             logger.info(f"[Poller] Sending reply to: {to_address} | Subject: {subject}")
