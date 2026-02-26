@@ -80,31 +80,30 @@ async def run_classification(case_id: str) -> Dict[str, Any]:
             continue
 
         try:
-            # Download document
-            doc_bytes = await asyncio.to_thread(_download_document, case_id, doc_id)
-            if not doc_bytes:
-                errors.append({"doc_id": doc_id, "name": doc_name, "error": "download failed"})
-                continue
+            # 1. Try filename-based classification first (fast, no download needed)
+            category = _classify_by_name(doc_name)
 
-            # Classify based on file type
-            if doc_type in ("pdf", "application/pdf") or doc_name.lower().endswith(".pdf"):
-                if gemini_key:
-                    category = await asyncio.to_thread(
-                        _classify_with_gemini, doc_bytes, doc_name, gemini_key
-                    )
-                else:
-                    category = _classify_by_name(doc_name)
-            elif doc_type in ("jpg", "jpeg", "png", "image/jpeg", "image/png") or \
-                 any(doc_name.lower().endswith(ext) for ext in [".jpg", ".jpeg", ".png"]):
-                if openai_key:
-                    category = await asyncio.to_thread(
-                        _classify_with_gpt4o, doc_bytes, doc_name, openai_key
-                    )
-                else:
-                    category = _classify_by_name(doc_name)
-            else:
-                # Fall back to name-based classification
-                category = _classify_by_name(doc_name)
+            # 2. Only download + AI classify if filename couldn't determine category
+            if category == "Miscellaneous/Unclassified":
+                is_pdf = doc_type in ("pdf", "application/pdf") or doc_name.lower().endswith(".pdf")
+                is_image = doc_type in ("jpg", "jpeg", "png", "image/jpeg", "image/png") or \
+                           any(doc_name.lower().endswith(ext) for ext in [".jpg", ".jpeg", ".png"])
+
+                if (is_pdf and gemini_key) or (is_image and openai_key):
+                    doc_bytes = await asyncio.to_thread(_download_document, case_id, doc_id)
+                    if doc_bytes:
+                        if is_pdf and gemini_key:
+                            ai_category = await asyncio.to_thread(
+                                _classify_with_gemini, doc_bytes, doc_name, gemini_key
+                            )
+                        elif is_image and openai_key:
+                            ai_category = await asyncio.to_thread(
+                                _classify_with_gpt4o, doc_bytes, doc_name, openai_key
+                            )
+                        else:
+                            ai_category = None
+                        if ai_category and ai_category != "Miscellaneous/Unclassified":
+                            category = ai_category
 
             if category:
                 classified.append({
@@ -286,36 +285,164 @@ def _classify_with_gpt4o(doc_bytes: bytes, filename: str, api_key: str) -> str:
 
 
 def _classify_by_name(filename: str) -> str:
-    """Fallback: classify based on filename keywords."""
+    """Classify based on filename keywords. Checked in priority order."""
     name_lower = filename.lower()
-    keyword_map = {
-        "medical record": "Medical Records",
-        "bill": "Medical Bills",
-        "invoice": "Medical Bills",
-        "mri": "Imaging (MRI/CT/X-Ray)",
-        "xray": "Imaging (MRI/CT/X-Ray)",
-        "x-ray": "Imaging (MRI/CT/X-Ray)",
-        "ct scan": "Imaging (MRI/CT/X-Ray)",
-        "lab": "Lab Results",
-        "pharmacy": "Pharmacy Records",
-        "surgical": "Surgical Report",
-        "surgery": "Surgical Report",
-        "physical therapy": "Physical Therapy Notes",
-        "chiro": "Chiropractic Records",
-        "police": "Police Report",
-        "accident": "Accident Report",
-        "photo": "Photos (Accident/Injuries)",
-        "demand": "Demand Letter",
-        "settlement": "Settlement Documents",
-        "lien": "Lien Documents",
-        "retainer": "Signed Retainer/Agreement",
-        "agreement": "Signed Retainer/Agreement",
-        "check": "Check/Payment",
-        "payment": "Check/Payment",
-        "id card": "ID/Identification",
-        "driver": "ID/Identification",
-    }
-    for keyword, category in keyword_map.items():
+
+    # Priority-ordered list (first match wins)
+    keyword_map = [
+        # Medical Bills
+        ("bill", "Medical Bills"),
+        ("invoice", "Medical Bills"),
+        ("ub04", "Medical Bills"),
+        ("ub-04", "Medical Bills"),
+        ("hicfa", "Medical Bills"),
+        ("hcfa", "Medical Bills"),
+        ("cms 1500", "Medical Bills"),
+        ("cms-1500", "Medical Bills"),
+        ("charges", "Medical Bills"),
+        ("statement of account", "Medical Bills"),
+
+        # Imaging
+        ("mri", "Imaging (MRI/CT/X-Ray)"),
+        ("xray", "Imaging (MRI/CT/X-Ray)"),
+        ("x-ray", "Imaging (MRI/CT/X-Ray)"),
+        ("x ray", "Imaging (MRI/CT/X-Ray)"),
+        ("ct scan", "Imaging (MRI/CT/X-Ray)"),
+        ("diagnostic imaging", "Imaging (MRI/CT/X-Ray)"),
+        ("radiology", "Imaging (MRI/CT/X-Ray)"),
+        ("imaging record", "Imaging (MRI/CT/X-Ray)"),
+
+        # Surgical
+        ("operative report", "Surgical Report"),
+        ("operative", "Surgical Report"),
+        ("surgical", "Surgical Report"),
+        ("surgery", "Surgical Report"),
+        ("procedure", "Surgical Report"),
+        ("op report", "Surgical Report"),
+
+        # Physical Therapy
+        ("physical therapy", "Physical Therapy Notes"),
+        ("select pt", "Physical Therapy Notes"),
+        ("plan of care", "Physical Therapy Notes"),
+        ("pt note", "Physical Therapy Notes"),
+        ("pt -", "Physical Therapy Notes"),
+        ("eval note", "Physical Therapy Notes"),
+        ("initial eval", "Physical Therapy Notes"),
+
+        # Lien Documents
+        ("lien", "Lien Documents"),
+        ("lien letter", "Lien Documents"),
+        ("intake_lien", "Lien Documents"),
+
+        # Settlement / Release
+        ("full and final", "Settlement Documents"),
+        ("settlement", "Settlement Documents"),
+        ("release", "Settlement Documents"),
+        ("signed release", "Settlement Documents"),
+
+        # Attorney Correspondence
+        ("rep letter", "Attorney Correspondence"),
+        ("representation letter", "Attorney Correspondence"),
+        ("attorney letter", "Attorney Correspondence"),
+        ("plaintiff adjuster", "Attorney Correspondence"),
+        ("defendant adjuster", "Attorney Correspondence"),
+        ("adjuster", "Attorney Correspondence"),
+
+        # Insurance
+        ("eor", "Insurance Correspondence"),
+        ("explanation of review", "Insurance Correspondence"),
+        ("eob", "Insurance Correspondence"),
+        ("explanation of benefit", "Insurance Correspondence"),
+        ("insurance", "Insurance Correspondence"),
+        ("certificate of no record", "Insurance Correspondence"),
+
+        # Medical Records
+        ("medical record", "Medical Records"),
+        ("records affidavit", "Medical Records"),
+        ("medical review", "Medical Records"),
+        ("npv", "Medical Records"),
+        ("patient record", "Medical Records"),
+        ("clinical note", "Medical Records"),
+        ("treatment record", "Medical Records"),
+        ("fu.", "Medical Records"),
+        ("follow up", "Medical Records"),
+        ("initial.", "Medical Records"),
+
+        # Chiropractic
+        ("chiro", "Chiropractic Records"),
+
+        # Lab
+        ("lab", "Lab Results"),
+        ("pathology", "Lab Results"),
+
+        # Pharmacy
+        ("pharmacy", "Pharmacy Records"),
+        ("prescription", "Pharmacy Records"),
+        ("rx", "Pharmacy Records"),
+
+        # Mental Health
+        ("mental health", "Mental Health Records"),
+        ("psych", "Mental Health Records"),
+        ("counseling", "Mental Health Records"),
+
+        # Police / Accident
+        ("police report", "Police Report"),
+        ("police", "Police Report"),
+        ("accident report", "Accident Report"),
+        ("accident", "Accident Report"),
+        ("crash report", "Accident Report"),
+
+        # Photos
+        ("photo", "Photos (Accident/Injuries)"),
+        ("injury photo", "Photos (Accident/Injuries)"),
+
+        # Demand
+        ("demand", "Demand Letter"),
+        ("demand letter", "Demand Letter"),
+
+        # Retainer / Agreement
+        ("retainer", "Signed Retainer/Agreement"),
+        ("agreement", "Signed Retainer/Agreement"),
+        ("please sign", "Signed Retainer/Agreement"),
+
+        # Legal Documents
+        ("affidavit", "Other Legal Documents"),
+        ("w-9", "Other Legal Documents"),
+        ("w9", "Other Legal Documents"),
+        ("order form", "Other Legal Documents"),
+        ("power of attorney", "Power of Attorney"),
+        ("poa", "Power of Attorney"),
+
+        # ID
+        ("id card", "ID/Identification"),
+        ("driver", "ID/Identification"),
+        ("identification", "ID/Identification"),
+
+        # Check/Payment
+        ("check", "Check/Payment"),
+        ("payment", "Check/Payment"),
+        ("deposit", "Check/Payment"),
+
+        # Dental
+        ("dental", "Dental Records"),
+
+        # Court / Discovery
+        ("court", "Court Documents"),
+        ("pleading", "Pleadings"),
+        ("discovery", "Discovery Documents"),
+        ("deposition", "Deposition Transcripts"),
+        ("expert report", "Expert Reports"),
+
+        # Employment / Wages
+        ("employment", "Employment Records"),
+        ("lost wage", "Lost Wages Documentation"),
+        ("wage", "Lost Wages Documentation"),
+
+        # Property Damage
+        ("property damage", "Property Damage Records"),
+    ]
+
+    for keyword, category in keyword_map:
         if keyword in name_lower:
             return category
     return "Miscellaneous/Unclassified"
