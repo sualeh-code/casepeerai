@@ -175,18 +175,22 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Failed to start email poller: {e}", exc_info=True)
 
-    # 4. START WORKFLOW SCHEDULER (daily tasks: case checker, follow-ups)
+    # 4. START SESSION KEEPALIVE (always) + WORKFLOW SCHEDULER (if enabled)
     try:
+        from workflow_scheduler import start_keepalive, start_scheduler
+        # Always start keepalive to prevent CasePeer session expiry
+        await start_keepalive()
+        logger.info("[OK] Session keepalive started (20min ping)")
+
         from turso_client import get_setting as _gs2
-        scheduler_enabled = (_gs2("workflow_scheduler_enabled", "true") or "").lower() == "true"
+        scheduler_enabled = (_gs2("workflow_scheduler_enabled", "false") or "").lower() == "true"
         if scheduler_enabled:
-            from workflow_scheduler import start_scheduler
             await start_scheduler()
             logger.info("[OK] Workflow scheduler started")
         else:
             logger.info("[SKIP] Workflow scheduler disabled (set workflow_scheduler_enabled=true)")
     except Exception as e:
-        logger.error(f"Failed to start workflow scheduler: {e}", exc_info=True)
+        logger.error(f"Failed to start scheduler/keepalive: {e}", exc_info=True)
 
     yield
 

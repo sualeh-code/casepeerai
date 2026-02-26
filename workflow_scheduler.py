@@ -197,14 +197,18 @@ async def trigger_workflow(workflow_name: str, case_id: str = "",
 # ---------------------------------------------------------------------------
 
 _keepalive_task: Optional[asyncio.Task] = None
+_keepalive_running = False
 
 
 async def _keepalive_loop():
     """Ping CasePeer every 20 minutes to prevent session expiry."""
-    while _scheduler_running:
+    global _keepalive_running
+    _keepalive_running = True
+    logger.info(f"[Keepalive] Started. Pinging every {KEEPALIVE_INTERVAL_SECONDS}s")
+    while _keepalive_running:
         try:
             await asyncio.sleep(KEEPALIVE_INTERVAL_SECONDS)
-            if not _scheduler_running:
+            if not _keepalive_running:
                 break
             # Make a lightweight GET to CasePeer dashboard to refresh the session
             from casepeer_helpers import casepeer_get_raw
@@ -218,6 +222,16 @@ async def _keepalive_loop():
             break
         except Exception as e:
             logger.warning(f"[Keepalive] Ping failed: {e}")
+    _keepalive_running = False
+
+
+async def start_keepalive():
+    """Start the session keepalive independently (always runs)."""
+    global _keepalive_task, _keepalive_running
+    if _keepalive_running:
+        return {"status": "already_running"}
+    _keepalive_task = asyncio.create_task(_keepalive_loop())
+    return {"status": "started"}
 
 
 async def _scheduler_loop():
@@ -267,8 +281,8 @@ async def _scheduler_loop():
 # ---------------------------------------------------------------------------
 
 async def start_scheduler():
-    """Start the background scheduler and session keep-alive."""
-    global _scheduler_running, _scheduler_task, _keepalive_task
+    """Start the background scheduler for daily tasks."""
+    global _scheduler_running, _scheduler_task
 
     if _scheduler_running:
         logger.info("[Scheduler] Already running")
@@ -276,14 +290,13 @@ async def start_scheduler():
 
     _scheduler_running = True
     _scheduler_task = asyncio.create_task(_scheduler_loop())
-    _keepalive_task = asyncio.create_task(_keepalive_loop())
-    logger.info("[Scheduler] Starting background scheduler + session keepalive")
+    logger.info("[Scheduler] Starting background scheduler")
     return {"status": "started"}
 
 
 async def stop_scheduler():
-    """Stop the background scheduler and session keep-alive."""
-    global _scheduler_running, _scheduler_task, _keepalive_task
+    """Stop the background scheduler."""
+    global _scheduler_running, _scheduler_task
 
     if not _scheduler_running:
         return {"status": "already_stopped"}
@@ -292,9 +305,6 @@ async def stop_scheduler():
     if _scheduler_task:
         _scheduler_task.cancel()
         _scheduler_task = None
-    if _keepalive_task:
-        _keepalive_task.cancel()
-        _keepalive_task = None
 
     _scheduler_stats["status"] = "stopped"
     logger.info("[Scheduler] Stop requested")

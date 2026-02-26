@@ -70,13 +70,6 @@ async def run_case_checker() -> Dict[str, Any]:
             new_cases.append({"case_id": case_id, "patient_name": patient_name})
             logger.info(f"[CaseChecker] New case: {case_id} ({patient_name})")
 
-            # Trigger classification workflow in background
-            try:
-                from workflow_scheduler import trigger_workflow
-                await trigger_workflow("classification", case_id, triggered_by="case_checker")
-            except Exception as e:
-                logger.warning(f"[CaseChecker] Failed to trigger classification for {case_id}: {e}")
-
         except Exception as e:
             logger.error(f"[CaseChecker] Failed to process case {case_id}: {e}")
 
