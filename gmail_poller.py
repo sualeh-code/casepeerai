@@ -539,6 +539,9 @@ def _send_via_gmail_api(gmail_email: str, to_address: str, subject: str,
     if signature:
         clean_html += f"\n<br><br>{signature}"
 
+    logger.info(f"[Gmail API] Signature appended. gmail_signature configured: {'yes' if signature else 'no'}")
+    logger.info(f"[Gmail API] Threading: In-Reply-To={in_reply_to[:40] if in_reply_to else '(empty)'} | References={references[:40] if references else '(empty)'} | threadId={thread_id[:20] if thread_id else '(empty)'}")
+
     full_html = f'<html><body style="font-family: Arial, sans-serif; font-size: 14px;">\n{clean_html}\n</body></html>'
     msg.attach(MIMEText(full_html, "html"))
 
@@ -546,9 +549,12 @@ def _send_via_gmail_api(gmail_email: str, to_address: str, subject: str,
     raw_message = base64.urlsafe_b64encode(msg.as_bytes()).decode("ascii")
 
     # Send via Gmail API (include threadId to keep reply in same thread)
+    # threadId is REQUIRED to keep replies in the same Gmail thread
     send_payload = {"raw": raw_message}
     if thread_id:
         send_payload["threadId"] = thread_id
+    else:
+        logger.warning("[Gmail API] No threadId — reply may create a new thread!")
 
     resp = http_requests.post(
         "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
@@ -557,7 +563,7 @@ def _send_via_gmail_api(gmail_email: str, to_address: str, subject: str,
     )
 
     if resp.status_code == 200:
-        logger.info(f"[Gmail API] Reply sent to {to_address} | Subject: {msg['Subject']}")
+        logger.info(f"[Gmail API] Reply sent to {to_address} | Subject: {msg['Subject']} | Thread: {thread_id[:15]}")
         return True
     else:
         logger.error(f"[Gmail API] Send failed ({resp.status_code}): {resp.text[:300]}")
@@ -695,7 +701,8 @@ async def _poll_loop():
                         thread_id = thread_data.get("threadId", "")
 
                         if to_address:
-                            logger.info(f"[Poller] Sending reply to: {to_address} | Subject: {subject} | Thread: {thread_id[:15]}")
+                            logger.info(f"[Poller] Sending reply to: {to_address} | Subject: {subject}")
+                            logger.info(f"[Poller] Threading: threadId={thread_id} | In-Reply-To={rfc_msg_id[:50] if rfc_msg_id else '(none)'} | References={'yes' if refs else '(none)'}")
                             sent = await asyncio.to_thread(
                                 send_reply,
                                 gmail_email, gmail_password,

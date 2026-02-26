@@ -105,7 +105,7 @@ WHAT YOU DO (AI only):
    Only call search_case if no case_id was provided in the pre-loaded context.
 2. Classify the provider's intent.
 3. Compose a reply email if one is needed.
-4. For "bill_correction" or "bill_confirmation": Call generate_bill_correction_pdf with the corrected/confirmed amounts.
+4. For "bill_correction": Call generate_bill_correction_pdf with the corrected amounts.
    Use get_treatment_page if you need to look up the original bill or calculate the new offer.
 5. For "asking_for_payment": Call get_case_status to check if case is in Lien Negotiations or Disbursement.
 
@@ -113,6 +113,7 @@ WHAT THE SYSTEM HANDLES AUTOMATICALLY (do NOT do these yourself):
 - Logging the negotiation (log_negotiation) — done by code after you return.
 - Adding a case note (add_case_note) — done by code after you return.
 - Accepting liens (get_settlement_page + accept_lien) — done by code for "accepted" intents.
+- Saving bill confirmation evidence — for "bill_confirmation" intents, the system auto-saves a screenshot of the email thread as a PDF to CasePeer.
 - Appending the email signature — done by code when sending.
 
 PDF ATTACHMENT ANALYSIS:
@@ -123,7 +124,7 @@ If the provider sent a signed settlement letter PDF, check if the amounts match 
 When composing reply emails:
 - Use </br> for line breaks (HTML email format).
 - Do NOT include phone numbers or physical addresses in your reply.
-- Do NOT include a closing signature — the system appends it automatically.
+- Do NOT include a closing signature, sign-off, or "Sincerely" line — the system appends the signature automatically. Your reply_message must end with your last sentence of content, nothing else.
 - Keep emails concise and professional.
 - Follow the scenario templates from the playbook.
 """
@@ -272,54 +273,6 @@ TOOLS = [
                     }
                 },
                 "required": ["case_id", "negotiation_type", "email_body"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "generate_and_upload_pdf",
-            "description": "Generate a PDF document from the email trail and upload it to CasePeer as a case document. Use this to create acceptance letters, bill correction records, bill confirmation records, or any negotiation documentation.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "case_id": {
-                        "type": "string",
-                        "description": "The CasePeer case ID to upload the document to"
-                    },
-                    "document_title": {
-                        "type": "string",
-                        "description": "Title for the PDF document (e.g. 'Acceptance Of Dr. Smith', 'Bill Correction from Metro Hospital For John Doe')"
-                    },
-                    "document_type": {
-                        "type": "string",
-                        "enum": ["acceptance", "bill_correction", "bill_confirmation", "email_trail", "other"],
-                        "description": "Type of document being created"
-                    },
-                    "content_sections": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "heading": {"type": "string", "description": "Section heading"},
-                                "body": {"type": "string", "description": "Section body text"}
-                            },
-                            "required": ["heading", "body"]
-                        },
-                        "description": "Sections of content to include in the PDF. For email trails, each section is one email (heading=sender, body=email text). For acceptance letters, include case details, agreed amount, etc."
-                    },
-                    "metadata": {
-                        "type": "object",
-                        "properties": {
-                            "provider_name": {"type": "string"},
-                            "patient_name": {"type": "string"},
-                            "amount": {"type": "string"},
-                            "date": {"type": "string"}
-                        },
-                        "description": "Optional metadata to display in the document header"
-                    }
-                },
-                "required": ["case_id", "document_title", "document_type", "content_sections"]
             }
         }
     },
@@ -660,112 +613,110 @@ def tool_log_negotiation(case_id: str, negotiation_type: str, email_body: str,
         return json.dumps({"error": str(e)})
 
 
-def tool_generate_and_upload_pdf(case_id: str, document_title: str, document_type: str,
-                                  content_sections: List[Dict], metadata: Dict = None) -> str:
-    """Generate a PDF from content sections and upload it to CasePeer."""
-    import requests as req
+def _generate_thread_screenshot_pdf(messages: List[Dict], subject: str) -> bytes:
+    """Render the email thread as a PDF that looks like a screenshot of the actual emails."""
     from datetime import datetime
 
-    try:
-        # --- Generate PDF ---
-        pdf = FPDF()
-        pdf.set_auto_page_break(auto=True, margin=20)
-        pdf.add_page()
+    def _safe(text: str) -> str:
+        """Sanitize text for FPDF (latin-1 only)."""
+        if not text:
+            return ""
+        return text.encode("latin-1", errors="replace").decode("latin-1")
 
-        # Header: Beverly Law letterhead
-        pdf.set_font("Helvetica", "B", 16)
-        pdf.cell(0, 10, "Beverly Law", new_x="LMARGIN", new_y="NEXT", align="C")
+    def _strip_html(html: str) -> str:
+        """Convert HTML to plain text."""
+        if not html or "<" not in html:
+            return html or ""
+        try:
+            soup = BeautifulSoup(html, "html.parser")
+            return soup.get_text(separator="\n")
+        except Exception:
+            return html
+
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=20)
+    pdf.add_page()
+
+    # Title
+    pdf.set_font("Helvetica", "B", 14)
+    pdf.cell(0, 10, "Email Thread Record", new_x="LMARGIN", new_y="NEXT", align="C")
+    pdf.set_font("Helvetica", "", 10)
+    pdf.cell(0, 6, _safe(f"Subject: {subject}"), new_x="LMARGIN", new_y="NEXT", align="C")
+    pdf.cell(0, 6, f"Captured: {datetime.now().strftime('%Y-%m-%d %H:%M')}", new_x="LMARGIN", new_y="NEXT", align="C")
+    pdf.ln(6)
+
+    # Divider
+    pdf.set_draw_color(80, 80, 80)
+    pdf.line(10, pdf.get_y(), 200, pdf.get_y())
+    pdf.ln(6)
+
+    for i, msg in enumerate(messages):
+        from_addr = msg.get("From", "Unknown")
+        to_addr = msg.get("To", "Unknown")
+        date_str = msg.get("Date", "")
+        body = msg.get("_decoded_body", msg.get("snippet", ""))
+        body = _strip_html(body).strip()
+
+        # Email header block (gray background)
+        pdf.set_fill_color(235, 235, 235)
+        pdf.set_font("Helvetica", "B", 9)
+        pdf.cell(0, 5, _safe(f"From: {from_addr}"), new_x="LMARGIN", new_y="NEXT", fill=True)
+        pdf.cell(0, 5, _safe(f"To: {to_addr}"), new_x="LMARGIN", new_y="NEXT", fill=True)
+        if date_str:
+            pdf.cell(0, 5, _safe(f"Date: {date_str}"), new_x="LMARGIN", new_y="NEXT", fill=True)
+        pdf.ln(3)
+
+        # Email body
         pdf.set_font("Helvetica", "", 10)
-        pdf.cell(0, 6, "Lien Negotiations Department", new_x="LMARGIN", new_y="NEXT", align="C")
+        if body:
+            # Truncate very long bodies to prevent huge PDFs
+            display_body = body[:3000] + ("..." if len(body) > 3000 else "")
+            pdf.multi_cell(0, 5, _safe(display_body))
+        else:
+            pdf.set_font("Helvetica", "I", 9)
+            pdf.cell(0, 5, "(no text content)", new_x="LMARGIN", new_y="NEXT")
         pdf.ln(4)
 
-        # Document type label
-        type_labels = {
-            "acceptance": "Settlement Acceptance Record",
-            "bill_correction": "Bill Correction Record",
-            "bill_confirmation": "Bill Confirmation Record",
-            "email_trail": "Email Correspondence Record",
-            "other": "Negotiation Record",
-        }
-        pdf.set_font("Helvetica", "B", 13)
-        pdf.cell(0, 10, type_labels.get(document_type, "Negotiation Record"), new_x="LMARGIN", new_y="NEXT", align="C")
-        pdf.ln(2)
-
-        # Metadata block (if provided)
-        if metadata:
-            pdf.set_font("Helvetica", "", 10)
-            pdf.set_fill_color(240, 240, 240)
-            meta_lines = []
-            if metadata.get("provider_name"):
-                meta_lines.append(f"Provider: {metadata['provider_name']}")
-            if metadata.get("patient_name"):
-                meta_lines.append(f"Patient: {metadata['patient_name']}")
-            if metadata.get("amount"):
-                meta_lines.append(f"Amount: {metadata['amount']}")
-            meta_lines.append(f"Date: {metadata.get('date', datetime.now().strftime('%Y-%m-%d'))}")
-
-            for line in meta_lines:
-                pdf.cell(0, 6, line, new_x="LMARGIN", new_y="NEXT", fill=True)
-            pdf.ln(4)
-
-        # Divider
-        pdf.set_draw_color(100, 100, 100)
-        pdf.line(10, pdf.get_y(), 200, pdf.get_y())
-        pdf.ln(6)
-
-        # Content sections
-        for section in content_sections:
-            heading = section.get("heading", "")
-            body = section.get("body", "")
-
-            # Section heading
-            pdf.set_font("Helvetica", "B", 11)
-            # Sanitize heading text for fpdf (replace unsupported chars)
-            safe_heading = heading.encode("latin-1", errors="replace").decode("latin-1")
-            pdf.cell(0, 7, safe_heading, new_x="LMARGIN", new_y="NEXT")
-
-            # Section body
-            pdf.set_font("Helvetica", "", 10)
-            # Sanitize body text
-            safe_body = body.encode("latin-1", errors="replace").decode("latin-1")
-            pdf.multi_cell(0, 5, safe_body)
-            pdf.ln(3)
-
-            # Light divider between sections
-            pdf.set_draw_color(200, 200, 200)
+        # Divider between messages
+        if i < len(messages) - 1:
+            pdf.set_draw_color(180, 180, 180)
             pdf.line(10, pdf.get_y(), 200, pdf.get_y())
             pdf.ln(4)
 
-        # Footer
-        pdf.ln(6)
-        pdf.set_font("Helvetica", "I", 9)
-        pdf.cell(0, 5, f"Generated on {datetime.now().strftime('%Y-%m-%d %H:%M')} by Beverly Law Lien Negotiations", new_x="LMARGIN", new_y="NEXT", align="C")
+    # Footer
+    pdf.ln(4)
+    pdf.set_font("Helvetica", "I", 8)
+    pdf.cell(0, 5, "This is an unedited capture of the email thread as received.", new_x="LMARGIN", new_y="NEXT", align="C")
 
-        # --- Output PDF to bytes ---
-        pdf_bytes = pdf.output()
+    return pdf.output()
 
-        # --- Upload to CasePeer ---
-        filename = f"{document_title}.pdf"
-        files = {"file": (filename, pdf_bytes, "application/pdf")}
-        data = {"docname": filename}
+
+def _upload_thread_screenshot(case_id: str, messages: List[Dict], subject: str, provider_name: str) -> str:
+    """Generate a thread screenshot PDF and upload it to CasePeer."""
+    import requests as req
+
+    try:
+        pdf_bytes = _generate_thread_screenshot_pdf(messages, subject)
+        filename = f"Bill Confirmation Thread - {provider_name}.pdf"
+        safe_filename = filename.encode("ascii", errors="replace").decode("ascii")
 
         base = _get_local_base()
         resp = req.post(
             f"{base}/internal-api/proxy_upload_file/{case_id}",
-            files=files,
-            data=data,
-            timeout=60
+            files={"file": (safe_filename, pdf_bytes, "application/pdf")},
+            data={"docname": safe_filename},
+            timeout=60,
         )
 
         if resp.status_code == 200:
-            logger.info(f"[PDF] Uploaded '{filename}' to case {case_id}")
-            return json.dumps({"success": True, "filename": filename, "size_bytes": len(pdf_bytes)})
+            logger.info(f"[PDF] Uploaded thread screenshot '{safe_filename}' to case {case_id}")
+            return json.dumps({"success": True, "filename": safe_filename, "size_bytes": len(pdf_bytes)})
         else:
             logger.error(f"[PDF] Upload failed: {resp.status_code} - {resp.text[:200]}")
-            return json.dumps({"error": f"Upload failed with status {resp.status_code}", "details": resp.text[:200]})
+            return json.dumps({"error": f"Upload failed with status {resp.status_code}"})
 
     except Exception as e:
-        logger.error(f"[PDF] Generation/upload error: {e}", exc_info=True)
+        logger.error(f"[PDF] Thread screenshot error: {e}", exc_info=True)
         return json.dumps({"error": str(e)})
 
 
@@ -1064,10 +1015,6 @@ TOOL_FUNCTIONS = {
     "add_case_note": lambda args: tool_add_case_note(args["case_id"], args["note"]),
     "get_case_status": lambda args: tool_get_case_status(args["case_id"]),
     "log_negotiation": lambda args: tool_log_negotiation(**args),
-    "generate_and_upload_pdf": lambda args: tool_generate_and_upload_pdf(
-        args["case_id"], args["document_title"], args["document_type"],
-        args["content_sections"], args.get("metadata")
-    ),
     "generate_bill_correction_pdf": lambda args: tool_generate_bill_correction_pdf(
         case_id=args["case_id"],
         letter_type=args["letter_type"],
@@ -1530,7 +1477,17 @@ IMPORTANT: After using tools and gathering information, you MUST return a final 
             except Exception as e:
                 logger.error(f"[PostProcess] Failed to add case note: {e}")
 
-            # 3. For accepted intents: auto-call get_settlement_page + accept_lien
+            # 3. For bill_confirmation: auto-save email thread screenshot PDF
+            if intent == "bill_confirmation":
+                try:
+                    provider_name = result.get("provider_name", "Provider")
+                    upload_result = _upload_thread_screenshot(case_id, messages, thread_subject, provider_name)
+                    actions_taken.append("auto:upload_thread_screenshot(bill_confirmation)")
+                    logger.info(f"[PostProcess] Uploaded bill confirmation thread screenshot: {upload_result[:200]}")
+                except Exception as e:
+                    logger.error(f"[PostProcess] Thread screenshot PDF failed: {e}")
+
+            # 4. For accepted intents: auto-call get_settlement_page + accept_lien
             if intent in ("accepted", "accepted_and_provided_details"):
                 try:
                     settlement_json = tool_get_settlement_page(case_id)
@@ -1586,9 +1543,18 @@ def _parse_agent_response(text: str) -> Dict[str, Any]:
     if json_match:
         try:
             parsed = json.loads(json_match.group())
+            reply = parsed.get("reply_message")
+
+            # Strip any AI-added signature (the system appends the real one)
+            if reply:
+                reply = re.sub(
+                    r'(<br\s*/?>){1,3}\s*(Sincerely|Best regards|Regards|Thank you|Warm regards),?\s*(<br\s*/?>.*)?$',
+                    '', reply, flags=re.IGNORECASE | re.DOTALL
+                ).rstrip()
+
             return {
                 "intent": parsed.get("intent", "unclear"),
-                "reply_message": parsed.get("reply_message"),
+                "reply_message": reply,
                 "provider_name": parsed.get("provider_name", "Unknown"),
                 "patient_name": parsed.get("patient_name", "Unknown"),
                 "reasoning": parsed.get("reasoning", ""),

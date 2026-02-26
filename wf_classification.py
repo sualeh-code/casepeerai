@@ -260,7 +260,7 @@ def _classify_with_gpt4o(doc_bytes: bytes, filename: str, api_key: str) -> str:
     try:
         client = OpenAI(api_key=api_key)
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model="gpt-5.2",
             messages=[{
                 "role": "user",
                 "content": [
@@ -280,7 +280,7 @@ def _classify_with_gpt4o(doc_bytes: bytes, filename: str, api_key: str) -> str:
         return text if text else "Miscellaneous/Unclassified"
 
     except Exception as e:
-        logger.error(f"[GPT-4o] Classification error: {e}")
+        logger.error(f"[GPT-5.2] Classification error: {e}")
         return _classify_by_name(filename)
 
 
