@@ -14,7 +14,7 @@ def get_setting(db, key: str):
             self.key = key
             self.value = value
             self.description = description
-    return Setting(row["key"], row["value"], row["description"])
+    return Setting(row["key"], row["value"] or "", row["description"] or "")
 
 def set_setting(db, setting: schemas.AppSettingCreate):
     """Set or update a setting using TursoClient."""
@@ -42,7 +42,7 @@ def get_all_settings(db, skip: int = 0, limit: int = 100):
             self.value = value
             self.description = description
             
-    return [Setting(r["key"], r["value"], r["description"]) for r in rows]
+    return [Setting(r["key"], r["value"] or "", r["description"] or "") for r in rows]
 
 # CASE CRUD (models.Case)
 def get_all_cases(db, skip: int = 0, limit: int = 100) -> List[Dict]:
