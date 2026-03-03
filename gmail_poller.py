@@ -587,9 +587,12 @@ def _send_via_gmail_api(gmail_email: str, to_address: str, subject: str,
     if not access_token:
         return False
 
-    # Normalize subject: strip multiple Re:/RE:/Fwd: prefixes, then add single "Re: "
+    # Normalize subject: only add "Re: " prefix when replying to an existing thread
     clean_subject = re.sub(r'^(Re:\s*|RE:\s*|Fwd?:\s*)+', '', subject, flags=re.IGNORECASE).strip()
-    final_subject = f"Re: {clean_subject}" if clean_subject else subject
+    if in_reply_to:
+        final_subject = f"Re: {clean_subject}" if clean_subject else subject
+    else:
+        final_subject = clean_subject or subject
 
     # Build MIME message
     msg = MIMEMultipart("alternative")

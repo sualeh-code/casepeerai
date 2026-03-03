@@ -6,7 +6,7 @@ Replicates the n8n Neg0sub workflow — the smarter way.
 Flow:
 1. Scrape treatment page → get providers, bills, liens
 2. Deduplicate providers by phone
-3. For each provider: generate balance confirmation PDF, email it
+3. For each provider: email balance confirmation request
 4. Log to Turso, add case note
 5. Trigger sub-workflows if needed
 
@@ -15,16 +15,13 @@ NOTE: This is Step 1 (balance confirmation). We do NOT send an offer yet.
 """
 
 import asyncio
-import io
 import logging
 import re
-from datetime import datetime
 from typing import Dict, Any, List
 
 from casepeer_helpers import (
-    casepeer_get, casepeer_get_raw, extract_html,
     get_treatment_providers, lookup_contact_directory,
-    add_case_note, parse_dollar_amount, get_local_base,
+    add_case_note,
 )
 
 logger = logging.getLogger(__name__)
@@ -33,262 +30,23 @@ logger = logging.getLogger(__name__)
 EXCLUDED_PROVIDERS = ["medicare", "medicaid", "medi-cal"]
 
 
-# ---------------------------------------------------------------------------
-# PDF generation — Balance Confirmation Letter
-# ---------------------------------------------------------------------------
+def _build_balance_confirmation_email(
+    provider_name: str, patient_name: str, patient_dob: str,
+    incident_date: str, bill_amount: float,
+) -> str:
+    """Build HTML email body asking provider to confirm outstanding balance."""
+    bill_str = f"${bill_amount:,.2f}" if bill_amount > 0 else "the amount on file"
+    dob_line = f"<br>Date of Birth: {patient_dob}" if patient_dob and patient_dob != "N/A" else ""
+    dol_line = f"<br>Date of Injury: {incident_date}" if incident_date and incident_date != "N/A" else ""
 
-async def _build_balance_confirmation_pdf(
-    provider_name: str,
-    provider_address: str,
-    patient_name: str,
-    patient_dob: str,
-    incident_date: str,
-    gmail_email: str,
-    bill_amount: float = 0.0,
-) -> bytes:
-    """Generate a Beverly Law balance confirmation letter as a styled PDF via Playwright."""
-    today = datetime.now().strftime("%B %d, %Y")
-    bill_str = f"${bill_amount:,.2f}" if bill_amount > 0 else "N/A"
-
-    addr_lines = ""
-    if provider_address:
-        for line in provider_address.split(","):
-            line = line.strip()
-            if line:
-                addr_lines += f"<div>{line}</div>"
-
-    dob_line = f'<div style="margin-top:2px;">Date of Birth: {patient_dob}</div>' if patient_dob and patient_dob != "N/A" else ""
-    dol_line = f'<div style="margin-top:2px;">Date of Injury: {incident_date}</div>' if incident_date and incident_date != "N/A" else ""
-
-    html = f"""<!DOCTYPE html>
-<html><head><style>
-  body {{
-    font-family: 'Georgia', 'Times New Roman', serif;
-    font-size: 10.5pt;
-    color: #1a1a1a;
-    margin: 0;
-    padding: 0;
-    line-height: 1.35;
-  }}
-  .letterhead {{
-    border-bottom: 2px solid #1a3c6e;
-    padding-bottom: 8px;
-    margin-bottom: 10px;
-  }}
-  .firm-name {{
-    font-size: 18pt;
-    font-weight: bold;
-    color: #1a3c6e;
-  }}
-  .firm-details {{
-    font-size: 8.5pt;
-    color: #555;
-    margin-top: 2px;
-  }}
-  .firm-note {{
-    font-size: 7.5pt;
-    font-style: italic;
-    color: #888;
-    margin-top: 3px;
-  }}
-  .meta-row {{
-    margin-bottom: 6px;
-    font-size: 10pt;
-  }}
-  .via {{ font-weight: bold; font-size: 8.5pt; color: #555; letter-spacing: 2px; margin-bottom: 4px; }}
-  .recipient {{ font-weight: bold; margin-bottom: 8px; font-size: 10pt; }}
-  .re-block {{
-    background: #f4f6f9;
-    border-left: 3px solid #1a3c6e;
-    padding: 6px 12px;
-    margin-bottom: 8px;
-    font-size: 9.5pt;
-  }}
-  .re-block .re-title {{ font-weight: bold; color: #1a3c6e; }}
-  .body-text {{ margin-bottom: 6px; text-align: justify; font-size: 10pt; }}
-  .bill-highlight {{
-    background: #fff8e1;
-    border: 1px solid #f0c040;
-    border-radius: 3px;
-    padding: 6px 12px;
-    margin: 8px 0;
-    font-size: 10pt;
-  }}
-  .bill-highlight strong {{ color: #b8860b; font-size: 12pt; }}
-  .confirmation-box {{
-    border: 2px solid #1a3c6e;
-    border-radius: 5px;
-    padding: 10px 14px;
-    margin: 10px 0;
-  }}
-  .confirmation-box h3 {{
-    color: #1a3c6e;
-    margin: 0 0 8px 0;
-    font-size: 10pt;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    border-bottom: 1px solid #ccc;
-    padding-bottom: 4px;
-  }}
-  .form-row {{
-    display: flex;
-    align-items: baseline;
-    margin-bottom: 10px;
-  }}
-  .form-label {{
-    width: 145px;
-    font-size: 9.5pt;
-    color: #333;
-    flex-shrink: 0;
-  }}
-  .form-line {{
-    flex: 1;
-    border-bottom: 1px solid #999;
-    min-height: 14px;
-    margin-left: 6px;
-  }}
-  .form-prefix {{
-    font-size: 9.5pt;
-    margin-left: 6px;
-    margin-right: 3px;
-  }}
-  .sig-section {{ margin-top: 10px; padding-top: 6px; border-top: 1px solid #ddd; }}
-  .closing {{ margin-top: 12px; font-size: 10pt; }}
-  .closing .firm {{ font-weight: bold; color: #1a3c6e; font-size: 11pt; }}
-  .email-note {{
-    margin-top: 10px;
-    padding: 6px 10px;
-    background: #e8f5e9;
-    border-radius: 3px;
-    font-size: 8.5pt;
-    color: #2e7d32;
-  }}
-</style></head><body>
-
-<div class="letterhead">
-  <div class="firm-name">Beverly Law</div>
-  <div class="firm-details">
-    4929 Wilshire Blvd, Suite 960, Los Angeles, CA 90010<br>
-    Tel: 310-552-6959 &nbsp;|&nbsp; Fax: 323-421-9397
-  </div>
-  <div class="firm-note">*Please note our new office address in your file*</div>
-</div>
-
-<div class="date-line">{today}</div>
-<div class="via">VIA EMAIL</div>
-
-<div class="recipient">
-  {provider_name}
-  {addr_lines}
-</div>
-
-<div class="re-block">
-  <div class="re-title">RE: Our Client / Your Patient: {patient_name}</div>
-  {dob_line}
-  {dol_line}
-</div>
-
-<div class="body-text">Dear Sir or Madam:</div>
-
-<div class="body-text">
-  Our office represents <strong>{patient_name}</strong> regarding injuries sustained on
-  <strong>{incident_date}</strong>. We are in the process of negotiating with the Insurance
-  Company and would like to confirm the outstanding balance for our client's account with your office.
-</div>
-
-<div class="bill-highlight">
-  The total that you have billed {patient_name} for this case is: <strong>{bill_str}</strong>.
-  Please confirm the outstanding balance for this patient.
-</div>
-
-<div class="body-text">
-  Please confirm the outstanding balance by completing the section below and returning
-  this letter to our office via email. Thank you for your prompt attention to this matter.
-</div>
-
-<div class="confirmation-box">
-  <h3>Outstanding Balance Confirmation</h3>
-
-  <div class="form-row">
-    <span class="form-label">Total Amount Billed:</span>
-    <span class="form-prefix">$</span>
-    <span class="form-line"></span>
-  </div>
-  <div class="form-row">
-    <span class="form-label">Insurance Payments:</span>
-    <span class="form-prefix">$</span>
-    <span class="form-line"></span>
-  </div>
-  <div class="form-row">
-    <span class="form-label">Adjustments:</span>
-    <span class="form-prefix">$</span>
-    <span class="form-line"></span>
-  </div>
-  <div class="form-row">
-    <span class="form-label">Outstanding Balance:</span>
-    <span class="form-prefix">$</span>
-    <span class="form-line"></span>
-  </div>
-
-  <div class="form-row" style="margin-top:22px;">
-    <span class="form-label">Payment Address:</span>
-    <span class="form-line"></span>
-  </div>
-  <div class="form-row">
-    <span class="form-label"></span>
-    <span class="form-line"></span>
-  </div>
-
-  <div class="sig-section">
-    <div class="form-row">
-      <span class="form-label">Authorized Signature:</span>
-      <span class="form-line"></span>
-    </div>
-    <div class="form-row">
-      <span class="form-label">Print Name:</span>
-      <span class="form-line"></span>
-    </div>
-    <div class="form-row">
-      <span class="form-label">Date:</span>
-      <span class="form-line"></span>
-    </div>
-  </div>
-</div>
-
-<div class="closing">
-  Regards,<br>
-  <span class="firm">BEVERLY LAW</span>
-</div>
-
-<div class="email-note">
-  Please scan and EMAIL this letter back to <strong>{gmail_email}</strong>.
-  Please do not fax. Thank you for your partnership.
-</div>
-
-</body></html>"""
-
-    from playwright.async_api import async_playwright
-    async with async_playwright() as p:
-        browser = await p.chromium.launch()
-        page = await browser.new_page()
-        await page.set_content(html, wait_until="networkidle")
-        pdf_bytes = await page.pdf(
-            format="Letter",
-            print_background=True,
-            margin={"top": "40px", "bottom": "30px", "left": "50px", "right": "50px"},
-        )
-        await browser.close()
-    return pdf_bytes
-
-
-def _build_cover_email(provider_name: str, patient_name: str) -> str:
-    """Short cover email body to accompany the PDF attachment."""
     return (
         f"Dear {provider_name},<br><br>"
-        f"Please find attached a balance confirmation request regarding our client "
-        f"<strong>{patient_name}</strong>.<br><br>"
-        f"Kindly complete the attached form and return it to us via email at your "
-        f"earliest convenience.<br><br>"
+        f"Our office represents <strong>{patient_name}</strong> regarding injuries sustained "
+        f"on <strong>{incident_date}</strong>.{dob_line}{dol_line}<br><br>"
+        f"We are in the process of negotiating with the insurance company and would like "
+        f"to confirm the outstanding balance for our client's account with your office.<br><br>"
+        f"Our records show the total billed amount is <strong>{bill_str}</strong>. "
+        f"Could you please confirm the current outstanding balance for this patient?<br><br>"
         f"Thank you for your prompt attention to this matter."
     )
 
@@ -300,10 +58,10 @@ def _build_cover_email(provider_name: str, patient_name: str) -> str:
 async def run_initial_negotiation(case_id: str) -> Dict[str, Any]:
     """
     Run the initial negotiation workflow for a case.
-    Sends balance confirmation PDF to each provider (no offer yet).
+    Sends balance confirmation email to each provider (no offer yet).
     """
     from turso_client import get_setting
-    from gmail_poller import send_email_with_attachment
+    from gmail_poller import _send_via_gmail_api
 
     logger.info(f"[InitialNeg] Starting for case {case_id}")
 
@@ -349,7 +107,7 @@ async def run_initial_negotiation(case_id: str) -> Dict[str, Any]:
     if excluded_count:
         logger.info(f"[InitialNeg] Excluded {excluded_count} Medicare/Medicaid/Medi-cal provider(s)")
 
-    # 3. Look up provider emails and send balance confirmation PDFs
+    # 3. Look up provider emails and send balance confirmation emails
     gmail_email, gmail_password, _ = _get_gmail_creds()
     recipient_override = get_setting("neg0sub_recipient_override", "")
 
@@ -383,23 +141,14 @@ async def run_initial_negotiation(case_id: str) -> Dict[str, Any]:
             logger.warning(f"[InitialNeg] No email for {name}, skipping")
             continue
 
-        # Generate PDF
-        pdf_bytes = await _build_balance_confirmation_pdf(
+        # Build email body
+        email_html = _build_balance_confirmation_email(
             provider_name=name,
-            provider_address=provider_address,
             patient_name=patient_name,
             patient_dob=patient_dob,
             incident_date=incident_date,
-            gmail_email=gmail_email,
             bill_amount=bill,
         )
-
-        # Build cover email
-        cover_html = _build_cover_email(name, patient_name)
-
-        # Safe filename
-        safe_name = re.sub(r'[^a-zA-Z0-9 ]', '', name).strip().replace(' ', '_')
-        filename = f"Balance_Confirmation_{safe_name}.pdf"
 
         # Send with retry (up to 3 attempts, 5s delay)
         sent = False
@@ -407,10 +156,10 @@ async def run_initial_negotiation(case_id: str) -> Dict[str, Any]:
         for attempt in range(1, 4):
             try:
                 sent = await asyncio.to_thread(
-                    send_email_with_attachment,
+                    _send_via_gmail_api,
                     gmail_email, send_to,
                     "Balance Confirmation Request",
-                    cover_html, pdf_bytes, filename,
+                    email_html,
                 )
                 if sent:
                     break
@@ -439,7 +188,7 @@ async def run_initial_negotiation(case_id: str) -> Dict[str, Any]:
             turso.execute(
                 'INSERT INTO negotiations (case_id, negotiation_type, "to", email_body, date, actual_bill, offered_bill, sent_by_us, result) VALUES (?, ?, ?, ?, datetime(\'now\'), ?, ?, 1, ?)',
                 [case_id, "Balance Confirmation", item["email"],
-                 f"Balance confirmation PDF sent to {item['provider']}",
+                 f"Balance confirmation email sent to {item['provider']}",
                  item["bill"], 0.0, "Awaiting Confirmation"]
             )
         except Exception as e:
