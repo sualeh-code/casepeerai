@@ -2273,7 +2273,7 @@ async def process_negotiation_email(request: Request):
 # Workflow Trigger Endpoints
 # ============================================================================
 
-@app.post("/internal-api/workflows/initial-negotiation/{case_id}")
+@app.api_route("/internal-api/workflows/initial-negotiation/{case_id}", methods=["GET", "POST"])
 async def trigger_initial_negotiation(case_id: str):
     """Trigger initial negotiation offers for a case (runs in background)."""
     from workflow_scheduler import trigger_workflow

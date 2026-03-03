@@ -613,90 +613,100 @@ def tool_log_negotiation(case_id: str, negotiation_type: str, email_body: str,
         return json.dumps({"error": str(e)})
 
 
-def _generate_thread_screenshot_pdf(messages: List[Dict], subject: str) -> bytes:
-    """Render the email thread as a PDF that looks like a screenshot of the actual emails."""
+async def _generate_original_thread_pdf(messages: List[Dict], subject: str) -> bytes:
+    """Render original email HTML bodies to PDF using Playwright.
+
+    Uses the actual HTML content from Gmail API (not reconstructed text) so the
+    resulting PDF is an authentic representation of the email thread — suitable
+    for evidence/verification purposes.
+    """
     from datetime import datetime
 
-    def _safe(text: str) -> str:
-        """Sanitize text for FPDF (latin-1 only)."""
+    def _escape(text: str) -> str:
+        """HTML-escape plain text."""
         if not text:
             return ""
-        return text.encode("latin-1", errors="replace").decode("latin-1")
+        return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
-    def _strip_html(html: str) -> str:
-        """Convert HTML to plain text."""
-        if not html or "<" not in html:
-            return html or ""
-        try:
-            soup = BeautifulSoup(html, "html.parser")
-            return soup.get_text(separator="\n")
-        except Exception:
-            return html
+    # Build an HTML document containing each message's original content
+    parts = []
+    parts.append("""<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<style>
+  body { font-family: Arial, sans-serif; font-size: 13px; color: #222; margin: 30px; }
+  .header { background: #f5f5f5; border: 1px solid #ddd; padding: 8px 12px; margin-bottom: 0; }
+  .header-row { margin: 2px 0; font-size: 12px; }
+  .header-label { font-weight: bold; color: #555; }
+  .body-content { border: 1px solid #ddd; border-top: none; padding: 12px 16px; margin-bottom: 20px; }
+  .divider { border-top: 2px solid #999; margin: 24px 0; }
+  .title { text-align: center; margin-bottom: 20px; }
+  .title h2 { margin: 0; font-size: 16px; }
+  .title p { margin: 4px 0; font-size: 11px; color: #666; }
+  .footer { text-align: center; font-size: 10px; color: #888; margin-top: 30px; }
+</style></head><body>""")
 
-    pdf = FPDF()
-    pdf.set_auto_page_break(auto=True, margin=20)
-    pdf.add_page()
-
-    # Title
-    pdf.set_font("Helvetica", "B", 14)
-    pdf.cell(0, 10, "Email Thread Record", new_x="LMARGIN", new_y="NEXT", align="C")
-    pdf.set_font("Helvetica", "", 10)
-    pdf.cell(0, 6, _safe(f"Subject: {subject}"), new_x="LMARGIN", new_y="NEXT", align="C")
-    pdf.cell(0, 6, f"Captured: {datetime.now().strftime('%Y-%m-%d %H:%M')}", new_x="LMARGIN", new_y="NEXT", align="C")
-    pdf.ln(6)
-
-    # Divider
-    pdf.set_draw_color(80, 80, 80)
-    pdf.line(10, pdf.get_y(), 200, pdf.get_y())
-    pdf.ln(6)
+    parts.append(f"""<div class="title">
+  <h2>Email Thread Record</h2>
+  <p>Subject: {_escape(subject)}</p>
+  <p>Captured: {datetime.now().strftime('%Y-%m-%d %H:%M')}</p>
+</div>""")
 
     for i, msg in enumerate(messages):
         from_addr = msg.get("From", "Unknown")
         to_addr = msg.get("To", "Unknown")
         date_str = msg.get("Date", "")
-        body = msg.get("_decoded_body", msg.get("snippet", ""))
-        body = _strip_html(body).strip()
+        body_html = msg.get("_decoded_body", msg.get("snippet", ""))
 
-        # Email header block (gray background)
-        pdf.set_fill_color(235, 235, 235)
-        pdf.set_font("Helvetica", "B", 9)
-        pdf.cell(0, 5, _safe(f"From: {from_addr}"), new_x="LMARGIN", new_y="NEXT", fill=True)
-        pdf.cell(0, 5, _safe(f"To: {to_addr}"), new_x="LMARGIN", new_y="NEXT", fill=True)
+        # Check if body is HTML or plain text
+        is_html = body_html and "<" in body_html and (">" in body_html)
+
+        parts.append('<div class="header">')
+        parts.append(f'<div class="header-row"><span class="header-label">From:</span> {_escape(from_addr)}</div>')
+        parts.append(f'<div class="header-row"><span class="header-label">To:</span> {_escape(to_addr)}</div>')
         if date_str:
-            pdf.cell(0, 5, _safe(f"Date: {date_str}"), new_x="LMARGIN", new_y="NEXT", fill=True)
-        pdf.ln(3)
+            parts.append(f'<div class="header-row"><span class="header-label">Date:</span> {_escape(date_str)}</div>')
+        parts.append('</div>')
 
-        # Email body
-        pdf.set_font("Helvetica", "", 10)
-        if body:
-            # Truncate very long bodies to prevent huge PDFs
-            display_body = body[:3000] + ("..." if len(body) > 3000 else "")
-            pdf.multi_cell(0, 5, _safe(display_body))
+        parts.append('<div class="body-content">')
+        if body_html:
+            if is_html:
+                # Use original HTML body as-is (authentic content)
+                parts.append(body_html)
+            else:
+                # Plain text — wrap in <pre> to preserve formatting
+                parts.append(f'<pre style="white-space: pre-wrap; font-family: Arial, sans-serif; font-size: 13px;">{_escape(body_html)}</pre>')
         else:
-            pdf.set_font("Helvetica", "I", 9)
-            pdf.cell(0, 5, "(no text content)", new_x="LMARGIN", new_y="NEXT")
-        pdf.ln(4)
+            parts.append('<em style="color:#999;">(no content)</em>')
+        parts.append('</div>')
 
-        # Divider between messages
         if i < len(messages) - 1:
-            pdf.set_draw_color(180, 180, 180)
-            pdf.line(10, pdf.get_y(), 200, pdf.get_y())
-            pdf.ln(4)
+            parts.append('<div class="divider"></div>')
 
-    # Footer
-    pdf.ln(4)
-    pdf.set_font("Helvetica", "I", 8)
-    pdf.cell(0, 5, "This is an unedited capture of the email thread as received.", new_x="LMARGIN", new_y="NEXT", align="C")
+    parts.append('<div class="footer">This is an unedited capture of the original email thread as received.</div>')
+    parts.append("</body></html>")
 
-    return pdf.output()
+    html_doc = "\n".join(parts)
+
+    # Render to PDF with Playwright
+    from playwright.async_api import async_playwright
+    async with async_playwright() as p:
+        browser = await p.chromium.launch()
+        page = await browser.new_page()
+        await page.set_content(html_doc, wait_until="networkidle")
+        pdf_bytes = await page.pdf(format="A4", print_background=True, margin={
+            "top": "15mm", "bottom": "15mm", "left": "10mm", "right": "10mm"
+        })
+        await browser.close()
+
+    return pdf_bytes
 
 
-def _upload_thread_screenshot(case_id: str, messages: List[Dict], subject: str, provider_name: str) -> str:
-    """Generate a thread screenshot PDF and upload it to CasePeer."""
+async def _upload_thread_pdf(case_id: str, messages: List[Dict], subject: str, provider_name: str) -> str:
+    """Generate an original email thread PDF and upload it to CasePeer."""
     import requests as req
 
     try:
-        pdf_bytes = _generate_thread_screenshot_pdf(messages, subject)
+        pdf_bytes = await _generate_original_thread_pdf(messages, subject)
         filename = f"Bill Confirmation Thread - {provider_name}.pdf"
         safe_filename = filename.encode("ascii", errors="replace").decode("ascii")
 
@@ -709,14 +719,14 @@ def _upload_thread_screenshot(case_id: str, messages: List[Dict], subject: str, 
         )
 
         if resp.status_code == 200:
-            logger.info(f"[PDF] Uploaded thread screenshot '{safe_filename}' to case {case_id}")
+            logger.info(f"[PDF] Uploaded original thread PDF '{safe_filename}' to case {case_id}")
             return json.dumps({"success": True, "filename": safe_filename, "size_bytes": len(pdf_bytes)})
         else:
             logger.error(f"[PDF] Upload failed: {resp.status_code} - {resp.text[:200]}")
             return json.dumps({"error": f"Upload failed with status {resp.status_code}"})
 
     except Exception as e:
-        logger.error(f"[PDF] Thread screenshot error: {e}", exc_info=True)
+        logger.error(f"[PDF] Thread PDF error: {e}", exc_info=True)
         return json.dumps({"error": str(e)})
 
 
@@ -1477,15 +1487,66 @@ IMPORTANT: After using tools and gathering information, you MUST return a final 
             except Exception as e:
                 logger.error(f"[PostProcess] Failed to add case note: {e}")
 
-            # 3. For bill_confirmation: auto-save email thread screenshot PDF
+            # 3. For bill_confirmation: auto-save original email thread PDF + update settlement amount
             if intent == "bill_confirmation":
                 try:
                     provider_name = result.get("provider_name", "Provider")
-                    upload_result = _upload_thread_screenshot(case_id, messages, thread_subject, provider_name)
-                    actions_taken.append("auto:upload_thread_screenshot(bill_confirmation)")
-                    logger.info(f"[PostProcess] Uploaded bill confirmation thread screenshot: {upload_result[:200]}")
+                    upload_result = await _upload_thread_pdf(case_id, messages, thread_subject, provider_name)
+                    actions_taken.append("auto:upload_original_thread_pdf(bill_confirmation)")
+                    logger.info(f"[PostProcess] Uploaded bill confirmation thread PDF: {upload_result[:200]}")
                 except Exception as e:
-                    logger.error(f"[PostProcess] Thread screenshot PDF failed: {e}")
+                    logger.error(f"[PostProcess] Thread PDF failed: {e}")
+
+                # Update settlement page with confirmed balance amount
+                try:
+                    confirmed_amount = result.get("actual_bill")
+                    if confirmed_amount and float(confirmed_amount) > 0:
+                        settlement_json = tool_get_settlement_page(case_id)
+                        settlement = json.loads(settlement_json)
+                        form_fields = settlement.get("form_fields", {})
+                        providers_list = settlement.get("providers", [])
+                        provider_name_lower = (result.get("provider_name") or "").lower()
+
+                        # Match provider by name (fuzzy)
+                        matched_provider = None
+                        for sp in providers_list:
+                            sp_name = (sp.get("provider_name") or "").lower()
+                            if provider_name_lower and (provider_name_lower in sp_name or sp_name in provider_name_lower):
+                                matched_provider = sp
+                                break
+
+                        if matched_provider and matched_provider.get("provider_id") and form_fields:
+                            pid = matched_provider["provider_id"]
+                            clean_amount = re.sub(r'[^0-9.]', '', str(confirmed_amount))
+                            # Update final_cost for this provider
+                            updated = False
+                            for key, value in form_fields.items():
+                                if key.endswith("-id") and value == pid:
+                                    index = re.search(r'health-liens-(\d+)-id', key)
+                                    if index:
+                                        cost_key = f"health-liens-{index.group(1)}-final_cost"
+                                        form_fields[cost_key] = clean_amount
+                                        updated = True
+                                        break
+
+                            if updated:
+                                import requests as req
+                                base = _get_local_base()
+                                form_body = "&".join(f"{k}={v}" for k, v in form_fields.items())
+                                req.post(
+                                    f"{base}/case/{case_id}/settlement/negotiations/",
+                                    data=form_body,
+                                    headers={"Content-Type": "application/x-www-form-urlencoded"},
+                                    timeout=90
+                                )
+                                actions_taken.append(f"auto:update_settlement_amount(provider={pid}, amount={clean_amount})")
+                                logger.info(f"[PostProcess] Updated settlement amount for {provider_name}: ${clean_amount}")
+                            else:
+                                logger.warning(f"[PostProcess] Provider ID {pid} not found in settlement form fields")
+                        else:
+                            logger.warning(f"[PostProcess] Could not match provider '{provider_name}' for settlement update")
+                except Exception as e:
+                    logger.error(f"[PostProcess] Settlement amount update failed: {e}")
 
             # 4. For accepted intents: auto-call get_settlement_page + accept_lien
             if intent in ("accepted", "accepted_and_provided_details"):
@@ -1512,6 +1573,30 @@ IMPORTANT: After using tools and gathering information, you MUST return a final 
                         logger.warning(f"[PostProcess] Could not match provider '{result.get('provider_name')}' in settlement page ({len(providers_list)} providers)")
                 except Exception as e:
                     logger.error(f"[PostProcess] accept_lien flow failed: {e}")
+
+                # Upload signed PDF attachments from the thread to CasePeer
+                try:
+                    import requests as _req
+                    pdf_analyses = thread_data.get("_pdf_analyses", [])
+                    base = _get_local_base()
+                    provider_name = result.get("provider_name", "Provider")
+                    for pa in pdf_analyses:
+                        pdf_bytes = pa.get("_pdf_bytes")
+                        if pdf_bytes:
+                            filename = pa.get("filename", f"Signed Letter - {provider_name}.pdf")
+                            resp = _req.post(
+                                f"{base}/internal-api/proxy_upload_file/{case_id}",
+                                files={"file": (filename, pdf_bytes, "application/pdf")},
+                                data={"docname": filename},
+                                timeout=60,
+                            )
+                            if resp.status_code == 200:
+                                actions_taken.append(f"auto:upload_signed_pdf({filename})")
+                                logger.info(f"[PostProcess] Uploaded signed PDF '{filename}' to case {case_id}")
+                            else:
+                                logger.error(f"[PostProcess] Signed PDF upload failed: {resp.status_code}")
+                except Exception as e:
+                    logger.error(f"[PostProcess] Signed PDF upload failed: {e}")
 
         # Save conversation history for future continuity
         _save_conversation_history(

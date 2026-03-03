@@ -90,23 +90,51 @@ def extract_html(result: Dict) -> str:
     return ""
 
 
+def _decode_unicode_escapes(s: str) -> str:
+    """Decode all \\uXXXX sequences (e.g. \\u0022 → \", \\u003C → <)."""
+    return re.sub(r'\\u([0-9a-fA-F]{4})', lambda m: chr(int(m.group(1), 16)), s)
+
+
 def extract_script_json(html: str, var_name: str) -> Any:
     """
     Extract a JSON value assigned to a window variable in embedded <script> tags.
-    E.g. window.HEALTH_LIENS_DATA = JSON.parse('[...]');
+    Handles: JSON.parse('...'), JSON.parse("..."), and direct assignment.
+    Decodes all \\uXXXX unicode escapes before JSON parsing.
     """
     soup = BeautifulSoup(html, "html.parser")
     for script in soup.select("script"):
         text = script.string or ""
-        # Try JSON.parse('...') format
+        if var_name not in text:
+            continue
+
+        # Try JSON.parse('...') format (single quotes)
         pattern = rf"window\.{var_name}\s*=\s*JSON\.parse\(\s*'(.*?)'\s*\)"
         match = re.search(pattern, text, re.DOTALL)
         if match:
             try:
-                return json.loads(match.group(1))
+                return json.loads(_decode_unicode_escapes(match.group(1)))
             except json.JSONDecodeError:
                 pass
-        # Try direct assignment: window.VAR = [...];
+
+        # Try JSON.parse("...") format (double quotes with unicode escapes)
+        pattern_dq = rf'window\.{var_name}\s*=\s*JSON\.parse\(\s*"(.*?)"\s*\)'
+        match_dq = re.search(pattern_dq, text, re.DOTALL)
+        if match_dq:
+            try:
+                return json.loads(_decode_unicode_escapes(match_dq.group(1)))
+            except json.JSONDecodeError:
+                pass
+
+        # Try JSON.parse(String.raw`...`) or JSON.parse(`...`) (template literals)
+        pattern_tl = rf"window\.{var_name}\s*=\s*JSON\.parse\(\s*(?:String\.raw)?`(.*?)`\s*\)"
+        match_tl = re.search(pattern_tl, text, re.DOTALL)
+        if match_tl:
+            try:
+                return json.loads(_decode_unicode_escapes(match_tl.group(1)))
+            except json.JSONDecodeError:
+                pass
+
+        # Try direct assignment: window.VAR = [...]; or window.VAR = {...};
         pattern2 = rf"window\.{var_name}\s*=\s*(\[.*?\]|\{{.*?\}});?"
         match2 = re.search(pattern2, text, re.DOTALL)
         if match2:
@@ -114,6 +142,20 @@ def extract_script_json(html: str, var_name: str) -> Any:
                 return json.loads(match2.group(1))
             except json.JSONDecodeError:
                 pass
+
+        # Last resort: grab everything after = up to the first ;
+        pattern3 = rf"window\.{var_name}\s*=\s*(.*?);"
+        match3 = re.search(pattern3, text, re.DOTALL)
+        if match3:
+            raw = match3.group(1).strip()
+            jp_match = re.match(r'JSON\.parse\(\s*["\']?(.*?)["\']?\s*\)$', raw, re.DOTALL)
+            if jp_match:
+                raw = _decode_unicode_escapes(jp_match.group(1))
+            try:
+                return json.loads(raw)
+            except json.JSONDecodeError:
+                logger.warning(f"[Helpers] Found {var_name} but failed to parse. First 200 chars: {raw[:200]}")
+
     return None
 
 
@@ -228,18 +270,39 @@ def get_treatment_providers(case_id: str) -> Dict[str, Any]:
     # Extract HEALTH_LIENS_DATA and LIEN_LETTERS from embedded scripts
     health_liens_data = extract_script_json(html, "HEALTH_LIENS_DATA") or []
     lien_letters = extract_script_json(html, "LIEN_LETTERS") or []
+    logger.info(f"[Helpers] HEALTH_LIENS_DATA found: {len(health_liens_data)} items, LIEN_LETTERS: {len(lien_letters)} items")
+    if not health_liens_data:
+        # Debug: check if the variable exists in HTML at all
+        has_health = "HEALTH_LIENS_DATA" in html
+        has_lien = "LIEN_LETTERS" in html
+        logger.warning(f"[Helpers] HEALTH_LIENS_DATA in HTML: {has_health}, LIEN_LETTERS in HTML: {has_lien}, HTML length: {len(html)}")
 
     # Calculate offers for each provider
     providers = []
     for lien in health_liens_data:
-        name = lien.get("provider_name", lien.get("name", "Unknown"))
-        category = lien.get("category", "")
-        bill_str = str(lien.get("bill_amount", lien.get("amount", "0")))
+        # Extract from nested CasePeer structure
+        contact = lien.get("contact", {})
+        details = contact.get("details", {})
+        addresses = details.get("addresses", {})
+        physical = addresses.get("physical", {})
+
+        name = details.get("company") or details.get("displayname") or "Unknown"
+        specialties = (lien.get("contact_specialties") or "").lower()
+        email = physical.get("email", "")
+        phone = physical.get("phone", "")
+        address_pt1 = physical.get("address_pt_1", "")
+        address_pt2 = physical.get("address_pt_2", "")
+        provider_address = f"{address_pt1}, {address_pt2}" if address_pt1 else ""
+
+        # Bill amount: prefer original_cost, fall back to final_cost, still_owed
+        bill_str = str(lien.get("original_cost") or lien.get("final_cost") or lien.get("still_owed") or "0")
         bill = parse_dollar_amount(bill_str)
 
-        is_mri = "mri" in category.lower() or "mri" in name.lower()
-        is_xray = any(x in category.lower() for x in ["x-ray", "xray"]) or \
-                   any(x in name.lower() for x in ["x-ray", "xray"])
+        # Detect MRI/X-Ray from name or specialties
+        name_lower = name.lower()
+        is_mri = "mri" in name_lower or "mri" in specialties or "imaging" in name_lower
+        is_xray = any(x in name_lower for x in ["x-ray", "xray"]) or \
+                   any(x in specialties for x in ["x-ray", "xray", "radiology"])
 
         if is_mri:
             offered = 400.0
@@ -254,14 +317,15 @@ def get_treatment_providers(case_id: str) -> Dict[str, Any]:
 
         providers.append({
             "provider_name": name,
-            "category": category,
+            "specialties": specialties,
             "bill_amount": bill,
             "offered_amount": offered,
             "max_offer_33pct": round(bill * 0.33, 2),
             "offer_reason": reason,
             "lien_id": str(lien.get("id", "")),
-            "phone": lien.get("phone", ""),
-            "email": lien.get("email", ""),
+            "phone": phone,
+            "email": email,
+            "address": provider_address,
         })
 
     # Find the "No Details Offer to Settle" letter template ID

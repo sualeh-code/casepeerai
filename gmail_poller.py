@@ -9,6 +9,8 @@ task inside the FastAPI app on Render.
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
+from email import encoders
 import asyncio
 import base64
 import json
@@ -78,7 +80,7 @@ def _get_gmail_creds() -> tuple:
 # Gmail OAuth2 helpers
 # ---------------------------------------------------------------------------
 
-GMAIL_OAUTH2_SCOPES = "https://www.googleapis.com/auth/gmail.modify"
+GMAIL_OAUTH2_SCOPES = "https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/gmail.settings.basic"
 
 
 def _get_oauth2_creds() -> tuple:
@@ -145,6 +147,57 @@ def _get_api_access_token() -> Optional[str]:
     if not refresh_token:
         return None
     return _refresh_access_token(refresh_token)
+
+
+# Cache for Gmail signature (avoid calling API on every email)
+_cached_signature: Optional[str] = None
+_signature_fetched_at: float = 0
+
+
+def fetch_gmail_signature() -> str:
+    """Fetch the HTML signature from the Gmail account via sendAs API.
+
+    Caches the result for 1 hour to avoid excessive API calls.
+    Falls back to Turso 'gmail_signature' setting if API fails.
+    """
+    global _cached_signature, _signature_fetched_at
+
+    # Return cached signature if less than 1 hour old
+    if _cached_signature is not None and (time.time() - _signature_fetched_at) < 3600:
+        return _cached_signature
+
+    access_token = _get_api_access_token()
+    if not access_token:
+        logger.warning("[Gmail API] No access token for signature fetch")
+        return _fallback_signature()
+
+    try:
+        resp = http_requests.get(
+            f"{GMAIL_API_BASE}/settings/sendAs",
+            headers={"Authorization": f"Bearer {access_token}"},
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            send_as_list = resp.json().get("sendAs", [])
+            if send_as_list:
+                sig = send_as_list[0].get("signature", "")
+                if sig:
+                    _cached_signature = sig
+                    _signature_fetched_at = time.time()
+                    logger.info(f"[Gmail API] Fetched signature ({len(sig)} chars)")
+                    return sig
+        else:
+            logger.warning(f"[Gmail API] sendAs fetch failed ({resp.status_code}): {resp.text[:200]}")
+    except Exception as e:
+        logger.warning(f"[Gmail API] Signature fetch error: {e}")
+
+    return _fallback_signature()
+
+
+def _fallback_signature() -> str:
+    """Fallback: read signature from Turso settings."""
+    from turso_client import get_setting
+    return get_setting("gmail_signature", "")
 
 
 # ---------------------------------------------------------------------------
@@ -538,8 +591,8 @@ def _send_via_gmail_api(gmail_email: str, to_address: str, subject: str,
     # Always append the firm signature
     clean_html += "<br><br>Sincerely,<br>Lien Negotiations Department<br>Beverly Law"
 
-    # Append additional Gmail signature if configured (e.g. contact info, logo)
-    signature = get_setting("gmail_signature", "")
+    # Append Gmail signature fetched from the actual Gmail account
+    signature = fetch_gmail_signature()
     if signature:
         clean_html += f"\n<br><br>{signature}"
 
@@ -622,9 +675,8 @@ def send_reply(gmail_email: str, gmail_password: str,
         # Always append the firm signature
         clean_html += "<br><br>Sincerely,<br>Lien Negotiations Department<br>Beverly Law"
 
-        # Append additional Gmail signature if configured (e.g. contact info, logo)
-        from turso_client import get_setting as _get_sig
-        sig = _get_sig("gmail_signature", "")
+        # Append Gmail signature fetched from the actual Gmail account
+        sig = fetch_gmail_signature()
         if sig:
             clean_html += f"\n<br><br>{sig}"
 
@@ -648,6 +700,69 @@ def send_reply(gmail_email: str, gmail_password: str,
         return True
     except Exception as e:
         logger.error(f"[Poller] SMTP fallback also failed: {e}", exc_info=True)
+        return False
+
+
+def send_email_with_attachment(gmail_email: str, to_address: str, subject: str,
+                               html_body: str, attachment_bytes: bytes,
+                               attachment_filename: str = "document.pdf") -> bool:
+    """Send an HTML email with a PDF attachment via Gmail API."""
+    from turso_client import get_setting
+    refresh_token = get_setting("gmail_oauth2_refresh_token", "")
+    if not refresh_token:
+        logger.warning("[Gmail API] No refresh token for attachment send")
+        return False
+
+    access_token = _refresh_access_token(refresh_token)
+    if not access_token:
+        return False
+
+    # Build multipart/mixed message (body + attachment)
+    msg = MIMEMultipart("mixed")
+    msg["From"] = gmail_email
+    msg["To"] = to_address
+    msg["Subject"] = subject
+
+    # HTML body part
+    clean_html = html_body.replace("</br>", "<br>")
+    clean_html += "<br><br>Sincerely,<br>Lien Negotiations Department<br>Beverly Law"
+    signature = fetch_gmail_signature()
+    if signature:
+        clean_html += f"\n<br><br>{signature}"
+    full_html = f'<html><body style="font-family: Arial, sans-serif; font-size: 14px;">\n{clean_html}\n</body></html>'
+
+    # Add HTML body as alternative part
+    body_part = MIMEMultipart("alternative")
+    from bs4 import BeautifulSoup as _BS3
+    try:
+        plain_text = _BS3(full_html, "html.parser").get_text(separator="\n")
+    except Exception:
+        plain_text = re.sub(r'<[^>]+>', '', full_html)
+    body_part.attach(MIMEText(plain_text, "plain"))
+    body_part.attach(MIMEText(full_html, "html"))
+    msg.attach(body_part)
+
+    # PDF attachment
+    pdf_part = MIMEBase("application", "pdf")
+    pdf_part.set_payload(attachment_bytes)
+    encoders.encode_base64(pdf_part)
+    pdf_part.add_header("Content-Disposition", f'attachment; filename="{attachment_filename}"')
+    msg.attach(pdf_part)
+
+    raw_message = base64.urlsafe_b64encode(msg.as_bytes()).decode("ascii")
+    send_payload = {"raw": raw_message}
+
+    resp = http_requests.post(
+        "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
+        headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
+        json=send_payload,
+    )
+
+    if resp.status_code == 200:
+        logger.info(f"[Gmail API] Sent email with attachment to {to_address} | Subject={subject}")
+        return True
+    else:
+        logger.error(f"[Gmail API] Attachment send failed ({resp.status_code}): {resp.text[:300]}")
         return False
 
 
