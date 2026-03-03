@@ -595,6 +595,9 @@ def _send_via_gmail_api(gmail_email: str, to_address: str, subject: str,
     signature = fetch_gmail_signature()
     if signature:
         clean_html += f"\n<br><br>{signature}"
+        logger.info(f"[Gmail API] Signature appended ({len(signature)} chars)")
+    else:
+        logger.warning("[Gmail API] No signature found — email will be sent without HTML signature")
 
     logger.info(f"[Gmail API] Sending reply | To={to_address} | Subject={final_subject}")
     logger.info(f"[Gmail API] Threading: threadId={thread_id} | In-Reply-To={in_reply_to[:80] if in_reply_to else 'EMPTY'} | References={references[:80] if references else 'EMPTY'}")

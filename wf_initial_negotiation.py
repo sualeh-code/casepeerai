@@ -37,122 +37,248 @@ EXCLUDED_PROVIDERS = ["medicare", "medicaid", "medi-cal"]
 # PDF generation — Balance Confirmation Letter
 # ---------------------------------------------------------------------------
 
-def _build_balance_confirmation_pdf(
+async def _build_balance_confirmation_pdf(
     provider_name: str,
     provider_address: str,
     patient_name: str,
     patient_dob: str,
     incident_date: str,
     gmail_email: str,
+    bill_amount: float = 0.0,
 ) -> bytes:
-    """Generate a Beverly Law balance confirmation letter as a PDF.
-
-    The letter asks the provider to confirm the outstanding balance.
-    No offer amount is included — that comes after confirmation.
-    """
-    from fpdf import FPDF
-
+    """Generate a Beverly Law balance confirmation letter as a styled PDF via Playwright."""
     today = datetime.now().strftime("%B %d, %Y")
+    bill_str = f"${bill_amount:,.2f}" if bill_amount > 0 else "N/A"
 
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_auto_page_break(auto=True, margin=25)
-
-    # --- Letterhead ---
-    pdf.set_font("Helvetica", "B", 14)
-    pdf.cell(0, 7, "Beverly Law", new_x="LMARGIN", new_y="NEXT")
-    pdf.set_font("Helvetica", "", 10)
-    pdf.cell(0, 5, "4929 Wilshire Blvd, Suite 960", new_x="LMARGIN", new_y="NEXT")
-    pdf.cell(0, 5, "Los Angeles, CA 90010", new_x="LMARGIN", new_y="NEXT")
-    pdf.ln(3)
-    pdf.cell(0, 5, "Tel: 310-552-6959", new_x="LMARGIN", new_y="NEXT")
-    pdf.cell(0, 5, "Fax: 323-421-9397", new_x="LMARGIN", new_y="NEXT")
-    pdf.ln(3)
-    pdf.set_font("Helvetica", "I", 9)
-    pdf.cell(0, 5, "*Please note our new office address in your file*", new_x="LMARGIN", new_y="NEXT")
-    pdf.ln(8)
-
-    # --- Date and delivery method ---
-    pdf.set_font("Helvetica", "", 11)
-    pdf.cell(0, 6, today, new_x="LMARGIN", new_y="NEXT")
-    pdf.ln(4)
-    pdf.cell(0, 6, "VIA EMAIL", new_x="LMARGIN", new_y="NEXT")
-    pdf.ln(4)
-
-    # --- Recipient ---
-    pdf.set_font("Helvetica", "B", 11)
-    pdf.cell(0, 6, f"{provider_name}:", new_x="LMARGIN", new_y="NEXT")
-    pdf.set_font("Helvetica", "", 11)
+    addr_lines = ""
     if provider_address:
         for line in provider_address.split(","):
             line = line.strip()
             if line:
-                pdf.cell(0, 6, line, new_x="LMARGIN", new_y="NEXT")
-    pdf.ln(6)
+                addr_lines += f"<div>{line}</div>"
 
-    # --- RE line ---
-    pdf.set_font("Helvetica", "B", 11)
-    pdf.cell(0, 6, f"RE: Our Client/Your Patient: {patient_name}", new_x="LMARGIN", new_y="NEXT")
-    pdf.ln(2)
-    pdf.set_font("Helvetica", "", 11)
-    if patient_dob and patient_dob != "N/A":
-        pdf.cell(0, 6, f"Date of Birth: {patient_dob}", new_x="LMARGIN", new_y="NEXT")
-    if incident_date and incident_date != "N/A":
-        pdf.cell(0, 6, f"Date of Injury: {incident_date}", new_x="LMARGIN", new_y="NEXT")
-    pdf.ln(6)
+    dob_line = f'<div style="margin-top:2px;">Date of Birth: {patient_dob}</div>' if patient_dob and patient_dob != "N/A" else ""
+    dol_line = f'<div style="margin-top:2px;">Date of Injury: {incident_date}</div>' if incident_date and incident_date != "N/A" else ""
 
-    # --- Body ---
-    pdf.cell(0, 6, "Dear Sir or Madam:", new_x="LMARGIN", new_y="NEXT")
-    pdf.ln(4)
+    html = f"""<!DOCTYPE html>
+<html><head><style>
+  body {{
+    font-family: 'Georgia', 'Times New Roman', serif;
+    font-size: 10.5pt;
+    color: #1a1a1a;
+    margin: 0;
+    padding: 0;
+    line-height: 1.35;
+  }}
+  .letterhead {{
+    border-bottom: 2px solid #1a3c6e;
+    padding-bottom: 8px;
+    margin-bottom: 10px;
+  }}
+  .firm-name {{
+    font-size: 18pt;
+    font-weight: bold;
+    color: #1a3c6e;
+  }}
+  .firm-details {{
+    font-size: 8.5pt;
+    color: #555;
+    margin-top: 2px;
+  }}
+  .firm-note {{
+    font-size: 7.5pt;
+    font-style: italic;
+    color: #888;
+    margin-top: 3px;
+  }}
+  .meta-row {{
+    margin-bottom: 6px;
+    font-size: 10pt;
+  }}
+  .via {{ font-weight: bold; font-size: 8.5pt; color: #555; letter-spacing: 2px; margin-bottom: 4px; }}
+  .recipient {{ font-weight: bold; margin-bottom: 8px; font-size: 10pt; }}
+  .re-block {{
+    background: #f4f6f9;
+    border-left: 3px solid #1a3c6e;
+    padding: 6px 12px;
+    margin-bottom: 8px;
+    font-size: 9.5pt;
+  }}
+  .re-block .re-title {{ font-weight: bold; color: #1a3c6e; }}
+  .body-text {{ margin-bottom: 6px; text-align: justify; font-size: 10pt; }}
+  .bill-highlight {{
+    background: #fff8e1;
+    border: 1px solid #f0c040;
+    border-radius: 3px;
+    padding: 6px 12px;
+    margin: 8px 0;
+    font-size: 10pt;
+  }}
+  .bill-highlight strong {{ color: #b8860b; font-size: 12pt; }}
+  .confirmation-box {{
+    border: 2px solid #1a3c6e;
+    border-radius: 5px;
+    padding: 10px 14px;
+    margin: 10px 0;
+  }}
+  .confirmation-box h3 {{
+    color: #1a3c6e;
+    margin: 0 0 8px 0;
+    font-size: 10pt;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    border-bottom: 1px solid #ccc;
+    padding-bottom: 4px;
+  }}
+  .form-row {{
+    display: flex;
+    align-items: baseline;
+    margin-bottom: 10px;
+  }}
+  .form-label {{
+    width: 145px;
+    font-size: 9.5pt;
+    color: #333;
+    flex-shrink: 0;
+  }}
+  .form-line {{
+    flex: 1;
+    border-bottom: 1px solid #999;
+    min-height: 14px;
+    margin-left: 6px;
+  }}
+  .form-prefix {{
+    font-size: 9.5pt;
+    margin-left: 6px;
+    margin-right: 3px;
+  }}
+  .sig-section {{ margin-top: 10px; padding-top: 6px; border-top: 1px solid #ddd; }}
+  .closing {{ margin-top: 12px; font-size: 10pt; }}
+  .closing .firm {{ font-weight: bold; color: #1a3c6e; font-size: 11pt; }}
+  .email-note {{
+    margin-top: 10px;
+    padding: 6px 10px;
+    background: #e8f5e9;
+    border-radius: 3px;
+    font-size: 8.5pt;
+    color: #2e7d32;
+  }}
+</style></head><body>
 
-    body = (
-        f"Our office represents {patient_name} regarding injuries sustained on "
-        f"{incident_date}. We are in the process of negotiating with the Insurance "
-        f"Company and would like to confirm the outstanding balance for our client's "
-        f"account with your office."
-    )
-    pdf.multi_cell(0, 6, body)
-    pdf.ln(4)
+<div class="letterhead">
+  <div class="firm-name">Beverly Law</div>
+  <div class="firm-details">
+    4929 Wilshire Blvd, Suite 960, Los Angeles, CA 90010<br>
+    Tel: 310-552-6959 &nbsp;|&nbsp; Fax: 323-421-9397
+  </div>
+  <div class="firm-note">*Please note our new office address in your file*</div>
+</div>
 
-    body2 = (
-        "Please confirm the outstanding balance by completing the section below "
-        "and returning this letter to our office via email. Thank you for your "
-        "prompt attention to this matter."
-    )
-    pdf.multi_cell(0, 6, body2)
-    pdf.ln(8)
+<div class="date-line">{today}</div>
+<div class="via">VIA EMAIL</div>
 
-    # --- Balance confirmation section (fillable) ---
-    pdf.set_font("Helvetica", "B", 11)
-    pdf.cell(0, 6, "OUTSTANDING BALANCE CONFIRMATION", new_x="LMARGIN", new_y="NEXT")
-    pdf.ln(4)
-    pdf.set_font("Helvetica", "", 11)
+<div class="recipient">
+  {provider_name}
+  {addr_lines}
+</div>
 
-    pdf.cell(0, 8, "Total Amount Billed:  $ ___________________________", new_x="LMARGIN", new_y="NEXT")
-    pdf.cell(0, 8, "Insurance Payments:   $ ___________________________", new_x="LMARGIN", new_y="NEXT")
-    pdf.cell(0, 8, "Adjustments:          $ ___________________________", new_x="LMARGIN", new_y="NEXT")
-    pdf.cell(0, 8, "Outstanding Balance:  $ ___________________________", new_x="LMARGIN", new_y="NEXT")
-    pdf.ln(4)
-    pdf.cell(0, 8, "Payment Address: ____________________________________________", new_x="LMARGIN", new_y="NEXT")
-    pdf.cell(0, 8, "                 ____________________________________________", new_x="LMARGIN", new_y="NEXT")
-    pdf.ln(4)
-    pdf.cell(0, 8, "Authorized Signature: ________________________________________", new_x="LMARGIN", new_y="NEXT")
-    pdf.cell(0, 8, "Print Name:           ________________________________________", new_x="LMARGIN", new_y="NEXT")
-    pdf.cell(0, 8, "Date:                 ________________________________________", new_x="LMARGIN", new_y="NEXT")
-    pdf.ln(8)
+<div class="re-block">
+  <div class="re-title">RE: Our Client / Your Patient: {patient_name}</div>
+  {dob_line}
+  {dol_line}
+</div>
 
-    # --- Closing ---
-    pdf.cell(0, 6, "Regards,", new_x="LMARGIN", new_y="NEXT")
-    pdf.set_font("Helvetica", "B", 11)
-    pdf.cell(0, 6, "BEVERLY LAW", new_x="LMARGIN", new_y="NEXT")
-    pdf.ln(4)
-    pdf.set_font("Helvetica", "", 10)
-    pdf.multi_cell(0, 5,
-        f"Please scan and EMAIL this letter back to {gmail_email}. "
-        "Please do not fax. Thank you for your partnership."
-    )
+<div class="body-text">Dear Sir or Madam:</div>
 
-    return pdf.output()
+<div class="body-text">
+  Our office represents <strong>{patient_name}</strong> regarding injuries sustained on
+  <strong>{incident_date}</strong>. We are in the process of negotiating with the Insurance
+  Company and would like to confirm the outstanding balance for our client's account with your office.
+</div>
+
+<div class="bill-highlight">
+  The total that you have billed {patient_name} for this case is: <strong>{bill_str}</strong>.
+  Please confirm the outstanding balance for this patient.
+</div>
+
+<div class="body-text">
+  Please confirm the outstanding balance by completing the section below and returning
+  this letter to our office via email. Thank you for your prompt attention to this matter.
+</div>
+
+<div class="confirmation-box">
+  <h3>Outstanding Balance Confirmation</h3>
+
+  <div class="form-row">
+    <span class="form-label">Total Amount Billed:</span>
+    <span class="form-prefix">$</span>
+    <span class="form-line"></span>
+  </div>
+  <div class="form-row">
+    <span class="form-label">Insurance Payments:</span>
+    <span class="form-prefix">$</span>
+    <span class="form-line"></span>
+  </div>
+  <div class="form-row">
+    <span class="form-label">Adjustments:</span>
+    <span class="form-prefix">$</span>
+    <span class="form-line"></span>
+  </div>
+  <div class="form-row">
+    <span class="form-label">Outstanding Balance:</span>
+    <span class="form-prefix">$</span>
+    <span class="form-line"></span>
+  </div>
+
+  <div class="form-row" style="margin-top:22px;">
+    <span class="form-label">Payment Address:</span>
+    <span class="form-line"></span>
+  </div>
+  <div class="form-row">
+    <span class="form-label"></span>
+    <span class="form-line"></span>
+  </div>
+
+  <div class="sig-section">
+    <div class="form-row">
+      <span class="form-label">Authorized Signature:</span>
+      <span class="form-line"></span>
+    </div>
+    <div class="form-row">
+      <span class="form-label">Print Name:</span>
+      <span class="form-line"></span>
+    </div>
+    <div class="form-row">
+      <span class="form-label">Date:</span>
+      <span class="form-line"></span>
+    </div>
+  </div>
+</div>
+
+<div class="closing">
+  Regards,<br>
+  <span class="firm">BEVERLY LAW</span>
+</div>
+
+<div class="email-note">
+  Please scan and EMAIL this letter back to <strong>{gmail_email}</strong>.
+  Please do not fax. Thank you for your partnership.
+</div>
+
+</body></html>"""
+
+    from playwright.async_api import async_playwright
+    async with async_playwright() as p:
+        browser = await p.chromium.launch()
+        page = await browser.new_page()
+        await page.set_content(html, wait_until="networkidle")
+        pdf_bytes = await page.pdf(
+            format="Letter",
+            print_background=True,
+            margin={"top": "40px", "bottom": "30px", "left": "50px", "right": "50px"},
+        )
+        await browser.close()
+    return pdf_bytes
 
 
 def _build_cover_email(provider_name: str, patient_name: str) -> str:
@@ -258,13 +384,14 @@ async def run_initial_negotiation(case_id: str) -> Dict[str, Any]:
             continue
 
         # Generate PDF
-        pdf_bytes = _build_balance_confirmation_pdf(
+        pdf_bytes = await _build_balance_confirmation_pdf(
             provider_name=name,
             provider_address=provider_address,
             patient_name=patient_name,
             patient_dob=patient_dob,
             incident_date=incident_date,
             gmail_email=gmail_email,
+            bill_amount=bill,
         )
 
         # Build cover email
