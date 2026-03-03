@@ -884,9 +884,52 @@ async def _poll_loop():
                         else:
                             logger.warning("[Poller] No reply-to address found, skipping send")
 
-                    # Log escalations
+                    # Handle escalations — notify Asael via email + CasePeer case note
                     if intent == "escalate":
-                        logger.warning(f"[Poller] ESCALATION needed: {result.get('reasoning', 'Unknown reason')}")
+                        reasoning = result.get("reasoning", "Unknown reason")
+                        provider_name = result.get("provider_name", "Unknown")
+                        patient_name = result.get("patient_name", "Unknown")
+                        case_id = result.get("case_id", "")
+                        logger.warning(f"[Poller] ESCALATION needed: {reasoning}")
+
+                        try:
+                            escalation_email = get_setting("escalation_email", "")
+                            if escalation_email:
+                                # Build escalation email with thread context
+                                thread_subject = thread_data.get("messages", [{}])[-1].get("Subject", "Lien Negotiation")
+                                sender = thread_data.get("messages", [{}])[-1].get("From", "Unknown")
+                                esc_body = (
+                                    f"<h3>Negotiation Escalation Required</h3>"
+                                    f"<p><strong>Provider:</strong> {provider_name}</p>"
+                                    f"<p><strong>Patient:</strong> {patient_name}</p>"
+                                    f"<p><strong>Case ID:</strong> {case_id or 'Unknown'}</p>"
+                                    f"<p><strong>Provider Email:</strong> {sender}</p>"
+                                    f"<p><strong>Subject:</strong> {thread_subject}</p>"
+                                    f"<p><strong>Reason for Escalation:</strong></p>"
+                                    f"<p>{reasoning}</p>"
+                                    f"<hr>"
+                                    f"<p style='color:#888;font-size:12px;'>This is an automated escalation from the AI Lien Negotiation system. "
+                                    f"The AI determined it cannot handle this thread and requires human intervention.</p>"
+                                )
+                                _send_via_gmail_api(
+                                    gmail_email, escalation_email,
+                                    f"ESCALATION: {provider_name} - {patient_name}",
+                                    esc_body,
+                                )
+                                logger.info(f"[Poller] Escalation email sent to {escalation_email}")
+                            else:
+                                logger.warning("[Poller] No escalation_email configured in settings — escalation only logged")
+
+                            # Add CasePeer case note if we have the case_id
+                            if case_id:
+                                from casepeer_helpers import add_case_note
+                                await asyncio.to_thread(
+                                    add_case_note, case_id,
+                                    f"ESCALATION: AI negotiation agent escalated {provider_name} thread to human review. Reason: {reasoning[:300]}"
+                                )
+                                logger.info(f"[Poller] Escalation case note added to case {case_id}")
+                        except Exception as esc_err:
+                            logger.error(f"[Poller] Failed to process escalation: {esc_err}")
 
                 except Exception as e:
                     _poller_stats["errors"] += 1

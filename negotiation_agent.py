@@ -1606,6 +1606,7 @@ IMPORTANT: After using tools and gathering information, you MUST return a final 
             case_id=discovered_case_id
         )
 
+        result["case_id"] = discovered_case_id
         return result
 
     # If we hit max iterations
