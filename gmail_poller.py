@@ -76,6 +76,15 @@ def _get_gmail_creds() -> tuple:
     return gmail_email, gmail_password, sender_filter
 
 
+def _get_from_header(gmail_email: str) -> str:
+    """Build the From header with display name if configured."""
+    from turso_client import get_setting
+    sender_name = get_setting("gmail_sender_name", "")
+    if sender_name:
+        return f"{sender_name} <{gmail_email}>"
+    return gmail_email
+
+
 # ---------------------------------------------------------------------------
 # Gmail OAuth2 helpers
 # ---------------------------------------------------------------------------
@@ -578,7 +587,7 @@ def _send_via_gmail_api(gmail_email: str, to_address: str, subject: str,
 
     # Build MIME message
     msg = MIMEMultipart("alternative")
-    msg["From"] = gmail_email
+    msg["From"] = _get_from_header(gmail_email)
     msg["To"] = to_address
     msg["Subject"] = final_subject
     if in_reply_to:
@@ -665,7 +674,7 @@ def send_reply(gmail_email: str, gmail_password: str,
         final_subject = f"Re: {clean_subject}" if clean_subject else subject
 
         msg = MIMEMultipart("alternative")
-        msg["From"] = gmail_email
+        msg["From"] = _get_from_header(gmail_email)
         msg["To"] = to_address
         msg["Subject"] = final_subject
         if in_reply_to:
@@ -722,7 +731,7 @@ def send_email_with_attachment(gmail_email: str, to_address: str, subject: str,
 
     # Build multipart/mixed message (body + attachment)
     msg = MIMEMultipart("mixed")
-    msg["From"] = gmail_email
+    msg["From"] = _get_from_header(gmail_email)
     msg["To"] = to_address
     msg["Subject"] = subject
 
