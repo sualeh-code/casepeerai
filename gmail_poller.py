@@ -55,6 +55,12 @@ _poller_stats = {
 }
 
 
+# Track recently processed threads to avoid duplicate processing
+# Key: thread_id, Value: timestamp of last processing
+_recently_processed: Dict[str, float] = {}
+THREAD_COOLDOWN_SECONDS = 300  # 5 minutes between processing same thread
+
+
 def get_poller_stats() -> Dict[str, Any]:
     """Return current poller status and stats."""
     return {**_poller_stats, "running": _poller_running}
@@ -820,14 +826,40 @@ async def _poll_loop():
             # Process each thread through the agent
             for thread_data in threads:
                 try:
+                    tid = thread_data.get("threadId", "unknown")
+
+                    # Skip if we recently processed this thread (prevents duplicate replies)
+                    now = time.time()
+                    if tid in _recently_processed:
+                        elapsed = now - _recently_processed[tid]
+                        if elapsed < THREAD_COOLDOWN_SECONDS:
+                            logger.info(f"[Poller] Skipping thread {tid[:20]} — processed {int(elapsed)}s ago (cooldown {THREAD_COOLDOWN_SECONDS}s)")
+                            continue
+
+                    # Also check: is the last message in this thread from US?
+                    # If so, skip — we already replied and are waiting for the provider.
+                    thread_messages = thread_data.get("messages", [])
+                    if thread_messages:
+                        last_from = thread_messages[-1].get("From", "").lower()
+                        if gmail_email.lower() in last_from:
+                            logger.info(f"[Poller] Skipping thread {tid[:20]} — last message is from us (awaiting provider reply)")
+                            continue
+
                     _poller_stats["status"] = "processing"
-                    logger.info(f"[Poller] Processing thread: {thread_data.get('threadId', 'unknown')[:50]}")
+                    logger.info(f"[Poller] Processing thread: {tid[:50]}")
 
                     # Run the negotiation agent
                     from negotiation_agent import process_negotiation_email
                     result = await process_negotiation_email(thread_data)
 
                     _poller_stats["emails_processed"] += 1
+                    _recently_processed[tid] = time.time()
+
+                    # Clean up old entries from the cache (older than 1 hour)
+                    cutoff = time.time() - 3600
+                    stale = [k for k, v in _recently_processed.items() if v < cutoff]
+                    for k in stale:
+                        del _recently_processed[k]
 
                     intent = result.get("intent", "unclear")
                     reply_message = result.get("reply_message")
