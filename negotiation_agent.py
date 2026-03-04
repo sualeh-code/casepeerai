@@ -57,12 +57,11 @@ If the provider misstates our offer: correct it — "Our client's offer remains 
 If the provider claims we agreed to a different number: "Our current written offer remains $X. Please confirm acceptance of $X in writing."
 Do not escalate immediately. First correct, then re-anchor, then continue negotiating.
 
-RULE 4 - SIGNED PDF REQUIREMENT:
-A lien is NOT resolved until the provider sends a signed PDF settlement letter accepting the exact dollar amount.
-IMPORTANT: Only request the signed PDF AFTER the provider verbally accepts our offer.
-Do NOT ask for a signed PDF in the same message as making an offer — wait for their acceptance first.
-Flow: We make offer → Provider accepts → THEN we request signed PDF.
-No closing confirmation is sent until signed PDF is received.
+RULE 4 - WRITTEN ACCEPTANCE:
+A lien is NOT resolved until the provider confirms acceptance of the exact dollar amount in writing.
+Written acceptance means: a clear email reply stating they accept the specific amount.
+Do NOT ask for any signed documents, PDFs, or letters — we are not sending formal offer letters.
+Just ask them to confirm acceptance via email reply. That's it.
 
 RULE 5 - COUNTER-OFFER MATH:
 When making an offer or countering:
@@ -98,10 +97,10 @@ WORKFLOW:
 5. Return your decision as a structured JSON response.
 
 CLASSIFICATION INTENTS:
-- "accepted" — Provider agreed to settlement (verbally, no signed PDF yet)
+- "accepted" — Provider agreed to settlement verbally via email
 - "rejected" — Provider declined, refused, or countered
 - "provided_details" — Provider sent payment/mailing details without explicit acceptance
-- "accepted_and_provided_details" — Provider accepted AND included payment details or signed PDF
+- "accepted_and_provided_details" — Provider accepted AND included payment/mailing details
 - "asked_for_clarification" — Provider is asking a question about our last message
 - "asking_for_payment" — Provider is requesting payment status
 - "bill_correction" — Provider says billed amount is wrong (unprompted)
@@ -112,24 +111,22 @@ CLASSIFICATION INTENTS:
 
 SCENARIO REPLY TEMPLATES (follow these closely):
 
-bill_confirmation → Make an offer, do NOT ask for signed PDF yet:
+bill_confirmation → Make an offer:
   "Thank you for confirming the outstanding balance of $[confirmed_amount] for [provider].
    In an effort to resolve this lien, our client is offering $[offer_amount] as full and final settlement.
    Please let us know if this is acceptable."
 
-accepted → Provider verbally accepted, NOW request signed PDF:
+accepted → Provider accepted, confirm and proceed:
   "Thank you for accepting the settlement of $[amount] for [provider].
-   To finalize, please email a signed settlement letter on your letterhead confirming
-   acceptance of $[amount] as full and final settlement for [patient_name], and we will
-   proceed with payment accordingly."
+   We will proceed with processing payment of $[amount] for [patient_name] accordingly."
 
 rejected / counter-offer → Counter per Rule 5 math:
   "Thank you for your response. After careful review, our client is able to offer
    $[counter_amount] as full and final settlement of this lien. Please let us know
    if this is acceptable."
 
-accepted_and_provided_details → Acknowledge signed docs received:
-  "Thank you for the signed settlement letter and payment details. We will process
+accepted_and_provided_details → Acknowledge acceptance and payment details received:
+  "Thank you for confirming acceptance and providing payment details. We will process
    payment of $[amount] accordingly."
 
 asking_for_payment → Check case status first (call get_case_status tool):
@@ -154,13 +151,13 @@ WHAT THE SYSTEM HANDLES AUTOMATICALLY (do NOT do these yourself):
 - Adding a case note (add_case_note) — done by code after you return.
 - Accepting liens (get_settlement_page + accept_lien) — done by code for "accepted_and_provided_details" intents ONLY.
 - Saving bill confirmation evidence — for "bill_confirmation" intents, the system auto-saves the original email thread as a PDF to CasePeer.
-- Uploading signed PDFs — for "accepted" intents, the system auto-uploads any PDF attachments to CasePeer.
+- Uploading PDF attachments — for "accepted" intents, the system auto-uploads any PDF attachments to CasePeer.
 - Appending the email signature — done by code when sending.
 
 PDF ATTACHMENT ANALYSIS:
 If PDF attachment analysis results are provided in the context (from Gemini), use those extracted
 amounts (originalBill, offeredAmount, totalBill) to verify bills and inform your negotiation decisions.
-If the provider sent a signed settlement letter PDF, check if the amounts match what was agreed upon.
+If the provider sent a PDF with bill details, check if the amounts match what was discussed.
 
 When composing reply emails:
 - Use </br> for line breaks (HTML email format).
@@ -1558,8 +1555,8 @@ IMPORTANT: After using tools and gathering information, you MUST return a final 
                     logger.error(f"[PostProcess] Settlement amount update failed: {e}")
 
             # 4. For accepted intents: only auto-accept on accepted_and_provided_details
-            #    (provider sent signed PDF / payment details). Plain "accepted" just logs —
-            #    we need signed docs before toggling the lien in CasePeer.
+            #    (provider confirmed acceptance + payment details). Plain "accepted" just logs —
+            #    we need payment details before toggling the lien in CasePeer.
             if intent == "accepted_and_provided_details":
                 try:
                     settlement_json = tool_get_settlement_page(case_id)
@@ -1585,7 +1582,7 @@ IMPORTANT: After using tools and gathering information, you MUST return a final 
                 except Exception as e:
                     logger.error(f"[PostProcess] accept_lien flow failed: {e}")
 
-            # Upload signed PDF attachments for both accepted intents
+            # Upload PDF attachments for both accepted intents
             if intent in ("accepted", "accepted_and_provided_details"):
                 try:
                     pdf_analyses = thread_data.get("_pdf_analyses", [])
@@ -1593,15 +1590,15 @@ IMPORTANT: After using tools and gathering information, you MUST return a final 
                     for pa in pdf_analyses:
                         pdf_bytes = pa.get("_pdf_bytes")
                         if pdf_bytes:
-                            filename = pa.get("filename", f"Signed Letter - {provider_name}.pdf")
+                            filename = pa.get("filename", f"Attachment - {provider_name}.pdf")
                             upload_result = _casepeer_upload(case_id, filename, pdf_bytes)
                             if upload_result.get("success"):
-                                actions_taken.append(f"auto:upload_signed_pdf({filename})")
-                                logger.info(f"[PostProcess] Uploaded signed PDF '{filename}' to case {case_id}")
+                                actions_taken.append(f"auto:upload_pdf_attachment({filename})")
+                                logger.info(f"[PostProcess] Uploaded PDF '{filename}' to case {case_id}")
                             else:
-                                logger.error(f"[PostProcess] Signed PDF upload failed: {upload_result.get('error')}")
+                                logger.error(f"[PostProcess] PDF attachment upload failed: {upload_result.get('error')}")
                 except Exception as e:
-                    logger.error(f"[PostProcess] Signed PDF upload failed: {e}")
+                    logger.error(f"[PostProcess] PDF attachment upload failed: {e}")
 
         # Save conversation history for future continuity
         _save_conversation_history(
