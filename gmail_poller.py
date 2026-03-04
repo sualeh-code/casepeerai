@@ -923,6 +923,22 @@ async def _poll_loop():
                             )
                             if sent:
                                 _poller_stats["emails_replied"] += 1
+                                # Log outgoing reply to negotiations table
+                                try:
+                                    from turso_client import turso as _turso
+                                    _case_id = result.get("case_id", "")
+                                    if _case_id:
+                                        _turso.execute(
+                                            'INSERT INTO negotiations (case_id, negotiation_type, "to", email_body, date, actual_bill, offered_bill, sent_by_us, result) VALUES (?, ?, ?, ?, datetime(\'now\'), ?, ?, 1, ?)',
+                                            [_case_id, intent, to_address,
+                                             (reply_message or "")[:500],
+                                             float(result.get("actual_bill") or 0),
+                                             float(result.get("offered_bill") or 0),
+                                             f"reply_sent:{intent}"]
+                                        )
+                                        logger.info(f"[Poller] Logged outgoing reply to negotiations table for case {_case_id}")
+                                except Exception as _log_err:
+                                    logger.error(f"[Poller] Failed to log outgoing reply: {_log_err}")
                             else:
                                 logger.error(f"[Poller] Failed to send reply to {to_address}")
                         else:

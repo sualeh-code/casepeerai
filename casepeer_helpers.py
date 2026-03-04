@@ -300,15 +300,15 @@ def get_treatment_providers(case_id: str) -> Dict[str, Any]:
 
         # Detect MRI/X-Ray from name or specialties
         name_lower = name.lower()
-        is_mri = "mri" in name_lower or "mri" in specialties or "imaging" in name_lower
+        is_mri = "mri" in name_lower or "mri" in specialties
         is_xray = any(x in name_lower for x in ["x-ray", "xray"]) or \
                    any(x in specialties for x in ["x-ray", "xray", "radiology"])
 
         if is_mri:
-            offered = 400.0
+            offered = min(400.0, bill)
             reason = "MRI fixed rate"
         elif is_xray:
-            offered = 50.0
+            offered = min(50.0, bill)
             reason = "X-Ray fixed rate"
         else:
             max_offer = bill * 0.33

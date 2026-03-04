@@ -12,6 +12,7 @@ import asyncio
 import io
 import base64
 from typing import Optional, Dict, Any, List
+from urllib.parse import quote
 from openai import OpenAI
 from bs4 import BeautifulSoup
 from fpdf import FPDF
@@ -541,8 +542,8 @@ def tool_accept_lien(case_id: str, provider_id: str, offered_amount: str) -> str
     if not updated:
         return json.dumps({"error": f"Provider ID {provider_id} not found in settlement form"})
 
-    # Step 3: POST the updated form
-    form_body = "&".join(f"{k}={v}" for k, v in form_fields.items())
+    # Step 3: POST the updated form (URL-encode values)
+    form_body = "&".join(f"{quote(str(k), safe='')}={quote(str(v), safe='')}" for k, v in form_fields.items())
     import requests as req
     base = _get_local_base()
     try:
@@ -1545,7 +1546,7 @@ IMPORTANT: After using tools and gathering information, you MUST return a final 
                             if updated:
                                 import requests as req
                                 base = _get_local_base()
-                                form_body = "&".join(f"{k}={v}" for k, v in form_fields.items())
+                                form_body = "&".join(f"{quote(str(k), safe='')}={quote(str(v), safe='')}" for k, v in form_fields.items())
                                 req.post(
                                     f"{base}/case/{case_id}/settlement/negotiations/",
                                     data=form_body,
@@ -1561,8 +1562,10 @@ IMPORTANT: After using tools and gathering information, you MUST return a final 
                 except Exception as e:
                     logger.error(f"[PostProcess] Settlement amount update failed: {e}")
 
-            # 4. For accepted intents: auto-call get_settlement_page + accept_lien
-            if intent in ("accepted", "accepted_and_provided_details"):
+            # 4. For accepted intents: only auto-accept on accepted_and_provided_details
+            #    (provider sent signed PDF / payment details). Plain "accepted" just logs —
+            #    we need signed docs before toggling the lien in CasePeer.
+            if intent == "accepted_and_provided_details":
                 try:
                     settlement_json = tool_get_settlement_page(case_id)
                     settlement = json.loads(settlement_json)
@@ -1572,22 +1575,23 @@ IMPORTANT: After using tools and gathering information, you MUST return a final 
                     # Match provider by name (fuzzy)
                     matched_provider = None
                     for sp in providers_list:
-                        sp_name = (sp.get("name") or "").lower()
+                        sp_name = (sp.get("provider_name") or "").lower()
                         if provider_name_lower and (provider_name_lower in sp_name or sp_name in provider_name_lower):
                             matched_provider = sp
                             break
 
                     if matched_provider:
-                        offered = result.get("offered_bill") or matched_provider.get("offered", "0")
-                        accept_result = tool_accept_lien(case_id, matched_provider["id"], str(offered))
-                        actions_taken.append(f"auto:accept_lien(provider_id={matched_provider['id']}, amount={offered})")
-                        logger.info(f"[PostProcess] Accepted lien for {matched_provider.get('name')} | {accept_result[:200]}")
+                        offered = result.get("offered_bill") or "0"
+                        accept_result = tool_accept_lien(case_id, matched_provider["provider_id"], str(offered))
+                        actions_taken.append(f"auto:accept_lien(provider_id={matched_provider['provider_id']}, amount={offered})")
+                        logger.info(f"[PostProcess] Accepted lien for {matched_provider.get('provider_name')} | {accept_result[:200]}")
                     else:
                         logger.warning(f"[PostProcess] Could not match provider '{result.get('provider_name')}' in settlement page ({len(providers_list)} providers)")
                 except Exception as e:
                     logger.error(f"[PostProcess] accept_lien flow failed: {e}")
 
-                # Upload signed PDF attachments from the thread to CasePeer
+            # Upload signed PDF attachments for both accepted intents
+            if intent in ("accepted", "accepted_and_provided_details"):
                 try:
                     import requests as _req
                     pdf_analyses = thread_data.get("_pdf_analyses", [])
