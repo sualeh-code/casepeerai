@@ -224,18 +224,30 @@ def _prepare_form_post(session, headers, url: str, body: Dict, timeout: int) -> 
 
 
 def _try_sync_refresh():
-    """Attempt to trigger auth refresh synchronously (best-effort)."""
+    """Attempt to trigger auth refresh synchronously (best-effort).
+
+    Works in three scenarios:
+    1. No event loop → create a new one and run_until_complete
+    2. Event loop running (main thread) → schedule as future + sleep
+    3. Worker thread (asyncio.to_thread) → create a new loop
+    """
     try:
         import asyncio
         from caseapi import refresh_authentication
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # Can't await in sync context when loop is running — schedule it
+
+        try:
+            loop = asyncio.get_running_loop()
+            # We're inside a running loop (e.g. main async thread) — schedule it
             asyncio.ensure_future(refresh_authentication(force=True))
             import time
             time.sleep(3)  # Give it a moment to complete
-        else:
-            loop.run_until_complete(refresh_authentication(force=True))
+        except RuntimeError:
+            # No running loop — we can safely create one (worker thread or sync context)
+            loop = asyncio.new_event_loop()
+            try:
+                loop.run_until_complete(refresh_authentication(force=True))
+            finally:
+                loop.close()
     except Exception as e:
         logger.warning(f"Sync auth refresh failed: {e}")
 
