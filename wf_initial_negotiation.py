@@ -173,7 +173,7 @@ async def run_initial_negotiation(case_id: str) -> Dict[str, Any]:
         if sent:
             sent_list.append({
                 "provider": name,
-                "email": send_to,
+                "email": provider_email or send_to,
                 "bill": bill,
             })
             logger.info(f"[InitialNeg] Sent balance confirmation to {send_to} for {name}")
@@ -181,18 +181,43 @@ async def run_initial_negotiation(case_id: str) -> Dict[str, Any]:
             skipped_list.append({"provider": name, "reason": f"send failed: {last_error}"})
             logger.error(f"[InitialNeg] Failed to send to {send_to}: {last_error}")
 
-    # 4. Log to Turso
+    # 4. Log to Turso + save conversation history for agent continuity
     from turso_client import turso
+    import json
     for item in sent_list:
         try:
             turso.execute(
                 'INSERT INTO negotiations (case_id, negotiation_type, "to", email_body, date, actual_bill, offered_bill, sent_by_us, result) VALUES (?, ?, ?, ?, datetime(\'now\'), ?, ?, 1, ?)',
                 [case_id, "Balance Confirmation", item["email"],
-                 f"Balance confirmation email sent to {item['provider']}",
+                 f"[{item['provider']}] Balance confirmation email sent",
                  item["bill"], 0.0, "Awaiting Confirmation"]
             )
         except Exception as e:
             logger.error(f"[InitialNeg] Failed to log: {e}")
+
+        # Save initial outbound email to conversation_history so the agent
+        # has context when the provider replies (keyed by case_id + provider_email)
+        try:
+            provider_email = item["email"]
+            conv_key = f"{case_id}|{provider_email.lower()}"
+            initial_messages = [
+                {"role": "system", "content": "Balance confirmation email was sent to this provider."},
+                {"role": "assistant", "content": json.dumps({
+                    "intent": "initial_outreach",
+                    "reply_message": f"Balance confirmation request sent to {item['provider']}",
+                    "provider_name": item["provider"],
+                    "patient_name": patient_name,
+                    "actual_bill": item["bill"],
+                    "reasoning": f"Initial balance confirmation email sent. Bill on file: ${item['bill']:,.2f}",
+                })}
+            ]
+            turso.execute(
+                "INSERT OR REPLACE INTO conversation_history (id, case_id, sender_email, thread_subject, messages_json, tools_used, last_intent, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))",
+                [conv_key, case_id, provider_email.lower(), "", json.dumps(initial_messages), "[]", "initial_outreach"]
+            )
+            logger.info(f"[InitialNeg] Saved conversation history for case {case_id} | {provider_email}")
+        except Exception as e:
+            logger.error(f"[InitialNeg] Failed to save conversation history: {e}")
 
     # 5. Add case note
     note = f"Balance confirmation requests sent to {len(sent_list)} provider(s). "
@@ -209,13 +234,13 @@ async def run_initial_negotiation(case_id: str) -> Dict[str, Any]:
         "skipped_details": skipped_list,
     }
 
-    # 6. Trigger sub-workflows in background
-    try:
-        from workflow_scheduler import trigger_workflow
-        await trigger_workflow("thirdparty", case_id, triggered_by="initial_negotiation")
-        await trigger_workflow("get_mail_sub", case_id, triggered_by="initial_negotiation")
-    except Exception as e:
-        logger.warning(f"[InitialNeg] Failed to trigger sub-workflows: {e}")
+    # 6. Sub-workflows disabled for now (thirdparty, get_mail_sub)
+    # try:
+    #     from workflow_scheduler import trigger_workflow
+    #     await trigger_workflow("thirdparty", case_id, triggered_by="initial_negotiation")
+    #     await trigger_workflow("get_mail_sub", case_id, triggered_by="initial_negotiation")
+    # except Exception as e:
+    #     logger.warning(f"[InitialNeg] Failed to trigger sub-workflows: {e}")
 
     logger.info(f"[InitialNeg] Done for case {case_id}: {len(sent_list)} sent, {len(skipped_list)} skipped")
     return result

@@ -1052,21 +1052,27 @@ TOOL_FUNCTIONS = {
 # Conversation history — persist full AI chat per sender for continuity
 # ---------------------------------------------------------------------------
 
-def _get_conversation_key(sender_email: str, thread_subject: str) -> str:
-    """Generate a stable key for a conversation (sender + cleaned subject)."""
-    clean_subj = re.sub(r'^(Re:|Fwd?:)\s*', '', thread_subject, flags=re.IGNORECASE).strip().lower()
-    return f"{sender_email.lower()}|{clean_subj}"
+def _get_conversation_key(case_id: str, provider_email: str) -> str:
+    """Generate a stable key for a conversation (case_id + provider_email)."""
+    return f"{case_id}|{provider_email.lower()}"
 
 
-def _load_conversation_history(sender_email: str, thread_subject: str) -> Optional[List[Dict]]:
-    """Load previous AI conversation for this sender+thread from Turso."""
+def _load_conversation_history(case_id: str, provider_email: str) -> Optional[List[Dict]]:
+    """Load previous AI conversation for this case+provider from Turso."""
     from turso_client import turso
     try:
-        key = _get_conversation_key(sender_email, thread_subject)
-        row = turso.fetch_one(
-            "SELECT messages_json, tools_used FROM conversation_history WHERE id = ?",
-            [key]
-        )
+        if case_id:
+            key = _get_conversation_key(case_id, provider_email)
+            row = turso.fetch_one(
+                "SELECT messages_json, tools_used FROM conversation_history WHERE id = ?",
+                [key]
+            )
+        else:
+            # No case_id yet — look up by provider email
+            row = turso.fetch_one(
+                "SELECT messages_json, tools_used, case_id FROM conversation_history WHERE sender_email = ? ORDER BY updated_at DESC LIMIT 1",
+                [provider_email.lower()]
+            )
         if row and row.get("messages_json"):
             return json.loads(row["messages_json"])
     except Exception as e:
@@ -1074,13 +1080,13 @@ def _load_conversation_history(sender_email: str, thread_subject: str) -> Option
     return None
 
 
-def _save_conversation_history(sender_email: str, thread_subject: str,
+def _save_conversation_history(case_id: str, provider_email: str,
                                 messages: List[Dict], tools_used: List[str],
-                                intent: str, case_id: str = ""):
+                                intent: str):
     """Save the full AI conversation to Turso for next time."""
     from turso_client import turso
     try:
-        key = _get_conversation_key(sender_email, thread_subject)
+        key = _get_conversation_key(case_id, provider_email)
         # Serialize all messages including tool_calls
         safe_messages = []
         for msg in messages:
@@ -1095,9 +1101,9 @@ def _save_conversation_history(sender_email: str, thread_subject: str,
 
         turso.execute(
             "INSERT OR REPLACE INTO conversation_history (id, case_id, sender_email, thread_subject, messages_json, tools_used, last_intent, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))",
-            [key, case_id, sender_email.lower(), thread_subject, messages_json, json.dumps(tools_used), intent]
+            [key, case_id, provider_email.lower(), "", messages_json, json.dumps(tools_used), intent]
         )
-        logger.info(f"[Agent] Saved {len(safe_messages)} messages to conversation history for {sender_email} | {thread_subject[:30]}")
+        logger.info(f"[Agent] Saved {len(safe_messages)} messages to conversation history for case {case_id} | {provider_email}")
     except Exception as e:
         logger.warning(f"[Agent] Failed to save conversation history: {e}")
 
@@ -1274,7 +1280,7 @@ KNOWN PROVIDER CONTEXT (from database — this provider has prior negotiations):
 
     # --- LOAD PREVIOUS CONVERSATION HISTORY ---
     thread_subject = last_msg.get("Subject", "")
-    prev_conversation = _load_conversation_history(clean_sender, thread_subject)
+    prev_conversation = _load_conversation_history(pre_loaded_case_id, clean_sender)
     prior_context_note = ""
     prior_messages_to_inject = []  # Full messages to prepend to agent context
     if prev_conversation:
@@ -1607,10 +1613,9 @@ IMPORTANT: After using tools and gathering information, you MUST return a final 
 
         # Save conversation history for future continuity
         _save_conversation_history(
-            clean_sender, thread_subject,
+            discovered_case_id, clean_sender,
             agent_messages, actions_taken,
             result.get("intent", "unclear"),
-            case_id=discovered_case_id
         )
 
         result["case_id"] = discovered_case_id
