@@ -22,12 +22,7 @@ from fastapi.staticfiles import StaticFiles
 from playwright.sync_api import sync_playwright, Browser, Page
 import requests
 from bs4 import BeautifulSoup
-from sqlalchemy.orm import Session
-import models, schemas, crud
-from database import engine
-
-# Create database tables
-# Tables are now created directly via turso.initialize_schema in the lifespan manager
+import schemas, crud
 
 # Configure logging
 logging.basicConfig(
@@ -41,68 +36,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 from turso_client import turso
-
-# Helper to get settings with defaults
-def get_config(db: Session, key: str, default: str = None) -> str:
-    """
-    Get a setting from Env Var (priority), then DB, with retry logic and silent fallback.
-    Rules:
-    1. Env Vars (uppercase) always take precedence.
-    2. DB settings are second.
-    3. Default value is last resort.
-    """
-    # 1. Check Environment Variable (uppercased key)
-    env_val = os.getenv(key.upper())
-    if env_val:
-        return env_val
-
-    # 2. Check Database with Retry Logic
-    retries = 3
-    for attempt in range(retries):
-        try:
-            # crud.get_setting now uses TursoClient internally
-            setting = crud.get_setting(db, key)
-            if setting:
-                return setting.value
-            return default
-        except Exception as e:
-            msg = str(e)
-            if "no such table" in msg or "OperationalError" in msg:
-                if attempt < retries - 1:
-                    logger.warning(f"get_config failed (attempt {attempt+1}): {msg}. Retrying...")
-                    time.sleep(1)
-                    continue
-            logger.error(f"get_config critical error: {msg}")
-            # If DB is broken to the point of no tables, we MUST fallback to defaults 
-            # effectively ignoring the DB config, to let startup proceed (if possible).
-            # But authentication needs real credentials from somewhere.
-            return default
-    return default
-
-def seed_settings(db: Session):
-    """Seed default settings if they don't exist."""
-    defaults = {
-        "casepeer_username": os.getenv("CASEPEER_USERNAME", DEFAULT_CASEPEER_USERNAME),
-        "casepeer_password": os.getenv("CASEPEER_PASSWORD", DEFAULT_CASEPEER_PASSWORD),
-        "casepeer_base_url": os.getenv("CASEPEER_BASE_URL", DEFAULT_CASEPEER_BASE_URL),
-        "gmail_email": os.getenv("GMAIL_EMAIL", DEFAULT_GMAIL_EMAIL),
-        "gmail_app_password": os.getenv("GMAIL_APP_PASSWORD", DEFAULT_GMAIL_APP_PASSWORD),
-        "otp_retry_count": os.getenv("OTP_RETRY_COUNT", "10"),
-        "otp_retry_delay": os.getenv("OTP_RETRY_DELAY", "5"),
-    }
-    
-    for key, value in defaults.items():
-        try:
-            # crud.get_setting and crud.set_setting now use TursoClient
-            if not crud.get_setting(db, key):
-                logger.info(f"Seeding default setting: {key}")
-                crud.set_setting(db, schemas.AppSettingCreate(key=key, value=value, description="Default value"))
-        except Exception as e:
-             logger.error(f"Failed to seed setting {key}: {e}")
-    
-    # Verify
-    settings = crud.get_all_settings(db)
-    logger.info(f"[OK] Settings seeding completed. Total settings: {len(settings)}")
 
 # Global session and token storage
 # TODO: Move to environment variables or secure storage in production
