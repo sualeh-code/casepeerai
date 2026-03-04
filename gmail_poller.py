@@ -724,8 +724,10 @@ def send_reply(gmail_email: str, gmail_password: str,
 
 def send_email_with_attachment(gmail_email: str, to_address: str, subject: str,
                                html_body: str, attachment_bytes: bytes,
-                               attachment_filename: str = "document.pdf") -> bool:
-    """Send an HTML email with a PDF attachment via Gmail API."""
+                               attachment_filename: str = "document.pdf",
+                               in_reply_to: str = "", references: str = "",
+                               thread_id: str = "") -> bool:
+    """Send an HTML email with a PDF attachment via Gmail API. Supports threading."""
     from turso_client import get_setting
     refresh_token = get_setting("gmail_oauth2_refresh_token", "")
     if not refresh_token:
@@ -736,11 +738,19 @@ def send_email_with_attachment(gmail_email: str, to_address: str, subject: str,
     if not access_token:
         return False
 
+    # Normalize subject for threading
+    clean_subject = re.sub(r'^(Re:\s*|RE:\s*|Fwd?:\s*)+', '', subject, flags=re.IGNORECASE).strip()
+    final_subject = f"Re: {clean_subject}" if clean_subject else subject
+
     # Build multipart/mixed message (body + attachment)
     msg = MIMEMultipart("mixed")
     msg["From"] = _get_from_header(gmail_email)
     msg["To"] = to_address
-    msg["Subject"] = subject
+    msg["Subject"] = final_subject
+    if in_reply_to:
+        msg["In-Reply-To"] = in_reply_to
+    if references:
+        msg["References"] = references
 
     # HTML body part
     clean_html = html_body.replace("</br>", "<br>")
@@ -772,6 +782,8 @@ def send_email_with_attachment(gmail_email: str, to_address: str, subject: str,
 
     raw_message = base64.urlsafe_b64encode(msg.as_bytes()).decode("ascii")
     send_payload = {"raw": raw_message}
+    if thread_id:
+        send_payload["threadId"] = thread_id
 
     resp = http_requests.post(
         "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
@@ -780,7 +792,7 @@ def send_email_with_attachment(gmail_email: str, to_address: str, subject: str,
     )
 
     if resp.status_code == 200:
-        logger.info(f"[Gmail API] Sent email with attachment to {to_address} | Subject={subject}")
+        logger.info(f"[Gmail API] Sent email with attachment to {to_address} | Subject={final_subject} | threadId={thread_id or 'none'}")
         return True
     else:
         logger.error(f"[Gmail API] Attachment send failed ({resp.status_code}): {resp.text[:300]}")

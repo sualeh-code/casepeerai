@@ -57,11 +57,13 @@ If the provider misstates our offer: correct it — "Our client's offer remains 
 If the provider claims we agreed to a different number: "Our current written offer remains $X. Please confirm acceptance of $X in writing."
 Do not escalate immediately. First correct, then re-anchor, then continue negotiating.
 
-RULE 4 - WRITTEN ACCEPTANCE:
-A lien is NOT resolved until the provider confirms acceptance of the exact dollar amount in writing.
-Written acceptance means: a clear email reply stating they accept the specific amount.
-Do NOT ask for any signed documents, PDFs, or letters — we are not sending formal offer letters.
-Just ask them to confirm acceptance via email reply. That's it.
+RULE 4 - SIGNED OFFER LETTER:
+A lien is NOT resolved until the provider signs and returns the formal Offer to Settle letter.
+When a provider ACCEPTS an offer (intent = "accepted"), the system will automatically generate
+a PDF offer letter showing the accepted amount and email it to the provider for signing.
+You do NOT need to generate or send the letter yourself — the system handles it automatically.
+The provider must sign and return the letter. Only when the signed letter comes back
+(intent = "accepted_and_provided_details") is the lien finalized.
 
 RULE 5 - COUNTER-OFFER MATH:
 When making an offer or countering:
@@ -97,10 +99,10 @@ WORKFLOW:
 5. Return your decision as a structured JSON response.
 
 CLASSIFICATION INTENTS:
-- "accepted" — Provider agreed to settlement verbally via email
+- "accepted" — Provider agreed to settlement verbally but has NOT returned signed offer letter
 - "rejected" — Provider declined, refused, or countered
 - "provided_details" — Provider sent payment/mailing details without explicit acceptance
-- "accepted_and_provided_details" — Provider accepted AND included payment/mailing details
+- "accepted_and_provided_details" — Provider returned signed offer letter AND/OR included payment details
 - "asked_for_clarification" — Provider is asking a question about our last message
 - "asking_for_payment" — Provider is requesting payment status
 - "bill_correction" — Provider says billed amount is wrong (unprompted)
@@ -111,23 +113,24 @@ CLASSIFICATION INTENTS:
 
 SCENARIO REPLY TEMPLATES (follow these closely):
 
-bill_confirmation → Make an offer:
+bill_confirmation → Confirm the balance, then make an offer (no letter yet, just email offer):
   "Thank you for confirming the outstanding balance of $[confirmed_amount] for [provider].
    In an effort to resolve this lien, our client is offering $[offer_amount] as full and final settlement.
    Please let us know if this is acceptable."
 
-accepted → Provider accepted, confirm and proceed:
+accepted → Provider accepted the offer (system will auto-generate and send the offer letter for signing):
   "Thank you for accepting the settlement of $[amount] for [provider].
-   We will proceed with processing payment of $[amount] for [patient_name] accordingly."
+   We will send over the formal Offer to Settle letter shortly for your signature.
+   Once we receive the signed letter, we will process payment accordingly."
 
 rejected / counter-offer → Counter per Rule 5 math:
   "Thank you for your response. After careful review, our client is able to offer
    $[counter_amount] as full and final settlement of this lien. Please let us know
    if this is acceptable."
 
-accepted_and_provided_details → Acknowledge acceptance and payment details received:
-  "Thank you for confirming acceptance and providing payment details. We will process
-   payment of $[amount] accordingly."
+accepted_and_provided_details → Provider returned signed offer letter (and/or payment details):
+  "Thank you for the signed settlement letter. We will process payment of $[amount]
+   for [patient_name] accordingly. You will receive payment shortly."
 
 asking_for_payment → Check case status first (call get_case_status tool):
   If in Lien Negotiations: "The case is currently in the lien negotiations phase.
@@ -151,7 +154,8 @@ WHAT THE SYSTEM HANDLES AUTOMATICALLY (do NOT do these yourself):
 - Adding a case note (add_case_note) — done by code after you return.
 - Accepting liens (get_settlement_page + accept_lien) — done by code for "accepted_and_provided_details" intents ONLY.
 - Saving bill confirmation evidence — for "bill_confirmation" intents, the system auto-saves the original email thread as a PDF to CasePeer.
-- Uploading PDF attachments — for "accepted" intents, the system auto-uploads any PDF attachments to CasePeer.
+- Generating and emailing the Offer to Settle letter — for "accepted" intents, the system auto-generates a formal PDF offer letter with the accepted amount and emails it to the provider for signing. You do NOT need to generate or attach it.
+- Uploading signed offer letters — for "accepted_and_provided_details" intents (provider returned signed letter), the system auto-uploads the signed PDF to CasePeer and accepts the lien.
 - Appending the email signature — done by code when sending.
 
 PDF ATTACHMENT ANALYSIS:
@@ -400,6 +404,17 @@ def _casepeer_upload(case_id: str, filename: str, file_bytes: bytes,
     """Upload a file directly to CasePeer (no proxy)."""
     from casepeer_helpers import casepeer_upload_file
     return casepeer_upload_file(case_id, filename, file_bytes, content_type)
+
+
+def _find_provider_message(messages: List[Dict]) -> Optional[Dict]:
+    """Find the last message NOT from us (the provider's message) for threading."""
+    from turso_client import get_setting
+    our_email = get_setting("gmail_email", "").lower()
+    for m in reversed(messages):
+        msg_from = m.get("From", "").lower()
+        if our_email and our_email not in msg_from:
+            return m
+    return messages[-1] if messages else None
 
 
 def _casepeer_get(endpoint: str) -> Dict[str, Any]:
@@ -1022,6 +1037,143 @@ def tool_generate_bill_correction_pdf(case_id: str, letter_type: str, patient_na
         return json.dumps({"error": str(e)})
 
 
+def generate_offer_letter_pdf(case_id: str, patient_name: str, provider_name: str,
+                              confirmed_bill: str, offered_amount: str,
+                              patient_dob: str = "", injury_date: str = "",
+                              provider_address: str = "") -> tuple:
+    """
+    Generate a formal 'Offer to Settle' letter as PDF.
+    Returns (pdf_bytes, filename) for attachment sending + CasePeer upload.
+    """
+    from datetime import datetime
+
+    try:
+        pdf = FPDF()
+        pdf.set_auto_page_break(auto=True, margin=20)
+        pdf.add_page()
+
+        # --- Letterhead ---
+        pdf.set_font("Helvetica", "B", 18)
+        pdf.cell(0, 12, "Beverly Law", new_x="LMARGIN", new_y="NEXT", align="C")
+        pdf.set_font("Helvetica", "", 11)
+        pdf.cell(0, 6, "Lien Negotiations Department", new_x="LMARGIN", new_y="NEXT", align="C")
+        pdf.set_font("Helvetica", "", 9)
+        pdf.cell(0, 5, "4929 Wilshire Blvd. Suite 960, Los Angeles, CA 90010", new_x="LMARGIN", new_y="NEXT", align="C")
+        pdf.cell(0, 5, "Phone: (310) 552-6959 | Fax: (323) 421-9397", new_x="LMARGIN", new_y="NEXT", align="C")
+        pdf.ln(8)
+
+        # --- Date ---
+        today = datetime.now().strftime("%B %d, %Y")
+        pdf.set_font("Helvetica", "", 10)
+        pdf.cell(0, 6, today, new_x="LMARGIN", new_y="NEXT")
+        pdf.ln(4)
+
+        # --- Provider address block ---
+        if provider_address:
+            for line in provider_address.split("\n"):
+                pdf.cell(0, 5, line.strip().encode("latin-1", errors="replace").decode("latin-1"),
+                         new_x="LMARGIN", new_y="NEXT")
+            pdf.ln(4)
+
+        # --- RE line ---
+        pdf.set_font("Helvetica", "B", 10)
+        pdf.cell(0, 6, f"RE: Offer to Settle Lien", new_x="LMARGIN", new_y="NEXT")
+        pdf.set_font("Helvetica", "", 10)
+        info_lines = [f"Patient: {patient_name}"]
+        if patient_dob:
+            info_lines.append(f"Date of Birth: {patient_dob}")
+        if injury_date:
+            info_lines.append(f"Date of Injury: {injury_date}")
+        info_lines.append(f"Provider: {provider_name}")
+        for line in info_lines:
+            safe = line.encode("latin-1", errors="replace").decode("latin-1")
+            pdf.cell(0, 5, safe, new_x="LMARGIN", new_y="NEXT")
+        pdf.ln(6)
+
+        # --- Divider ---
+        pdf.set_draw_color(0, 0, 0)
+        pdf.line(10, pdf.get_y(), 200, pdf.get_y())
+        pdf.ln(6)
+
+        # --- Body ---
+        pdf.set_font("Helvetica", "", 10)
+        safe_provider = provider_name.encode("latin-1", errors="replace").decode("latin-1")
+        safe_patient = patient_name.encode("latin-1", errors="replace").decode("latin-1")
+        safe_bill = confirmed_bill.encode("latin-1", errors="replace").decode("latin-1")
+        safe_offer = offered_amount.encode("latin-1", errors="replace").decode("latin-1")
+
+        body = (
+            f"Dear {safe_provider},\n\n"
+            f"Our office represents {safe_patient} regarding injuries sustained "
+            f"{'on ' + injury_date if injury_date else 'in the above-referenced matter'}.\n\n"
+            f"According to our records, the outstanding balance for services rendered to our client "
+            f"is {safe_bill}.\n\n"
+            f"In an effort to resolve this lien, our client is offering {safe_offer} as full and "
+            f"final settlement of your lien.\n\n"
+            f"If this offer is acceptable, please sign below and return this letter to our office "
+            f"via email. Upon receipt of the signed acceptance, we will process payment accordingly.\n\n"
+            f"If you have any questions or would like to discuss this matter further, please do not "
+            f"hesitate to contact our office."
+        )
+        pdf.multi_cell(0, 5, body)
+        pdf.ln(8)
+
+        # --- Signature block ---
+        pdf.cell(0, 6, "Sincerely,", new_x="LMARGIN", new_y="NEXT")
+        pdf.ln(4)
+        pdf.set_font("Helvetica", "B", 10)
+        pdf.cell(0, 6, "Lien Negotiations Department", new_x="LMARGIN", new_y="NEXT")
+        pdf.cell(0, 6, "Beverly Law", new_x="LMARGIN", new_y="NEXT")
+        pdf.ln(16)
+
+        # --- Acceptance section ---
+        pdf.set_draw_color(0, 0, 0)
+        pdf.line(10, pdf.get_y(), 200, pdf.get_y())
+        pdf.ln(6)
+        pdf.set_font("Helvetica", "B", 12)
+        pdf.cell(0, 8, "ACCEPTANCE OF SETTLEMENT OFFER", new_x="LMARGIN", new_y="NEXT", align="C")
+        pdf.ln(4)
+        pdf.set_font("Helvetica", "", 10)
+
+        acceptance_text = (
+            f"I, on behalf of {safe_provider}, hereby accept the settlement offer of "
+            f"{safe_offer} as full and final settlement of all liens and claims related to "
+            f"the treatment of {safe_patient}. Upon receipt of the agreed-upon payment, "
+            f"we will release all liens associated with this patient."
+        )
+        pdf.multi_cell(0, 5, acceptance_text)
+        pdf.ln(10)
+
+        # Signature lines
+        pdf.cell(90, 6, "____________________________________", new_x="RIGHT", new_y="LAST")
+        pdf.cell(10, 6, "", new_x="RIGHT", new_y="LAST")
+        pdf.cell(90, 6, "____________________", new_x="LMARGIN", new_y="NEXT")
+        pdf.set_font("Helvetica", "", 9)
+        pdf.cell(90, 5, "Authorized Signature", new_x="RIGHT", new_y="LAST")
+        pdf.cell(10, 5, "", new_x="RIGHT", new_y="LAST")
+        pdf.cell(90, 5, "Date", new_x="LMARGIN", new_y="NEXT")
+        pdf.ln(6)
+        pdf.cell(90, 6, "____________________________________", new_x="LMARGIN", new_y="NEXT")
+        pdf.set_font("Helvetica", "", 9)
+        pdf.cell(90, 5, "Print Name / Title", new_x="LMARGIN", new_y="NEXT")
+
+        # --- Footer ---
+        pdf.ln(10)
+        pdf.set_font("Helvetica", "I", 8)
+        pdf.cell(0, 5, f"Generated on {datetime.now().strftime('%Y-%m-%d %H:%M')} by Beverly Law Lien Negotiations",
+                 new_x="LMARGIN", new_y="NEXT", align="C")
+
+        pdf_bytes = pdf.output()
+        filename = f"Offer to Settle - {provider_name} For {patient_name}.pdf"
+
+        logger.info(f"[PDF] Generated offer letter: '{filename}' ({len(pdf_bytes)} bytes)")
+        return pdf_bytes, filename
+
+    except Exception as e:
+        logger.error(f"[PDF] Offer letter generation error: {e}", exc_info=True)
+        return None, None
+
+
 # Tool dispatcher
 TOOL_FUNCTIONS = {
     "search_case": lambda args: tool_search_case(args["patient_name"]),
@@ -1554,7 +1706,71 @@ IMPORTANT: After using tools and gathering information, you MUST return a final 
                 except Exception as e:
                     logger.error(f"[PostProcess] Settlement amount update failed: {e}")
 
-            # 4. For accepted intents: only auto-accept on accepted_and_provided_details
+            # 4. For "accepted": generate offer letter PDF with accepted amount, send for signing
+            if intent == "accepted":
+                try:
+                    offered_bill = result.get("offered_bill")
+                    confirmed_bill = result.get("actual_bill")
+                    provider_name = result.get("provider_name", "Provider")
+                    patient_name = result.get("patient_name", "Patient")
+
+                    if offered_bill and float(offered_bill) > 0:
+                        pdf_bytes, pdf_filename = generate_offer_letter_pdf(
+                            case_id=case_id,
+                            patient_name=patient_name,
+                            provider_name=provider_name,
+                            confirmed_bill=f"${float(confirmed_bill):,.2f}" if confirmed_bill else "$0.00",
+                            offered_amount=f"${float(offered_bill):,.2f}",
+                            patient_dob=result.get("patient_dob", ""),
+                            injury_date=result.get("injury_date", ""),
+                        )
+                        if pdf_bytes:
+                            # Upload offer letter to CasePeer
+                            upload_res = _casepeer_upload(case_id, pdf_filename, pdf_bytes)
+                            if upload_res.get("success"):
+                                actions_taken.append(f"auto:upload_offer_letter({pdf_filename})")
+                                logger.info(f"[PostProcess] Uploaded offer letter to CasePeer: {pdf_filename}")
+
+                            # Send as attachment in the same email thread
+                            from gmail_poller import send_email_with_attachment, _get_gmail_creds
+                            gmail_email, _, _ = _get_gmail_creds()
+
+                            provider_msg = _find_provider_message(messages)
+                            rfc_msg_id = provider_msg.get("Message-ID", "") if provider_msg else ""
+                            rfc_refs = provider_msg.get("References", "") if provider_msg else ""
+                            if rfc_msg_id:
+                                refs = f"{rfc_refs} {rfc_msg_id}".strip() if rfc_refs else rfc_msg_id
+                            else:
+                                refs = rfc_refs
+
+                            offer_body = (
+                                f"Thank you for accepting our settlement offer.</br></br>"
+                                f"Please find attached our formal Offer to Settle letter for the lien of "
+                                f"{provider_name} regarding {patient_name} in the amount of "
+                                f"${float(offered_bill):,.2f}.</br></br>"
+                                f"To finalize, please sign the attached letter and return it to our office "
+                                f"via email. Once we receive the signed letter, we will process payment accordingly."
+                            )
+
+                            attach_sent = await asyncio.to_thread(
+                                send_email_with_attachment,
+                                gmail_email, clean_sender, thread_subject,
+                                offer_body, pdf_bytes, pdf_filename,
+                                in_reply_to=rfc_msg_id,
+                                references=refs,
+                                thread_id=thread_data.get("thread_id", ""),
+                            )
+                            if attach_sent:
+                                actions_taken.append("auto:send_offer_letter_email")
+                                logger.info(f"[PostProcess] Sent offer letter to {clean_sender} for signing")
+                            else:
+                                logger.error(f"[PostProcess] Failed to send offer letter to {clean_sender}")
+                    else:
+                        logger.warning(f"[PostProcess] No offered_bill for offer letter generation")
+                except Exception as e:
+                    logger.error(f"[PostProcess] Offer letter generation/send failed: {e}", exc_info=True)
+
+            # 5. For accepted_and_provided_details: provider returned signed letter — auto-accept lien
             #    (provider confirmed acceptance + payment details). Plain "accepted" just logs —
             #    we need payment details before toggling the lien in CasePeer.
             if intent == "accepted_and_provided_details":
