@@ -365,10 +365,11 @@ TOOLS = [
 # Tool implementation functions — these call your existing CasePeer proxy
 # ---------------------------------------------------------------------------
 
-def _get_local_base() -> str:
-    """Get the local proxy URL, respecting Render's PORT env var."""
-    from casepeer_helpers import get_local_base
-    return get_local_base()
+def _casepeer_upload(case_id: str, filename: str, file_bytes: bytes,
+                     content_type: str = "application/pdf") -> Dict:
+    """Upload a file directly to CasePeer (no proxy)."""
+    from casepeer_helpers import casepeer_upload_file
+    return casepeer_upload_file(case_id, filename, file_bytes, content_type)
 
 
 def _casepeer_get(endpoint: str) -> Dict[str, Any]:
@@ -542,40 +543,23 @@ def tool_accept_lien(case_id: str, provider_id: str, offered_amount: str) -> str
     if not updated:
         return json.dumps({"error": f"Provider ID {provider_id} not found in settlement form"})
 
-    # Step 3: POST the updated form (URL-encode values)
+    # Step 3: POST the updated form directly to CasePeer
+    from casepeer_helpers import casepeer_post_form, casepeer_get_raw
     form_body = "&".join(f"{quote(str(k), safe='')}={quote(str(v), safe='')}" for k, v in form_fields.items())
-    import requests as req
-    base = _get_local_base()
     try:
-        resp = req.post(
-            f"{base}/case/{case_id}/settlement/negotiations/",
-            data=form_body,
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-            timeout=90
-        )
+        resp = casepeer_post_form(f"case/{case_id}/settlement/negotiations/", form_body, timeout=90)
         # Step 4: Toggle the accept flag
-        resp2 = req.get(
-            f"{base}/case/{case_id}/settlement/accept-unaccept-health-lien/{provider_id}/",
-            timeout=90
-        )
+        resp2 = casepeer_get_raw(f"case/{case_id}/settlement/accept-unaccept-health-lien/{provider_id}/", timeout=90)
         return json.dumps({"success": True, "provider_id": provider_id, "amount": clean_amount})
     except Exception as e:
         return json.dumps({"error": str(e)})
 
 
 def tool_add_case_note(case_id: str, note: str) -> str:
-    """Add a note to a CasePeer case."""
-    import requests as req
-    base = _get_local_base()
-    try:
-        resp = req.post(
-            f"{base}/case/{case_id}/notes/add-case-note/",
-            data={"note": note, "time_worked": ""},
-            timeout=90
-        )
-        return json.dumps({"success": True})
-    except Exception as e:
-        return json.dumps({"error": str(e)})
+    """Add a note to a CasePeer case (direct call)."""
+    from casepeer_helpers import casepeer_add_note
+    result = casepeer_add_note(case_id, note)
+    return json.dumps(result)
 
 
 def tool_get_case_status(case_id: str) -> str:
@@ -710,28 +694,21 @@ async def _generate_original_thread_pdf(messages: List[Dict], subject: str) -> b
 
 
 async def _upload_thread_pdf(case_id: str, messages: List[Dict], subject: str, provider_name: str) -> str:
-    """Generate an original email thread PDF and upload it to CasePeer."""
-    import requests as req
-
+    """Generate an original email thread PDF and upload directly to CasePeer."""
     try:
         pdf_bytes = await _generate_original_thread_pdf(messages, subject)
         filename = f"Bill Confirmation Thread - {provider_name}.pdf"
         safe_filename = filename.encode("ascii", errors="replace").decode("ascii")
 
-        base = _get_local_base()
-        resp = req.post(
-            f"{base}/internal-api/proxy_upload_file/{case_id}",
-            files={"file": (safe_filename, pdf_bytes, "application/pdf")},
-            data={"docname": safe_filename},
-            timeout=60,
-        )
+        result = _casepeer_upload(case_id, safe_filename, pdf_bytes)
 
-        if resp.status_code == 200:
+        if result.get("success"):
             logger.info(f"[PDF] Uploaded original thread PDF '{safe_filename}' to case {case_id}")
-            return json.dumps({"success": True, "filename": safe_filename, "size_bytes": len(pdf_bytes)})
+            result["size_bytes"] = len(pdf_bytes)
+            return json.dumps(result)
         else:
-            logger.error(f"[PDF] Upload failed: {resp.status_code} - {resp.text[:200]}")
-            return json.dumps({"error": f"Upload failed with status {resp.status_code}"})
+            logger.error(f"[PDF] Upload failed: {result.get('error')}")
+            return json.dumps(result)
 
     except Exception as e:
         logger.error(f"[PDF] Thread PDF error: {e}", exc_info=True)
@@ -1001,23 +978,14 @@ def tool_generate_bill_correction_pdf(case_id: str, letter_type: str, patient_na
         type_label = "Bill Correction" if letter_type == "bill_correction" else "Bill Conformation"
         filename = f"{type_label} from {provider_name} For {patient_name}.pdf"
 
-        files = {"file": (filename, pdf_bytes, "application/pdf")}
-        data = {"docname": filename}
-
-        base = _get_local_base()
-        resp = req.post(
-            f"{base}/internal-api/proxy_upload_file/{case_id}",
-            files=files,
-            data=data,
-            timeout=60,
-        )
-
-        if resp.status_code == 200:
+        result = _casepeer_upload(case_id, filename, pdf_bytes)
+        if result.get("success"):
             logger.info(f"[PDF] Uploaded bill correction: '{filename}' to case {case_id}")
-            return json.dumps({"success": True, "filename": filename, "size_bytes": len(pdf_bytes)})
+            result["size_bytes"] = len(pdf_bytes)
+            return json.dumps(result)
         else:
-            logger.error(f"[PDF] Upload failed: {resp.status_code} - {resp.text[:200]}")
-            return json.dumps({"error": f"Upload failed with status {resp.status_code}"})
+            logger.error(f"[PDF] Upload failed: {result.get('error')}")
+            return json.dumps(result)
 
     except Exception as e:
         logger.error(f"[PDF] Bill correction PDF error: {e}", exc_info=True)
@@ -1544,15 +1512,9 @@ IMPORTANT: After using tools and gathering information, you MUST return a final 
                                         break
 
                             if updated:
-                                import requests as req
-                                base = _get_local_base()
+                                from casepeer_helpers import casepeer_post_form
                                 form_body = "&".join(f"{quote(str(k), safe='')}={quote(str(v), safe='')}" for k, v in form_fields.items())
-                                req.post(
-                                    f"{base}/case/{case_id}/settlement/negotiations/",
-                                    data=form_body,
-                                    headers={"Content-Type": "application/x-www-form-urlencoded"},
-                                    timeout=90
-                                )
+                                casepeer_post_form(f"case/{case_id}/settlement/negotiations/", form_body, timeout=90)
                                 actions_taken.append(f"auto:update_settlement_amount(provider={pid}, amount={clean_amount})")
                                 logger.info(f"[PostProcess] Updated settlement amount for {provider_name}: ${clean_amount}")
                             else:
@@ -1593,25 +1555,18 @@ IMPORTANT: After using tools and gathering information, you MUST return a final 
             # Upload signed PDF attachments for both accepted intents
             if intent in ("accepted", "accepted_and_provided_details"):
                 try:
-                    import requests as _req
                     pdf_analyses = thread_data.get("_pdf_analyses", [])
-                    base = _get_local_base()
                     provider_name = result.get("provider_name", "Provider")
                     for pa in pdf_analyses:
                         pdf_bytes = pa.get("_pdf_bytes")
                         if pdf_bytes:
                             filename = pa.get("filename", f"Signed Letter - {provider_name}.pdf")
-                            resp = _req.post(
-                                f"{base}/internal-api/proxy_upload_file/{case_id}",
-                                files={"file": (filename, pdf_bytes, "application/pdf")},
-                                data={"docname": filename},
-                                timeout=60,
-                            )
-                            if resp.status_code == 200:
+                            upload_result = _casepeer_upload(case_id, filename, pdf_bytes)
+                            if upload_result.get("success"):
                                 actions_taken.append(f"auto:upload_signed_pdf({filename})")
                                 logger.info(f"[PostProcess] Uploaded signed PDF '{filename}' to case {case_id}")
                             else:
-                                logger.error(f"[PostProcess] Signed PDF upload failed: {resp.status_code}")
+                                logger.error(f"[PostProcess] Signed PDF upload failed: {upload_result.get('error')}")
                 except Exception as e:
                     logger.error(f"[PostProcess] Signed PDF upload failed: {e}")
 

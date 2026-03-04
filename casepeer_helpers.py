@@ -1,8 +1,8 @@
 """
 Shared CasePeer HTTP helpers — used by negotiation_agent.py and all workflow modules.
 
-Provides authenticated GET/POST to CasePeer through the local proxy,
-plus common HTML parsing utilities.
+Provides authenticated GET/POST directly to CasePeer using the shared session
+from caseapi.py, plus common HTML parsing utilities.
 """
 
 import json
@@ -18,26 +18,72 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Base URL helper
+# Direct CasePeer session access (lazy imports to avoid circular deps)
 # ---------------------------------------------------------------------------
 
-def get_local_base() -> str:
-    """Get the local proxy URL, respecting Render's PORT env var."""
-    port = os.getenv("PORT", "8000")
-    return f"http://localhost:{port}"
+_DEFAULT_BASE_URL = "https://my.casepeer.com"
+
+
+def _get_session():
+    """Get the shared CasePeer requests.Session + headers from caseapi."""
+    from caseapi import session, build_request_headers, CSRF_TOKEN
+    from turso_client import get_setting
+    base_url = get_setting("casepeer_base_url", _DEFAULT_BASE_URL)
+    headers = build_request_headers(base_url)
+    return session, headers, base_url, CSRF_TOKEN
+
+
+def _is_login_redirect(resp) -> bool:
+    """Check if CasePeer redirected us to the login page."""
+    if hasattr(resp, 'url') and '/login/' in str(resp.url):
+        return True
+    if resp.status_code == 200 and 'text/html' in resp.headers.get('Content-Type', ''):
+        snippet = resp.text[:1000].lower()
+        if 'login' in snippet and 'password' in snippet:
+            return True
+    return False
+
+
+def _extract_csrf_from_html(html: str) -> Optional[str]:
+    """Extract CSRF token from a CasePeer HTML form."""
+    soup = BeautifulSoup(html, "html.parser")
+    inp = soup.find("input", {"name": "csrfmiddlewaretoken"})
+    if inp and inp.get("value"):
+        return inp["value"]
+    m = re.search(r'name="csrfmiddlewaretoken"\s+value="([^"]+)"', html)
+    return m.group(1) if m else None
+
+
+def _parse_form_fields(html: str) -> Dict[str, str]:
+    """Parse all input[name] fields from HTML form."""
+    fields = {}
+    soup = BeautifulSoup(html, "html.parser")
+    for inp in soup.find_all("input"):
+        name = inp.get("name")
+        if name:
+            fields[name] = inp.get("value", "")
+    return fields
 
 
 # ---------------------------------------------------------------------------
-# CasePeer proxy requests
+# Direct CasePeer requests (no proxy)
 # ---------------------------------------------------------------------------
 
 def casepeer_get(endpoint: str, timeout: int = 90) -> Dict[str, Any]:
-    """Make a GET request through the CasePeer proxy (internal)."""
-    base = get_local_base()
+    """GET a CasePeer page directly. Returns {"response": html_text}."""
     try:
-        resp = req.get(f"{base}/{endpoint.lstrip('/')}", timeout=timeout)
-        resp.raise_for_status()
-        return resp.json()
+        session, headers, base_url, _ = _get_session()
+        url = f"{base_url}/{endpoint.lstrip('/')}"
+        resp = session.get(url, headers=headers, timeout=timeout, allow_redirects=True)
+        if _is_login_redirect(resp):
+            logger.warning(f"CasePeer GET {endpoint}: session expired (login redirect)")
+            # Try async refresh if possible
+            _try_sync_refresh()
+            session, headers, base_url, _ = _get_session()
+            resp = session.get(url, headers=headers, timeout=timeout, allow_redirects=True)
+            if _is_login_redirect(resp):
+                return {"error": "Session expired, auth refresh needed"}
+        return {"response": resp.text, "status_code": resp.status_code}
     except Exception as e:
         logger.error(f"CasePeer GET {endpoint} failed: {e}")
         return {"error": str(e)}
@@ -46,37 +92,152 @@ def casepeer_get(endpoint: str, timeout: int = 90) -> Dict[str, Any]:
 def casepeer_post(endpoint: str, data: Dict = None,
                   content_type: str = "application/json",
                   timeout: int = 90) -> Dict[str, Any]:
-    """Make a POST request through the CasePeer proxy (internal)."""
-    base = get_local_base()
+    """POST to CasePeer directly with CSRF handling."""
     try:
+        session, headers, base_url, csrf_token = _get_session()
+        url = f"{base_url}/{endpoint.lstrip('/')}"
+
         if content_type == "application/x-www-form-urlencoded":
-            resp = req.post(f"{base}/{endpoint.lstrip('/')}", data=data, timeout=timeout)
+            # GET-then-POST: extract CSRF from the form page
+            form_data = _prepare_form_post(session, headers, url, data or {}, timeout)
+            headers_copy = dict(headers)
+            headers_copy["Content-Type"] = "application/x-www-form-urlencoded"
+            resp = session.post(url, data=form_data, headers=headers_copy, timeout=timeout, allow_redirects=True)
         elif content_type == "multipart/form-data":
-            resp = req.post(f"{base}/{endpoint.lstrip('/')}", data=data, timeout=timeout)
+            if data and "csrfmiddlewaretoken" not in data and csrf_token:
+                data["csrfmiddlewaretoken"] = csrf_token
+            headers_copy = dict(headers)
+            headers_copy.pop("Content-Type", None)
+            resp = session.post(url, data=data, headers=headers_copy, timeout=timeout, allow_redirects=True)
         else:
-            resp = req.post(f"{base}/{endpoint.lstrip('/')}", json=data, timeout=timeout)
-        resp.raise_for_status()
-        return resp.json()
+            resp = session.post(url, json=data, headers=headers, timeout=timeout, allow_redirects=True)
+
+        try:
+            return resp.json()
+        except Exception:
+            return {"response": resp.text, "status_code": resp.status_code}
     except Exception as e:
         logger.error(f"CasePeer POST {endpoint} failed: {e}")
         return {"error": str(e)}
 
 
 def casepeer_post_form(endpoint: str, form_body: str, timeout: int = 90) -> req.Response:
-    """POST url-encoded form data (raw string) and return the response object."""
-    base = get_local_base()
-    return req.post(
-        f"{base}/{endpoint.lstrip('/')}",
-        data=form_body,
-        headers={"Content-Type": "application/x-www-form-urlencoded"},
-        timeout=timeout,
-    )
+    """POST url-encoded form data (raw string) directly to CasePeer."""
+    session, headers, base_url, _ = _get_session()
+    url = f"{base_url}/{endpoint.lstrip('/')}"
+    headers_copy = dict(headers)
+    headers_copy["Content-Type"] = "application/x-www-form-urlencoded"
+    return session.post(url, data=form_body, headers=headers_copy, timeout=timeout, allow_redirects=True)
 
 
 def casepeer_get_raw(endpoint: str, timeout: int = 90) -> req.Response:
     """GET and return the raw response object (for binary downloads etc.)."""
-    base = get_local_base()
-    return req.get(f"{base}/{endpoint.lstrip('/')}", timeout=timeout)
+    session, headers, base_url, _ = _get_session()
+    url = f"{base_url}/{endpoint.lstrip('/')}"
+    return session.get(url, headers=headers, timeout=timeout, allow_redirects=True)
+
+
+def casepeer_upload_file(case_id: str, filename: str, file_bytes: bytes,
+                         content_type: str = "application/pdf",
+                         timeout: int = 120) -> Dict[str, Any]:
+    """Upload a file directly to CasePeer (no proxy)."""
+    try:
+        session, headers, base_url, csrf_token = _get_session()
+        url = f"{base_url}/case/{case_id}/document/upload-file/"
+
+        files = {"file": (filename, file_bytes, content_type)}
+        form_data = {
+            "csrfmiddlewaretoken": csrf_token or "",
+            "submitButton": "upload",
+        }
+
+        headers_copy = dict(headers)
+        headers_copy.pop("Content-Type", None)  # Let requests set multipart boundary
+
+        resp = session.post(url, data=form_data, files=files,
+                            headers=headers_copy, timeout=timeout, allow_redirects=True)
+
+        if _is_login_redirect(resp):
+            logger.warning(f"Upload to case {case_id}: session expired, retrying after refresh")
+            _try_sync_refresh()
+            session, headers, base_url, csrf_token = _get_session()
+            form_data["csrfmiddlewaretoken"] = csrf_token or ""
+            headers_copy = dict(headers)
+            headers_copy.pop("Content-Type", None)
+            resp = session.post(url, data=form_data, files=files,
+                                headers=headers_copy, timeout=timeout, allow_redirects=True)
+
+        if resp.status_code in (200, 201, 302, 303):
+            logger.info(f"Uploaded '{filename}' to case {case_id} (status {resp.status_code})")
+            return {"success": True, "filename": filename, "status_code": resp.status_code}
+        else:
+            logger.error(f"Upload failed: {resp.status_code} - {resp.text[:200]}")
+            return {"error": f"Upload failed with status {resp.status_code}"}
+    except Exception as e:
+        logger.error(f"File upload to case {case_id} failed: {e}")
+        return {"error": str(e)}
+
+
+def casepeer_add_note(case_id: str, note: str, timeout: int = 90) -> Dict[str, Any]:
+    """Add a case note directly to CasePeer with CSRF handling."""
+    try:
+        session, headers, base_url, _ = _get_session()
+        url = f"{base_url}/case/{case_id}/notes/add-case-note/"
+        form_data = _prepare_form_post(session, headers, url,
+                                       {"note": note, "time_worked": ""}, timeout)
+        headers_copy = dict(headers)
+        headers_copy["Content-Type"] = "application/x-www-form-urlencoded"
+        resp = session.post(url, data=form_data, headers=headers_copy,
+                            timeout=timeout, allow_redirects=True)
+        if resp.status_code in (200, 201, 302):
+            return {"success": True}
+        return {"error": f"Status {resp.status_code}"}
+    except Exception as e:
+        logger.error(f"Add case note failed: {e}")
+        return {"error": str(e)}
+
+
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+def _prepare_form_post(session, headers, url: str, body: Dict, timeout: int) -> Dict:
+    """GET a page first to extract CSRF + existing fields, then merge with body."""
+    try:
+        get_resp = session.get(url, headers=headers, timeout=timeout, allow_redirects=True)
+        if get_resp.status_code == 200:
+            html = get_resp.text
+            csrf = _extract_csrf_from_html(html)
+            if csrf:
+                existing = _parse_form_fields(html)
+                existing.update(body)
+                existing["csrfmiddlewaretoken"] = csrf
+                if "submitButton" not in existing:
+                    existing["submitButton"] = "Submit"
+                return existing
+    except Exception as e:
+        logger.warning(f"CSRF extraction failed for {url}: {e}")
+    # Fallback: use global CSRF token
+    _, _, _, csrf_token = _get_session()
+    body["csrfmiddlewaretoken"] = csrf_token or ""
+    return body
+
+
+def _try_sync_refresh():
+    """Attempt to trigger auth refresh synchronously (best-effort)."""
+    try:
+        import asyncio
+        from caseapi import refresh_authentication
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            # Can't await in sync context when loop is running — schedule it
+            asyncio.ensure_future(refresh_authentication(force=True))
+            import time
+            time.sleep(3)  # Give it a moment to complete
+        else:
+            loop.run_until_complete(refresh_authentication(force=True))
+    except Exception as e:
+        logger.warning(f"Sync auth refresh failed: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -434,14 +595,5 @@ def get_defendant_data(case_id: str) -> Dict[str, Any]:
 
 
 def add_case_note(case_id: str, note: str) -> Dict:
-    """Add a note to a CasePeer case."""
-    base = get_local_base()
-    try:
-        resp = req.post(
-            f"{base}/case/{case_id}/notes/add-case-note/",
-            data={"note": note, "time_worked": ""},
-            timeout=90,
-        )
-        return {"success": True}
-    except Exception as e:
-        return {"error": str(e)}
+    """Add a note to a CasePeer case (direct call)."""
+    return casepeer_add_note(case_id, note)
