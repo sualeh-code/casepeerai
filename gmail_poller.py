@@ -606,16 +606,15 @@ def _send_via_gmail_api(gmail_email: str, to_address: str, subject: str,
 
     clean_html = html_body.replace("</br>", "<br>")
 
-    # Always append the firm signature
-    clean_html += "<br><br>Sincerely,<br>Lien Negotiations Department<br>Beverly Law"
-
-    # Append Gmail signature fetched from the actual Gmail account
+    # Append Gmail HTML signature (fetched from Gmail API, mandatory)
     signature = fetch_gmail_signature()
     if signature:
-        clean_html += f"\n<br><br>{signature}"
+        clean_html += f"<br><br>{signature}"
         logger.info(f"[Gmail API] Signature appended ({len(signature)} chars)")
     else:
-        logger.warning("[Gmail API] No signature found — email will be sent without HTML signature")
+        # Fallback: plain text signature if Gmail API signature is unavailable
+        clean_html += "<br><br>Sincerely,<br>Lien Negotiations Department<br>Beverly Law"
+        logger.warning("[Gmail API] No HTML signature found — using text fallback")
 
     logger.info(f"[Gmail API] Sending reply | To={to_address} | Subject={final_subject}")
     logger.info(f"[Gmail API] Threading: threadId={thread_id} | In-Reply-To={in_reply_to[:80] if in_reply_to else 'EMPTY'} | References={references[:80] if references else 'EMPTY'}")
@@ -693,13 +692,12 @@ def send_reply(gmail_email: str, gmail_password: str,
 
         clean_html = html_body.replace("</br>", "<br>")
 
-        # Always append the firm signature
-        clean_html += "<br><br>Sincerely,<br>Lien Negotiations Department<br>Beverly Law"
-
-        # Append Gmail signature fetched from the actual Gmail account
+        # Append Gmail HTML signature (mandatory)
         sig = fetch_gmail_signature()
         if sig:
-            clean_html += f"\n<br><br>{sig}"
+            clean_html += f"<br><br>{sig}"
+        else:
+            clean_html += "<br><br>Sincerely,<br>Lien Negotiations Department<br>Beverly Law"
 
         full_html = f'<html><body style="font-family: Arial, sans-serif; font-size: 14px;">\n{clean_html}\n</body></html>'
 
@@ -746,10 +744,12 @@ def send_email_with_attachment(gmail_email: str, to_address: str, subject: str,
 
     # HTML body part
     clean_html = html_body.replace("</br>", "<br>")
-    clean_html += "<br><br>Sincerely,<br>Lien Negotiations Department<br>Beverly Law"
+    # Append Gmail HTML signature (mandatory)
     signature = fetch_gmail_signature()
     if signature:
-        clean_html += f"\n<br><br>{signature}"
+        clean_html += f"<br><br>{signature}"
+    else:
+        clean_html += "<br><br>Sincerely,<br>Lien Negotiations Department<br>Beverly Law"
     full_html = f'<html><body style="font-family: Arial, sans-serif; font-size: 14px;">\n{clean_html}\n</body></html>'
 
     # Add HTML body as alternative part
