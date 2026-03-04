@@ -226,11 +226,20 @@ def _prepare_form_post(session, headers, url: str, body: Dict, timeout: int) -> 
 def _try_sync_refresh():
     """Attempt to trigger auth refresh synchronously (best-effort).
 
-    Works in three scenarios:
-    1. No event loop → create a new one and run_until_complete
-    2. Event loop running (main thread) → schedule as future + sleep
-    3. Worker thread (asyncio.to_thread) → create a new loop
+    Tries in order:
+    1. Instant cookie sync from persistent browser (no network call)
+    2. Full auth refresh via Playwright
     """
+    # Step 1: Try instant cookie sync from persistent browser
+    try:
+        from browser_manager import sync_cookies_to_session
+        if sync_cookies_to_session():
+            logger.info("Session refreshed via instant browser cookie sync")
+            return
+    except Exception as e:
+        logger.debug(f"Browser cookie sync unavailable: {e}")
+
+    # Step 2: Full auth refresh
     try:
         import asyncio
         from caseapi import refresh_authentication

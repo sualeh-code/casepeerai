@@ -88,10 +88,18 @@ async def lifespan(app: FastAPI):
 
         if auth_success:
             logger.info("[OK] Startup authentication successful - proxy ready to use")
+
+            # Launch persistent browser for session keepalive
+            try:
+                from browser_manager import launch_persistent_browser
+                await launch_persistent_browser()
+                logger.info("[OK] Persistent browser launched for session management")
+            except Exception as e:
+                logger.warning(f"[WARN] Persistent browser launch failed (non-critical): {e}")
         else:
             logger.error("[FAIL] Startup authentication failed - requests may fail")
             logger.error("  The proxy will attempt to re-authenticate on first 401/403 error")
-            
+
     except Exception as e:
         logger.error(f"Startup Authentication Error: {e}", exc_info=True)
 
@@ -127,7 +135,7 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    # Shutdown: stop the poller and scheduler
+    # Shutdown: stop the poller, scheduler, and persistent browser
     try:
         from gmail_poller import stop_poller
         await stop_poller()
@@ -136,6 +144,11 @@ async def lifespan(app: FastAPI):
     try:
         from workflow_scheduler import stop_scheduler
         await stop_scheduler()
+    except Exception:
+        pass
+    try:
+        from browser_manager import close_browser
+        await close_browser()
     except Exception:
         pass
     logger.info("Shutting down CasePeer API Wrapper...")
@@ -524,6 +537,13 @@ def playwright_login(username: str, password: str, base_url: str, otp_retry_coun
                 save_session("default", json.dumps(session_data))
                 logger.info("Session state saved to database")
 
+                # Hand off cookies to persistent browser manager before closing
+                try:
+                    from browser_manager import adopt_browser_sync
+                    adopt_browser_sync(browser, context, page)
+                except Exception as e:
+                    logger.warning(f"Browser manager adoption failed: {e}")
+
                 browser.close()
                 return access_token, refresh_token, csrf_token
             else:
@@ -590,13 +610,30 @@ async def refresh_authentication(force: bool = False) -> bool:
 
     logger.info(f"Refreshing authentication (force={force})...")
 
-    # First attempt to restore from database to see if we can avoid Playwright
-    # unless force is True
+    # Step 1: Try instant cookie sync from persistent browser (no network call)
+    try:
+        from browser_manager import async_sync_cookies, is_browser_alive, keepalive_via_browser
+        if is_browser_alive():
+            # Try a keepalive ping first to verify browser session is valid
+            if await keepalive_via_browser():
+                logger.info("Session refreshed via persistent browser (instant)")
+                return True
+            else:
+                # Browser session expired — try fast reauth
+                from browser_manager import fast_reauth
+                if await fast_reauth():
+                    logger.info("Session refreshed via fast reauth in persistent browser")
+                    return True
+                logger.info("Fast reauth failed, falling back to full Playwright login")
+    except Exception as e:
+        logger.debug(f"Persistent browser recovery skipped: {e}")
+
+    # Step 2: Try to restore from database (unless force)
     if not force and await try_restore_session():
         logger.info("Session restored from database, skipping Playwright login")
         return True
 
-    # Run Playwright in a separate thread to avoid async loop issues
+    # Step 3: Full Playwright login (launches new browser)
     # Fetch credentials from Turso
     from turso_client import get_setting
     casepeer_base_url = get_setting("casepeer_base_url", DEFAULT_CASEPEER_BASE_URL)
@@ -1924,6 +1961,13 @@ async def poller_stop():
     from gmail_poller import stop_poller
     result = await stop_poller()
     return result
+
+
+@app.get("/internal-api/browser/status")
+async def browser_status():
+    """Get the persistent browser status for session management monitoring."""
+    from browser_manager import get_browser_status
+    return get_browser_status()
 
 
 # ============================================================================

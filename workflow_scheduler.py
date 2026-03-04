@@ -201,7 +201,9 @@ _keepalive_running = False
 
 
 async def _keepalive_loop():
-    """Ping CasePeer every 20 minutes to prevent session expiry."""
+    """Ping CasePeer every 20 minutes to prevent session expiry.
+    Uses persistent browser for authentic keepalive, falls back to HTTP.
+    """
     global _keepalive_running
     _keepalive_running = True
     logger.info(f"[Keepalive] Started. Pinging every {KEEPALIVE_INTERVAL_SECONDS}s")
@@ -210,14 +212,29 @@ async def _keepalive_loop():
             await asyncio.sleep(KEEPALIVE_INTERVAL_SECONDS)
             if not _keepalive_running:
                 break
-            # Make a lightweight GET to CasePeer dashboard to refresh the session
-            from casepeer_helpers import casepeer_get_raw
-            resp = await asyncio.to_thread(casepeer_get_raw, "/law/dashboard/")
-            if resp and resp.status_code == 200:
-                logger.debug("[Keepalive] CasePeer session refreshed")
-            else:
-                status = resp.status_code if resp else "no response"
-                logger.warning(f"[Keepalive] CasePeer ping returned {status}")
+
+            # Try browser-based keepalive first (authentic, syncs cookies)
+            browser_ok = False
+            try:
+                from browser_manager import keepalive_via_browser, is_browser_alive
+                if is_browser_alive():
+                    browser_ok = await keepalive_via_browser()
+                    if browser_ok:
+                        logger.debug("[Keepalive] Browser keepalive OK, cookies synced")
+                    else:
+                        logger.warning("[Keepalive] Browser keepalive failed (session expired?)")
+            except Exception as e:
+                logger.debug(f"[Keepalive] Browser keepalive unavailable: {e}")
+
+            # Fallback to HTTP keepalive if browser not available or failed
+            if not browser_ok:
+                from casepeer_helpers import casepeer_get_raw
+                resp = await asyncio.to_thread(casepeer_get_raw, "/law/dashboard/")
+                if resp and resp.status_code == 200:
+                    logger.debug("[Keepalive] HTTP keepalive OK")
+                else:
+                    status = resp.status_code if resp else "no response"
+                    logger.warning(f"[Keepalive] HTTP ping returned {status}")
         except asyncio.CancelledError:
             break
         except Exception as e:
