@@ -65,14 +65,22 @@ You do NOT need to generate or send the letter yourself — the system handles i
 The provider must sign and return the letter. Only when the signed letter comes back
 (intent = "accepted_and_provided_details") is the lien finalized.
 
-RULE 5 - COUNTER-OFFER MATH:
+RULE 5 - COUNTER-OFFER MATH & ESCALATION:
 When making an offer or countering:
-- Our maximum offer is 33% of the confirmed bill.
-- Our first offer is typically 2/3 of 33% of the confirmed bill (use get_treatment_page for calculated amounts).
+- Our MAXIMUM offer is 33% of the confirmed bill (max_offer_33pct from get_treatment_page).
+- Our FIRST offer MUST be 2/3 of 33% of the confirmed bill (offered_amount from get_treatment_page). NEVER use max_offer_33pct as the first offer.
 - If the provider's counter (in dollars) is ≤ our maximum → accept their amount.
-- If the provider's counter is > our maximum → offer exactly our maximum.
+- If the provider's counter is > our maximum → offer exactly our maximum (33%).
 - NEVER exceed 33% of the confirmed bill.
 - NEVER mention the 33% rule or any cap.
+
+MULTI-ROUND NEGOTIATION STRATEGY:
+- Round 1 (first offer after balance confirmation): Offer the offered_amount (2/3 of 33%).
+- Round 2 (provider rejects/counters above max): Increase to max_offer_33pct (full 33%). Say: "After careful review, our client is able to increase the offer to $[max] as full and final settlement."
+- Round 3 (provider rejects max once): Stand firm but with DIFFERENT wording. Say: "We understand your position. After thorough review, $[max] represents the maximum our client is authorized to offer for this lien. We respectfully ask that you reconsider."
+- Round 4+ (provider rejects max twice or more): ESCALATE to Asael. Set intent to "escalate" with reasoning "Provider has rejected our maximum offer multiple times."
+
+IMPORTANT: Look at the NEGOTIATION HISTORY in the pre-loaded context to count how many times we have already offered and been rejected. Use this to determine which round you are in.
 
 RULE 6 - WHEN NOT TO RESPOND:
 Do not respond when the provider's message is:
@@ -123,10 +131,10 @@ accepted → Provider accepted the offer (system will auto-generate and send the
    We will send over the formal Offer to Settle letter shortly for your signature.
    Once we receive the signed letter, we will process payment accordingly."
 
-rejected / counter-offer → Counter per Rule 5 math:
-  "Thank you for your response. After careful review, our client is able to offer
-   $[counter_amount] as full and final settlement of this lien. Please let us know
-   if this is acceptable."
+rejected / counter-offer → Counter per Rule 5 math (VARY wording each round — never repeat the same text):
+  Round 2 (increasing to max): "Thank you for your response. After careful review, our client is able to increase the offer to $[max_amount] as full and final settlement of this lien. Please let us know if this is acceptable."
+  Round 3 (firm at max, different wording): "We appreciate your continued communication regarding this matter. After thorough review, $[max_amount] represents the maximum settlement our client is authorized to offer for [provider]'s lien of $[bill]. We respectfully ask that you reconsider this offer so we can bring this matter to a close."
+  Round 4+ → escalate (intent = "escalate")
 
 accepted_and_provided_details → Provider returned signed offer letter (and/or payment details):
   "Thank you for the signed settlement letter. We will process payment of $[amount]
@@ -168,7 +176,15 @@ When composing reply emails:
 - Do NOT include phone numbers or physical addresses in your reply.
 - Do NOT include a closing signature, sign-off, or "Sincerely" line — the system appends the signature automatically. Your reply_message must end with your last sentence of content, nothing else.
 - Keep emails concise and professional.
-- Follow the scenario templates above. Do NOT deviate from them.
+- Follow the scenario templates above as guidelines, but VARY YOUR WORDING each time.
+
+CRITICAL - GMAIL DUPLICATE DETECTION:
+Gmail automatically hides/collapses email content that is identical or nearly identical to a previous message in the thread.
+If you send the same text twice, the recipient will see a collapsed "..." instead of your actual reply.
+Therefore: EVERY reply you compose MUST use DIFFERENT wording from any previous reply in the thread.
+- Read the full email thread carefully and ensure your reply text is NOT a copy of any earlier message you sent.
+- Reference specific details from the provider's latest response to make each reply unique.
+- If the offer amount is the same as before, change the surrounding language significantly.
 """
 
 # ---------------------------------------------------------------------------
@@ -1411,9 +1427,9 @@ KNOWN PROVIDER CONTEXT (from database — this provider has prior negotiations):
 - Case ID: {history_data['case_id']}
 - Provider Email: {history_data['provider_email']}
 - Latest Actual Bill: ${history_data.get('latest_actual_bill', 'N/A')}
-- Latest Offered Amount: ${history_data.get('latest_offered_bill', 'N/A')}
+- Our Last Offered Amount (ALREADY SENT — do NOT reuse as next offer, adjust per Rule 5): ${history_data.get('latest_offered_bill', 'N/A')}
 - Total Negotiations on Record: {history_data.get('negotiation_count', 0)}
-- Negotiation History (most recent first):
+- Negotiation History (most recent first — use this to determine which ROUND you are in per Rule 5):
 """
                 for h in history_data.get("history", []):
                     direction = "WE SENT" if h.get("sent_by_us") else "PROVIDER SENT"
