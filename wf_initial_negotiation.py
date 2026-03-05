@@ -36,15 +36,12 @@ def _build_balance_confirmation_email(
 ) -> str:
     """Build HTML email body asking provider to confirm outstanding balance."""
     bill_str = f"${bill_amount:,.2f}" if bill_amount > 0 else "the amount on file"
-    dob_line = f"<br>Date of Birth: {patient_dob}" if patient_dob and patient_dob != "N/A" else ""
-    dol_line = f"<br>Date of Injury: {incident_date}" if incident_date and incident_date != "N/A" else ""
+    dol_display = f" - DOL {incident_date}" if incident_date and incident_date != "N/A" else ""
 
     return (
         f"Dear {provider_name},<br><br>"
-        f"Our office represents <strong>{patient_name}</strong> regarding injuries sustained "
-        f"on <strong>{incident_date}</strong>.{dob_line}{dol_line}<br><br>"
-        f"We are in the process of negotiating with the insurance company and would like "
-        f"to confirm the outstanding balance for our client's account with your office.<br><br>"
+        f"Our office represents <strong>{patient_name}{dol_display}</strong>.<br><br>"
+        f"We would like to confirm the outstanding balance for our client's account with your office.<br><br>"
         f"Our records show the total billed amount is <strong>{bill_str}</strong>. "
         f"Could you please confirm the current outstanding balance for this patient?<br><br>"
         f"Thank you for your prompt attention to this matter."
