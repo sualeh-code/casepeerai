@@ -607,13 +607,15 @@ def _send_via_gmail_api(gmail_email: str, to_address: str, subject: str,
     clean_html = html_body.replace("</br>", "<br>")
 
     # Append Gmail HTML signature (fetched from Gmail API, mandatory)
+    # Wrap in gmail_signature div so Gmail treats it as a proper signature block
+    # and does not collapse it with quoted text in thread replies.
     signature = fetch_gmail_signature()
     if signature:
-        clean_html += f"<br><br>{signature}"
+        clean_html += f'<br><br><div dir="ltr" class="gmail_signature" data-smartmail="gmail_signature">{signature}</div>'
         logger.info(f"[Gmail API] Signature appended ({len(signature)} chars)")
     else:
         # Fallback: plain text signature if Gmail API signature is unavailable
-        clean_html += "<br><br>Sincerely,<br>Lien Negotiations Department<br>Beverly Law"
+        clean_html += '<br><br><div dir="ltr" class="gmail_signature" data-smartmail="gmail_signature">Sincerely,<br>Lien Negotiations Department<br>Beverly Law</div>'
         logger.warning("[Gmail API] No HTML signature found — using text fallback")
 
     logger.info(f"[Gmail API] Sending reply | To={to_address} | Subject={final_subject}")
@@ -695,9 +697,9 @@ def send_reply(gmail_email: str, gmail_password: str,
         # Append Gmail HTML signature (mandatory)
         sig = fetch_gmail_signature()
         if sig:
-            clean_html += f"<br><br>{sig}"
+            clean_html += f'<br><br><div dir="ltr" class="gmail_signature" data-smartmail="gmail_signature">{sig}</div>'
         else:
-            clean_html += "<br><br>Sincerely,<br>Lien Negotiations Department<br>Beverly Law"
+            clean_html += '<br><br><div dir="ltr" class="gmail_signature" data-smartmail="gmail_signature">Sincerely,<br>Lien Negotiations Department<br>Beverly Law</div>'
 
         full_html = f'<html><body style="font-family: Arial, sans-serif; font-size: 14px;">\n{clean_html}\n</body></html>'
 

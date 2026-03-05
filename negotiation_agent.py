@@ -129,16 +129,20 @@ bill_confirmation → Confirm the balance, then make an offer (no letter yet, ju
 accepted → Provider accepted the offer (system will auto-generate and send the offer letter for signing):
   "Thank you for accepting the settlement of $[amount] for [provider].
    We will send over the formal Offer to Settle letter shortly for your signature.
-   Once we receive the signed letter, we will process payment accordingly."
+   Once we receive the signed letter, along with a completed W9 and remittance instructions, we will process payment accordingly."
 
 rejected / counter-offer → Counter per Rule 5 math (VARY wording each round — never repeat the same text):
   Round 2 (increasing to max): "Thank you for your response. After careful review, our client is able to increase the offer to $[max_amount] as full and final settlement of this lien. Please let us know if this is acceptable."
   Round 3 (firm at max, different wording): "We appreciate your continued communication regarding this matter. After thorough review, $[max_amount] represents the maximum settlement our client is authorized to offer for [provider]'s lien of $[bill]. We respectfully ask that you reconsider this offer so we can bring this matter to a close."
   Round 4+ → escalate (intent = "escalate")
 
-accepted_and_provided_details → Provider returned signed offer letter (and/or payment details):
-  "Thank you for the signed settlement letter. We will process payment of $[amount]
-   for [patient_name] accordingly. You will receive payment shortly."
+accepted_and_provided_details → Provider returned signed offer letter AND/OR W9/remittance details:
+  "Thank you for the signed settlement letter and the provided documentation.
+   We confirm resolution in the agreed amount of $[amount] for [patient_name].
+   The matter has been forwarded to our accounting department for processing."
+  If signed letter received but W9 is missing:
+  "Thank you for the signed settlement letter confirming acceptance of $[amount].
+   To process payment, please also provide a completed W9 with remittance instructions."
 
 asking_for_payment → Check case status first (call get_case_status tool):
   If in Lien Negotiations: "The case is currently in the lien negotiations phase.
