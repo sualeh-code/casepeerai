@@ -728,8 +728,9 @@ def send_email_with_attachment(gmail_email: str, to_address: str, subject: str,
                                html_body: str, attachment_bytes: bytes,
                                attachment_filename: str = "document.pdf",
                                in_reply_to: str = "", references: str = "",
-                               thread_id: str = "") -> bool:
-    """Send an HTML email with a PDF attachment via Gmail API. Supports threading."""
+                               thread_id: str = "",
+                               content_type: str = "application/pdf") -> bool:
+    """Send an HTML email with a file attachment via Gmail API. Supports threading."""
     from turso_client import get_setting
     refresh_token = get_setting("gmail_oauth2_refresh_token", "")
     if not refresh_token:
@@ -759,9 +760,9 @@ def send_email_with_attachment(gmail_email: str, to_address: str, subject: str,
     # Append Gmail HTML signature (mandatory)
     signature = fetch_gmail_signature()
     if signature:
-        clean_html += f"<br><br>{signature}"
+        clean_html += f'<br><br><div dir="ltr" class="gmail_signature" data-smartmail="gmail_signature">{signature}</div>'
     else:
-        clean_html += "<br><br>Sincerely,<br>Lien Negotiations Department<br>Beverly Law"
+        clean_html += '<br><br><div dir="ltr" class="gmail_signature" data-smartmail="gmail_signature">Sincerely,<br>Lien Negotiations Department<br>Beverly Law</div>'
     full_html = f'<html><body style="font-family: Arial, sans-serif; font-size: 14px;">\n{clean_html}\n</body></html>'
 
     # Add HTML body as alternative part
@@ -775,12 +776,13 @@ def send_email_with_attachment(gmail_email: str, to_address: str, subject: str,
     body_part.attach(MIMEText(full_html, "html"))
     msg.attach(body_part)
 
-    # PDF attachment
-    pdf_part = MIMEBase("application", "pdf")
-    pdf_part.set_payload(attachment_bytes)
-    encoders.encode_base64(pdf_part)
-    pdf_part.add_header("Content-Disposition", f'attachment; filename="{attachment_filename}"')
-    msg.attach(pdf_part)
+    # File attachment (PDF, DOCX, etc.)
+    maintype, subtype = content_type.split("/", 1) if "/" in content_type else ("application", "octet-stream")
+    file_part = MIMEBase(maintype, subtype)
+    file_part.set_payload(attachment_bytes)
+    encoders.encode_base64(file_part)
+    file_part.add_header("Content-Disposition", f'attachment; filename="{attachment_filename}"')
+    msg.attach(file_part)
 
     raw_message = base64.urlsafe_b64encode(msg.as_bytes()).decode("ascii")
     send_payload = {"raw": raw_message}

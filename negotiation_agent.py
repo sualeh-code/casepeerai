@@ -449,6 +449,59 @@ def _casepeer_post(endpoint: str, data: Dict = None, content_type: str = "applic
     return casepeer_post(endpoint, data, content_type)
 
 
+def _generate_casepeer_offer_letter(case_id: str, lien_id: str, template_id: str) -> Optional[bytes]:
+    """Generate an offer letter via CasePeer's built-in autoletters system.
+
+    Calls /autoletters/CaseGenerateLetter/{lien_id}/{template_id}/{case_id}/
+    which generates the letter in CasePeer (auto-saved) and returns the DOCX bytes.
+    """
+    from casepeer_helpers import casepeer_get_raw
+    endpoint = f"autoletters/CaseGenerateLetter/{lien_id}/{template_id}/{case_id}/"
+    try:
+        resp = casepeer_get_raw(endpoint, timeout=60)
+        if resp.status_code == 200 and len(resp.content) > 100:
+            logger.info(f"[CasePeer] Generated offer letter via autoletters: lien={lien_id}, template={template_id}, case={case_id} ({len(resp.content)} bytes)")
+            return resp.content
+        else:
+            logger.error(f"[CasePeer] Autoletters failed ({resp.status_code}): {resp.text[:200]}")
+            return None
+    except Exception as e:
+        logger.error(f"[CasePeer] Autoletters request failed: {e}")
+        return None
+
+
+def _find_lien_id_for_provider(case_id: str, provider_name: str) -> tuple:
+    """Look up the lien_id and offer letter template_id for a provider from the treatment page.
+
+    Returns (lien_id, template_id) or (None, None) if not found.
+    """
+    try:
+        treatment_json = tool_get_treatment_page(case_id)
+        treatment = json.loads(treatment_json)
+
+        # Find matching provider by name (fuzzy match)
+        provider_lower = provider_name.lower()
+        lien_id = None
+        for p in treatment.get("providers_calculated", []):
+            p_name = (p.get("provider_name") or "").lower()
+            if provider_lower in p_name or p_name in provider_lower:
+                lien_id = p.get("lien_id")
+                break
+
+        # Get the offer letter template ID
+        template_id = treatment.get("offer_letter_template_id", "")
+
+        if lien_id and template_id:
+            logger.info(f"[CasePeer] Found lien_id={lien_id}, template_id={template_id} for provider '{provider_name}'")
+            return lien_id, template_id
+        else:
+            logger.warning(f"[CasePeer] Could not find lien_id={lien_id} or template_id={template_id} for provider '{provider_name}'")
+            return None, None
+    except Exception as e:
+        logger.error(f"[CasePeer] Failed to look up lien for provider '{provider_name}': {e}")
+        return None, None
+
+
 def _lookup_negotiation_history(provider_email: str) -> str:
     """Look up existing negotiation history by provider email, grouped by case_id.
 
@@ -881,12 +934,12 @@ def tool_get_treatment_page(case_id: str) -> str:
             "lien_id": str(lien.get("id", "")),
         })
 
-    # Find the "No Details Offer to Settle" letter template ID
+    # Find the "Offer to settle lien for" letter template ID
     offer_letter_id = ""
     for letter in lien_letters:
-        letter_name = letter.get("name", "").lower()
-        if "no details" in letter_name and "offer" in letter_name:
-            offer_letter_id = str(letter.get("id", ""))
+        letter_label = (letter.get("label") or letter.get("name") or "").lower()
+        if "offer to settle lien" in letter_label:
+            offer_letter_id = str(letter.get("value") or letter.get("id") or "")
             break
 
     return json.dumps({
@@ -896,7 +949,7 @@ def tool_get_treatment_page(case_id: str) -> str:
         "health_liens_count": len(health_liens_data),
         "health_liens_raw": health_liens_data[:20],  # cap at 20 to avoid token bloat
         "providers_calculated": calculated_providers,
-        "lien_letters": [{"id": l.get("id"), "name": l.get("name")} for l in lien_letters],
+        "lien_letters": [{"id": l.get("id"), "name": l.get("name"), "label": l.get("label"), "value": l.get("value")} for l in lien_letters],
         "offer_letter_template_id": offer_letter_id,
         "html_providers": providers[:20],
     })
@@ -1726,30 +1779,28 @@ IMPORTANT: After using tools and gathering information, you MUST return a final 
                 except Exception as e:
                     logger.error(f"[PostProcess] Settlement amount update failed: {e}")
 
-            # 4. For "accepted": generate offer letter PDF with accepted amount, send for signing
+            # 4. For "accepted": generate offer letter via CasePeer autoletters, send for signing
             if intent == "accepted":
                 try:
                     offered_bill = result.get("offered_bill")
-                    confirmed_bill = result.get("actual_bill")
                     provider_name = result.get("provider_name", "Provider")
                     patient_name = result.get("patient_name", "Patient")
 
                     if offered_bill and float(offered_bill) > 0:
-                        pdf_bytes, pdf_filename = generate_offer_letter_pdf(
-                            case_id=case_id,
-                            patient_name=patient_name,
-                            provider_name=provider_name,
-                            confirmed_bill=f"${float(confirmed_bill):,.2f}" if confirmed_bill else "$0.00",
-                            offered_amount=f"${float(offered_bill):,.2f}",
-                            patient_dob=result.get("patient_dob", ""),
-                            injury_date=result.get("injury_date", ""),
-                        )
-                        if pdf_bytes:
-                            # Upload offer letter to CasePeer
-                            upload_res = _casepeer_upload(case_id, pdf_filename, pdf_bytes)
-                            if upload_res.get("success"):
-                                actions_taken.append(f"auto:upload_offer_letter({pdf_filename})")
-                                logger.info(f"[PostProcess] Uploaded offer letter to CasePeer: {pdf_filename}")
+                        # Look up lien_id and template_id from CasePeer treatment page
+                        lien_id, template_id = _find_lien_id_for_provider(case_id, provider_name)
+
+                        docx_bytes = None
+                        if lien_id and template_id:
+                            # Generate letter via CasePeer's built-in autoletters (auto-saved to case)
+                            docx_bytes = await asyncio.to_thread(
+                                _generate_casepeer_offer_letter, case_id, lien_id, template_id
+                            )
+
+                        if docx_bytes:
+                            docx_filename = f"Offer to Settle - {provider_name} For {patient_name}.docx"
+                            actions_taken.append(f"auto:casepeer_offer_letter(lien={lien_id})")
+                            logger.info(f"[PostProcess] CasePeer generated offer letter for {provider_name} ({len(docx_bytes)} bytes)")
 
                             # Send as attachment in the same email thread
                             from gmail_poller import send_email_with_attachment, _get_gmail_creds
@@ -1769,22 +1820,26 @@ IMPORTANT: After using tools and gathering information, you MUST return a final 
                                 f"{provider_name} regarding {patient_name} in the amount of "
                                 f"${float(offered_bill):,.2f}.</br></br>"
                                 f"To finalize, please sign the attached letter and return it to our office "
-                                f"via email. Once we receive the signed letter, we will process payment accordingly."
+                                f"via email, along with a completed W9 and remittance instructions. "
+                                f"Once we receive the signed letter, we will process payment accordingly."
                             )
 
                             attach_sent = await asyncio.to_thread(
                                 send_email_with_attachment,
                                 gmail_email, clean_sender, thread_subject,
-                                offer_body, pdf_bytes, pdf_filename,
+                                offer_body, docx_bytes, docx_filename,
                                 in_reply_to=rfc_msg_id,
                                 references=refs,
                                 thread_id=thread_data.get("thread_id", ""),
+                                content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                             )
                             if attach_sent:
                                 actions_taken.append("auto:send_offer_letter_email")
-                                logger.info(f"[PostProcess] Sent offer letter to {clean_sender} for signing")
+                                logger.info(f"[PostProcess] Sent CasePeer offer letter to {clean_sender} for signing")
                             else:
                                 logger.error(f"[PostProcess] Failed to send offer letter to {clean_sender}")
+                        else:
+                            logger.warning(f"[PostProcess] CasePeer autoletters failed — lien_id={lien_id}, template_id={template_id}")
                     else:
                         logger.warning(f"[PostProcess] No offered_bill for offer letter generation")
                 except Exception as e:
