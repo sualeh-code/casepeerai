@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { ArrowLeft, FileText, Bell, MessageSquare, Eye, RefreshCw, Globe, StickyNote, Trash2, Bot, Wrench, ChevronRight } from 'lucide-react';
+import { ArrowLeft, FileText, Bell, MessageSquare, Eye, RefreshCw, Globe, StickyNote, Trash2, Bot, Wrench, ChevronRight, AlertTriangle, CheckCircle, Clock, Users } from 'lucide-react';
 import CaseNotes from './CaseNotes';
 import AgentActivity from './AgentActivity';
 import {
@@ -130,14 +130,107 @@ const CaseDetails = ({ caseId, onBack }) => {
                 </Card>
             </div>
 
-            <Tabs defaultValue="negotiations" className="w-full">
+            <Tabs defaultValue="providers" className="w-full">
                 <TabsList>
+                    <TabsTrigger value="providers">Providers</TabsTrigger>
                     <TabsTrigger value="negotiations">Negotiations</TabsTrigger>
                     <TabsTrigger value="agent">Agent Activity</TabsTrigger>
                     <TabsTrigger value="notes">Notes</TabsTrigger>
                     <TabsTrigger value="classifications">Classifications</TabsTrigger>
                     <TabsTrigger value="reminders">Reminders</TabsTrigger>
                 </TabsList>
+
+                <TabsContent value="providers">
+                    <Card>
+                        <CardHeader>
+                            <CardTitle className="flex items-center gap-2">
+                                <Users className="h-5 w-5" />
+                                Providers
+                            </CardTitle>
+                            <CardDescription>Negotiation status per provider</CardDescription>
+                        </CardHeader>
+                        <CardContent>
+                            {(() => {
+                                // Group negotiations by provider email
+                                const grouped = {};
+                                negotiations.forEach(n => {
+                                    const key = (n.to || "unknown").toLowerCase();
+                                    if (!grouped[key]) grouped[key] = { email: n.to, rows: [] };
+                                    grouped[key].rows.push(n);
+                                });
+
+                                const providers = Object.values(grouped).map(g => {
+                                    const rows = g.rows;
+                                    const latest = rows[0]; // newest first (API returns sorted)
+                                    const isEscalated = rows.some(r => (r.result || "").toLowerCase().includes("escalate"));
+                                    const isAccepted = rows.some(r => (r.result || "").toLowerCase().includes("accepted") || (r.negotiation_type || "").toLowerCase().includes("accepted"));
+                                    const rounds = rows.filter(r => r.sent_by_us).length;
+                                    const latestBill = rows.find(r => r.actual_bill > 0)?.actual_bill || 0;
+                                    const latestOffer = rows.find(r => r.offered_bill > 0)?.offered_bill || 0;
+                                    const escalateRow = rows.find(r => (r.result || "").toLowerCase().includes("escalate"));
+                                    const escalateReason = escalateRow?.email_body || "";
+
+                                    let status = "active";
+                                    if (isAccepted) status = "accepted";
+                                    else if (isEscalated) status = "escalated";
+
+                                    return { ...g, latest, status, rounds, latestBill, latestOffer, escalateReason };
+                                });
+
+                                if (providers.length === 0) {
+                                    return <div className="text-center text-muted-foreground py-8">No providers found</div>;
+                                }
+
+                                return (
+                                    <Table>
+                                        <TableHeader>
+                                            <TableRow>
+                                                <TableHead>Provider</TableHead>
+                                                <TableHead>Bill</TableHead>
+                                                <TableHead>Last Offer</TableHead>
+                                                <TableHead>Rounds</TableHead>
+                                                <TableHead>Status</TableHead>
+                                                <TableHead>Reason</TableHead>
+                                            </TableRow>
+                                        </TableHeader>
+                                        <TableBody>
+                                            {providers.map((p, i) => (
+                                                <TableRow key={i} className={p.status === "escalated" ? "bg-red-50 dark:bg-red-950/20" : ""}>
+                                                    <TableCell className="font-medium">{p.email}</TableCell>
+                                                    <TableCell>${p.latestBill?.toFixed(2)}</TableCell>
+                                                    <TableCell>${p.latestOffer?.toFixed(2)}</TableCell>
+                                                    <TableCell>{p.rounds}</TableCell>
+                                                    <TableCell>
+                                                        {p.status === "escalated" && (
+                                                            <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200">
+                                                                <AlertTriangle className="h-3 w-3" /> Needs Human
+                                                            </span>
+                                                        )}
+                                                        {p.status === "accepted" && (
+                                                            <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">
+                                                                <CheckCircle className="h-3 w-3" /> Accepted
+                                                            </span>
+                                                        )}
+                                                        {p.status === "active" && (
+                                                            <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200">
+                                                                <Clock className="h-3 w-3" /> In Progress
+                                                            </span>
+                                                        )}
+                                                    </TableCell>
+                                                    <TableCell>
+                                                        <div className="max-w-[250px] truncate text-xs text-muted-foreground">
+                                                            {p.status === "escalated" ? (p.escalateReason || "Provider rejected max offer") : "—"}
+                                                        </div>
+                                                    </TableCell>
+                                                </TableRow>
+                                            ))}
+                                        </TableBody>
+                                    </Table>
+                                );
+                            })()}
+                        </CardContent>
+                    </Card>
+                </TabsContent>
 
                 <TabsContent value="negotiations">
                     <Card>
