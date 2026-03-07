@@ -13,6 +13,11 @@ WORKDIR /app
 # Copy built frontend assets
 COPY --from=build-stage /dashboard/dist ./dashboard/dist
 
+# Install LibreOffice for DOCX→PDF conversion (headless)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libreoffice-writer \
+    && rm -rf /var/lib/apt/lists/*
+
 # Copy requirements and install dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

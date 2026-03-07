@@ -449,25 +449,85 @@ def _casepeer_post(endpoint: str, data: Dict = None, content_type: str = "applic
     return casepeer_post(endpoint, data, content_type)
 
 
+def _convert_docx_to_pdf(docx_bytes: bytes) -> Optional[bytes]:
+    """Convert DOCX bytes to PDF using LibreOffice headless."""
+    import subprocess
+    import tempfile
+    import os
+
+    tmp_dir = tempfile.mkdtemp()
+    docx_path = os.path.join(tmp_dir, "letter.docx")
+    pdf_path = os.path.join(tmp_dir, "letter.pdf")
+
+    try:
+        with open(docx_path, "wb") as f:
+            f.write(docx_bytes)
+
+        result = subprocess.run(
+            ["soffice", "--headless", "--convert-to", "pdf", "--outdir", tmp_dir, docx_path],
+            capture_output=True, timeout=30,
+        )
+
+        if result.returncode != 0:
+            logger.error(f"[PDF] LibreOffice conversion failed: {result.stderr.decode()[:300]}")
+            return None
+
+        if os.path.exists(pdf_path):
+            with open(pdf_path, "rb") as f:
+                pdf_bytes = f.read()
+            logger.info(f"[PDF] Converted DOCX to PDF ({len(pdf_bytes)} bytes)")
+            return pdf_bytes
+        else:
+            logger.error("[PDF] LibreOffice produced no output PDF")
+            return None
+    except FileNotFoundError:
+        logger.error("[PDF] LibreOffice (soffice) not installed — cannot convert DOCX to PDF")
+        return None
+    except Exception as e:
+        logger.error(f"[PDF] DOCX→PDF conversion failed: {e}")
+        return None
+    finally:
+        # Cleanup temp files
+        for f in [docx_path, pdf_path]:
+            try:
+                os.remove(f)
+            except OSError:
+                pass
+        try:
+            os.rmdir(tmp_dir)
+        except OSError:
+            pass
+
+
 def _generate_casepeer_offer_letter(case_id: str, lien_id: str, template_id: str) -> Optional[bytes]:
     """Generate an offer letter via CasePeer's built-in autoletters system.
 
     Calls /autoletters/CaseGenerateLetter/{lien_id}/{template_id}/{case_id}/
-    which generates the letter in CasePeer (auto-saved) and returns the DOCX bytes.
+    which generates the letter in CasePeer (auto-saved) and returns the DOCX.
+    Then converts the DOCX to PDF via LibreOffice. Falls back to DOCX if conversion fails.
+    Returns (file_bytes, filename).
     """
     from casepeer_helpers import casepeer_get_raw
     endpoint = f"autoletters/CaseGenerateLetter/{lien_id}/{template_id}/{case_id}/"
     try:
         resp = casepeer_get_raw(endpoint, timeout=60)
         if resp.status_code == 200 and len(resp.content) > 100:
-            logger.info(f"[CasePeer] Generated offer letter via autoletters: lien={lien_id}, template={template_id}, case={case_id} ({len(resp.content)} bytes)")
-            return resp.content
+            docx_bytes = resp.content
+            logger.info(f"[CasePeer] Generated offer letter via autoletters: lien={lien_id}, template={template_id}, case={case_id} ({len(docx_bytes)} bytes)")
+
+            # Convert DOCX to PDF
+            pdf_bytes = _convert_docx_to_pdf(docx_bytes)
+            if pdf_bytes:
+                return pdf_bytes, "pdf"
+            else:
+                logger.warning("[CasePeer] PDF conversion failed — falling back to DOCX")
+                return docx_bytes, "docx"
         else:
             logger.error(f"[CasePeer] Autoletters failed ({resp.status_code}): {resp.text[:200]}")
-            return None
+            return None, None
     except Exception as e:
         logger.error(f"[CasePeer] Autoletters request failed: {e}")
-        return None
+        return None, None
 
 
 def _find_lien_id_for_provider(case_id: str, provider_name: str) -> tuple:
@@ -1790,17 +1850,25 @@ IMPORTANT: After using tools and gathering information, you MUST return a final 
                         # Look up lien_id and template_id from CasePeer treatment page
                         lien_id, template_id = _find_lien_id_for_provider(case_id, provider_name)
 
-                        docx_bytes = None
+                        file_bytes = None
+                        file_format = None
                         if lien_id and template_id:
                             # Generate letter via CasePeer's built-in autoletters (auto-saved to case)
-                            docx_bytes = await asyncio.to_thread(
+                            # Returns (bytes, "pdf"|"docx") — converts to PDF via LibreOffice, falls back to DOCX
+                            file_bytes, file_format = await asyncio.to_thread(
                                 _generate_casepeer_offer_letter, case_id, lien_id, template_id
                             )
 
-                        if docx_bytes:
-                            docx_filename = f"Offer to Settle - {provider_name} For {patient_name}.docx"
-                            actions_taken.append(f"auto:casepeer_offer_letter(lien={lien_id})")
-                            logger.info(f"[PostProcess] CasePeer generated offer letter for {provider_name} ({len(docx_bytes)} bytes)")
+                        if file_bytes:
+                            if file_format == "pdf":
+                                filename = f"Offer to Settle - {provider_name} For {patient_name}.pdf"
+                                mime_type = "application/pdf"
+                            else:
+                                filename = f"Offer to Settle - {provider_name} For {patient_name}.docx"
+                                mime_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+                            actions_taken.append(f"auto:casepeer_offer_letter(lien={lien_id}, format={file_format})")
+                            logger.info(f"[PostProcess] CasePeer generated offer letter for {provider_name} ({len(file_bytes)} bytes, {file_format})")
 
                             # Send as attachment in the same email thread
                             from gmail_poller import send_email_with_attachment, _get_gmail_creds
@@ -1827,15 +1895,15 @@ IMPORTANT: After using tools and gathering information, you MUST return a final 
                             attach_sent = await asyncio.to_thread(
                                 send_email_with_attachment,
                                 gmail_email, clean_sender, thread_subject,
-                                offer_body, docx_bytes, docx_filename,
+                                offer_body, file_bytes, filename,
                                 in_reply_to=rfc_msg_id,
                                 references=refs,
                                 thread_id=thread_data.get("thread_id", ""),
-                                content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                content_type=mime_type,
                             )
                             if attach_sent:
                                 actions_taken.append("auto:send_offer_letter_email")
-                                logger.info(f"[PostProcess] Sent CasePeer offer letter to {clean_sender} for signing")
+                                logger.info(f"[PostProcess] Sent offer letter ({file_format}) to {clean_sender} for signing")
                             else:
                                 logger.error(f"[PostProcess] Failed to send offer letter to {clean_sender}")
                         else:
