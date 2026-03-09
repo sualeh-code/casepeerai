@@ -1979,26 +1979,7 @@ IMPORTANT: After using tools and gathering information, you MUST return a final 
             except Exception as e:
                 logger.error(f"[PostProcess] Failed to log negotiation: {e}")
 
-            # 2. Always add a case note
-            try:
-                provider_name = result.get("provider_name", "Unknown")
-                note_map = {
-                    "accepted": f"Provider {provider_name} accepted settlement of ${result.get('offered_bill', '?')}",
-                    "accepted_and_provided_details": f"Provider {provider_name} accepted and provided payment details. Amount: ${result.get('offered_bill', '?')}",
-                    "rejected": f"Provider {provider_name} rejected/countered our offer. {result.get('reasoning', '')[:200]}",
-                    "provided_details": f"Provider {provider_name} sent payment/mailing details",
-                    "asked_for_clarification": f"Provider {provider_name} asked a question",
-                    "asking_for_payment": f"Provider {provider_name} is requesting payment status",
-                    "bill_correction": f"Provider {provider_name} says billed amount is wrong",
-                    "bill_confirmation": f"Provider {provider_name} responded to balance confirmation",
-                    "escalate": f"ESCALATE TO ASAEL: Provider {provider_name} — {result.get('reasoning', '')[:200]}",
-                }
-                note = note_map.get(intent, f"Provider {provider_name}: {intent} — {result.get('reasoning', '')[:200]}")
-                tool_add_case_note(case_id, note)
-                actions_taken.append("auto:add_case_note")
-                logger.info(f"[PostProcess] Added case note for case {case_id}")
-            except Exception as e:
-                logger.error(f"[PostProcess] Failed to add case note: {e}")
+            # 2. Case notes removed — BCC'd email thread shows full negotiation in the case
 
             # 3. For bill_confirmation: auto-save original email thread PDF + update settlement amount
             if intent == "bill_confirmation":
@@ -2108,6 +2089,9 @@ IMPORTANT: After using tools and gathering information, you MUST return a final 
                                 f"Once we receive the signed letter, we will process payment accordingly."
                             )
 
+                            # BCC the case email so offer letter shows in CasePeer
+                            bcc_addr = f"{case_id}@bcc.casepeer.com" if case_id else ""
+
                             attach_sent = await asyncio.to_thread(
                                 send_email_with_attachment,
                                 gmail_email, clean_sender, thread_subject,
@@ -2116,6 +2100,7 @@ IMPORTANT: After using tools and gathering information, you MUST return a final 
                                 references=refs,
                                 thread_id=thread_data.get("thread_id", ""),
                                 content_type=mime_type,
+                                bcc=bcc_addr,
                             )
                             if attach_sent:
                                 actions_taken.append("auto:send_offer_letter_email")

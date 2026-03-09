@@ -510,11 +510,11 @@ def get_treatment_providers(case_id: str) -> Dict[str, Any]:
             "address": provider_address,
         })
 
-    # Find the "No Details Offer to Settle" letter template ID
+    # Find the "Offer to settle lien for" letter template ID
     offer_letter_id = ""
     for letter in lien_letters:
         letter_name = str(letter.get("label", letter.get("name", ""))).lower()
-        if "no details" in letter_name and "offer" in letter_name:
+        if "offer to settle lien" in letter_name:
             offer_letter_id = str(letter.get("value", letter.get("id", "")))
             break
 

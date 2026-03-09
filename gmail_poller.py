@@ -575,7 +575,8 @@ def process_thread_attachments(thread_data: Dict) -> List[Dict]:
 
 def _send_via_gmail_api(gmail_email: str, to_address: str, subject: str,
                         html_body: str, in_reply_to: str = "",
-                        references: str = "", thread_id: str = "") -> bool:
+                        references: str = "", thread_id: str = "",
+                        bcc: str = "") -> bool:
     """Send email via Gmail REST API over HTTPS (works on Render free tier)."""
     from turso_client import get_setting
     refresh_token = get_setting("gmail_oauth2_refresh_token", "")
@@ -599,6 +600,8 @@ def _send_via_gmail_api(gmail_email: str, to_address: str, subject: str,
     msg["From"] = _get_from_header(gmail_email)
     msg["To"] = to_address
     msg["Subject"] = final_subject
+    if bcc:
+        msg["Bcc"] = bcc
     if in_reply_to:
         msg["In-Reply-To"] = in_reply_to
     if references:
@@ -667,13 +670,13 @@ def _send_via_gmail_api(gmail_email: str, to_address: str, subject: str,
 def send_reply(gmail_email: str, gmail_password: str,
                to_address: str, subject: str, html_body: str,
                in_reply_to: str = "", references: str = "",
-               thread_id: str = "") -> bool:
+               thread_id: str = "", bcc: str = "") -> bool:
     """
     Send an HTML email reply. Tries Gmail REST API first (works on Render
     free tier where SMTP ports are blocked), falls back to SMTP.
     """
     # Try Gmail API first (HTTPS, no port restrictions)
-    if _send_via_gmail_api(gmail_email, to_address, subject, html_body, in_reply_to, references, thread_id):
+    if _send_via_gmail_api(gmail_email, to_address, subject, html_body, in_reply_to, references, thread_id, bcc=bcc):
         return True
 
     # Fallback: try SMTP (works on paid Render or local dev)
@@ -729,7 +732,8 @@ def send_email_with_attachment(gmail_email: str, to_address: str, subject: str,
                                attachment_filename: str = "document.pdf",
                                in_reply_to: str = "", references: str = "",
                                thread_id: str = "",
-                               content_type: str = "application/pdf") -> bool:
+                               content_type: str = "application/pdf",
+                               bcc: str = "") -> bool:
     """Send an HTML email with a file attachment via Gmail API. Supports threading."""
     from turso_client import get_setting
     refresh_token = get_setting("gmail_oauth2_refresh_token", "")
@@ -750,6 +754,8 @@ def send_email_with_attachment(gmail_email: str, to_address: str, subject: str,
     msg["From"] = _get_from_header(gmail_email)
     msg["To"] = to_address
     msg["Subject"] = final_subject
+    if bcc:
+        msg["Bcc"] = bcc
     if in_reply_to:
         msg["In-Reply-To"] = in_reply_to
     if references:
@@ -927,7 +933,11 @@ async def _poll_loop():
                             refs = rfc_references
 
                         if to_address:
-                            logger.info(f"[Poller] Sending reply to: {to_address} | Subject: {subject}")
+                            # BCC the case email so full thread shows in CasePeer
+                            _case_id_for_bcc = result.get("case_id", "")
+                            _bcc_addr = f"{_case_id_for_bcc}@bcc.casepeer.com" if _case_id_for_bcc else ""
+
+                            logger.info(f"[Poller] Sending reply to: {to_address} | Subject: {subject} | BCC: {_bcc_addr or '(none)'}")
                             logger.info(f"[Poller] Threading: threadId={thread_id} | In-Reply-To={rfc_msg_id[:50] if rfc_msg_id else '(none)'} | References={'yes' if refs else '(none)'}")
                             sent = await asyncio.to_thread(
                                 send_reply,
@@ -936,6 +946,7 @@ async def _poll_loop():
                                 in_reply_to=rfc_msg_id,
                                 references=refs,
                                 thread_id=thread_id,
+                                bcc=_bcc_addr,
                             )
                             if sent:
                                 _poller_stats["emails_replied"] += 1
@@ -996,14 +1007,7 @@ async def _poll_loop():
                             else:
                                 logger.warning("[Poller] No escalation_email configured in settings — escalation only logged")
 
-                            # Add CasePeer case note if we have the case_id
-                            if case_id:
-                                from casepeer_helpers import add_case_note
-                                await asyncio.to_thread(
-                                    add_case_note, case_id,
-                                    f"ESCALATION: AI negotiation agent escalated {provider_name} thread to human review. Reason: {reasoning[:300]}"
-                                )
-                                logger.info(f"[Poller] Escalation case note added to case {case_id}")
+                            # Case notes removed — BCC'd email thread shows full negotiation in the case
                         except Exception as esc_err:
                             logger.error(f"[Poller] Failed to process escalation: {esc_err}")
 
