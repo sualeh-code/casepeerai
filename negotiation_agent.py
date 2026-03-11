@@ -782,13 +782,33 @@ def _find_lien_id_for_provider(case_id: str, provider_name: str) -> tuple:
         treatment = json.loads(treatment_json)
 
         # Find matching provider by name (fuzzy match)
-        provider_lower = provider_name.lower()
+        # Normalize: lowercase, collapse all dash variants to hyphen, strip extra whitespace
+        import re as _re
+        def _norm(s: str) -> str:
+            s = s.lower()
+            s = _re.sub(r'[\u2010-\u2015\u2212\uFE58\uFE63\uFF0D]', '-', s)  # em/en dashes → hyphen
+            s = _re.sub(r'\s+', ' ', s).strip()
+            return s
+
+        provider_norm = _norm(provider_name)
+        all_provider_names = [p.get("provider_name", "") for p in treatment.get("providers_calculated", [])]
+        logger.info(f"[CasePeer] Looking for '{provider_name}' (norm: '{provider_norm}') among: {all_provider_names}")
         lien_id = None
         for p in treatment.get("providers_calculated", []):
-            p_name = (p.get("provider_name") or "").lower()
-            if provider_lower in p_name or p_name in provider_lower:
+            p_name = _norm(p.get("provider_name") or "")
+            if provider_norm in p_name or p_name in provider_norm:
                 lien_id = p.get("lien_id")
                 break
+        # Fallback: try matching on first significant word (e.g. "Precise" matches "Precise Imaging")
+        if not lien_id:
+            first_word = provider_norm.split()[0] if provider_norm.split() else ""
+            if first_word and len(first_word) >= 4:
+                for p in treatment.get("providers_calculated", []):
+                    p_name = _norm(p.get("provider_name") or "")
+                    if first_word in p_name:
+                        lien_id = p.get("lien_id")
+                        logger.info(f"[CasePeer] Fuzzy fallback matched '{first_word}' in '{p_name}'")
+                        break
 
         # Get the offer letter template ID
         template_id = treatment.get("offer_letter_template_id", "")
