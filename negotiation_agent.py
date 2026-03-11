@@ -742,41 +742,41 @@ def _convert_docx_to_pdf(docx_bytes: bytes) -> Optional[bytes]:
 
 
 def _patch_docx_offer_amount(docx_bytes: bytes, offered_amount: str) -> bytes:
-    """Replace $0.00 in the DOCX with the actual offer amount.
+    """Patch the offer amount in the DOCX letter.
 
-    CasePeer's autoletter template sometimes renders $0.00 when the merge field
-    isn't populated correctly. This patches the DOCX content directly.
+    CasePeer's autoletter renders the wrong amount ($0.00 or full bill).
+    Works at the raw XML level to avoid DOCX run-splitting issues.
+    Targets 'offer $X' and replaces $X with the correct amount.
     """
-    from docx import Document
+    import zipfile
     import io
 
     amount_str = f"${float(offered_amount):,.2f}"
-    doc = Document(io.BytesIO(docx_bytes))
-    patched = False
-    for para in doc.paragraphs:
-        if "$0.00" in para.text:
-            for run in para.runs:
-                if "$0.00" in run.text:
-                    run.text = run.text.replace("$0.00", amount_str)
-                    patched = True
-    for table in doc.tables:
-        for row in table.rows:
-            for cell in row.cells:
-                for para in cell.paragraphs:
-                    if "$0.00" in para.text:
-                        for run in para.runs:
-                            if "$0.00" in run.text:
-                                run.text = run.text.replace("$0.00", amount_str)
-                                patched = True
 
-    if patched:
-        logger.info(f"[DOCX] Patched $0.00 → {amount_str} in offer letter")
-    else:
-        logger.info(f"[DOCX] No $0.00 found — amount may already be correct")
+    in_buf = io.BytesIO(docx_bytes)
+    out_buf = io.BytesIO()
 
-    buf = io.BytesIO()
-    doc.save(buf)
-    return buf.getvalue()
+    with zipfile.ZipFile(in_buf, 'r') as zin, zipfile.ZipFile(out_buf, 'w') as zout:
+        for item in zin.infolist():
+            data = zin.read(item.filename)
+            if item.filename == 'word/document.xml':
+                xml_str = data.decode('utf-8')
+                original_xml = xml_str
+                # Replace any dollar amount after "offer " — handles $0.00, $6,512.70, etc.
+                # Works even if "offer" and "$X" are in the same XML text node
+                xml_str = re.sub(
+                    r'(offer\s+)\$[\d,]+\.?\d*',
+                    lambda m: m.group(1) + amount_str,
+                    xml_str
+                )
+                if xml_str != original_xml:
+                    logger.info(f"[DOCX] Patched offer amount → {amount_str}")
+                else:
+                    logger.info(f"[DOCX] No 'offer $X' pattern found to patch")
+                data = xml_str.encode('utf-8')
+            zout.writestr(item, data)
+
+    return out_buf.getvalue()
 
 
 def _generate_casepeer_offer_letter(case_id: str, lien_id: str, template_id: str, offered_amount: str = "") -> Optional[bytes]:
