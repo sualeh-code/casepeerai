@@ -1022,13 +1022,13 @@ def tool_get_settlement_page(case_id: str) -> str:
                     "amounts": amounts
                 })
 
-    # Also extract form fields for lien update
+    # Extract ALL form fields — Django requires every formset's management fields
+    # (health-liens, settlement-loans, health-insurance-liens, misc-liens, attorney-liens, etc.)
     form_data = {}
     for inp in soup.select("input[name]"):
         name = inp.get("name", "")
         value = inp.get("value", "")
-        if name.startswith("health-liens") or name == "csrfmiddlewaretoken":
-            form_data[name] = value
+        form_data[name] = value
 
     return json.dumps({
         "providers": providers,

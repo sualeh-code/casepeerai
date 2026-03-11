@@ -560,13 +560,12 @@ def get_settlement_page(case_id: str) -> Dict[str, Any]:
                     "amounts": amounts,
                 })
 
-    # Extract form fields
+    # Extract ALL form fields — Django requires every formset's management fields
     form_data = {}
     for inp in soup.select("input[name]"):
         name = inp.get("name", "")
         value = inp.get("value", "")
-        if name.startswith("health-liens") or name == "csrfmiddlewaretoken":
-            form_data[name] = value
+        form_data[name] = value
 
     return {
         "providers": providers,
