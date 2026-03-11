@@ -870,6 +870,13 @@ async def _poll_loop():
                             logger.info(f"[Poller] Skipping thread {tid[:20]} — last message is from us (awaiting provider reply)")
                             continue
 
+                    # Skip automated/system emails that aren't from real providers
+                    _SKIP_SENDERS = {"noreply@casepeer.com", "no-reply@casepeer.com", "mailer-daemon@", "noreply@google.com"}
+                    last_sender = thread_messages[-1].get("From", "").lower() if thread_messages else ""
+                    if any(skip in last_sender for skip in _SKIP_SENDERS):
+                        logger.info(f"[Poller] Skipping system email from {last_sender[:50]}")
+                        continue
+
                     _poller_stats["status"] = "processing"
                     logger.info(f"[Poller] Processing thread: {tid[:50]}")
 
