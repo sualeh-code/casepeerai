@@ -741,13 +741,52 @@ def _convert_docx_to_pdf(docx_bytes: bytes) -> Optional[bytes]:
             pass
 
 
-def _generate_casepeer_offer_letter(case_id: str, lien_id: str, template_id: str) -> Optional[bytes]:
+def _patch_docx_offer_amount(docx_bytes: bytes, offered_amount: str) -> bytes:
+    """Replace $0.00 in the DOCX with the actual offer amount.
+
+    CasePeer's autoletter template sometimes renders $0.00 when the merge field
+    isn't populated correctly. This patches the DOCX content directly.
+    """
+    from docx import Document
+    import io
+
+    amount_str = f"${float(offered_amount):,.2f}"
+    doc = Document(io.BytesIO(docx_bytes))
+    patched = False
+    for para in doc.paragraphs:
+        if "$0.00" in para.text:
+            for run in para.runs:
+                if "$0.00" in run.text:
+                    run.text = run.text.replace("$0.00", amount_str)
+                    patched = True
+    for table in doc.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                for para in cell.paragraphs:
+                    if "$0.00" in para.text:
+                        for run in para.runs:
+                            if "$0.00" in run.text:
+                                run.text = run.text.replace("$0.00", amount_str)
+                                patched = True
+
+    if patched:
+        logger.info(f"[DOCX] Patched $0.00 → {amount_str} in offer letter")
+    else:
+        logger.info(f"[DOCX] No $0.00 found — amount may already be correct")
+
+    buf = io.BytesIO()
+    doc.save(buf)
+    return buf.getvalue()
+
+
+def _generate_casepeer_offer_letter(case_id: str, lien_id: str, template_id: str, offered_amount: str = "") -> Optional[bytes]:
     """Generate an offer letter via CasePeer's built-in autoletters system.
 
     Calls /autoletters/CaseGenerateLetter/{lien_id}/{template_id}/{case_id}/
     which generates the letter in CasePeer (auto-saved) and returns the DOCX.
+    If offered_amount is provided, patches $0.00 in the DOCX with the correct amount.
     Then converts the DOCX to PDF via LibreOffice. Falls back to DOCX if conversion fails.
-    Returns (file_bytes, filename).
+    Returns (file_bytes, format_str).
     """
     from casepeer_helpers import casepeer_get_raw
     endpoint = f"autoletters/CaseGenerateLetter/{lien_id}/{template_id}/{case_id}/"
@@ -756,6 +795,13 @@ def _generate_casepeer_offer_letter(case_id: str, lien_id: str, template_id: str
         if resp.status_code == 200 and len(resp.content) > 100:
             docx_bytes = resp.content
             logger.info(f"[CasePeer] Generated offer letter via autoletters: lien={lien_id}, template={template_id}, case={case_id} ({len(docx_bytes)} bytes)")
+
+            # Patch offer amount if provided (CasePeer template often shows $0.00)
+            if offered_amount:
+                try:
+                    docx_bytes = _patch_docx_offer_amount(docx_bytes, offered_amount)
+                except Exception as e:
+                    logger.error(f"[DOCX] Failed to patch offer amount: {e}")
 
             # Convert DOCX to PDF
             pdf_bytes = _convert_docx_to_pdf(docx_bytes)
@@ -2078,7 +2124,7 @@ IMPORTANT: After using tools and gathering information, you MUST return a final 
                         file_format = None
                         if lien_id and template_id:
                             file_bytes, file_format = await asyncio.to_thread(
-                                _generate_casepeer_offer_letter, case_id, lien_id, template_id
+                                _generate_casepeer_offer_letter, case_id, lien_id, template_id, str(offered_bill)
                             )
 
                         if file_bytes:
@@ -2120,7 +2166,7 @@ IMPORTANT: After using tools and gathering information, you MUST return a final 
                             lien_id, template_id = _find_lien_id_for_provider(case_id, provider_name)
                             if lien_id and template_id:
                                 file_bytes, file_format = await asyncio.to_thread(
-                                    _generate_casepeer_offer_letter, case_id, lien_id, template_id
+                                    _generate_casepeer_offer_letter, case_id, lien_id, template_id, str(offered_bill)
                                 )
                                 if file_bytes:
                                     if file_format == "pdf":
