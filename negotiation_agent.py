@@ -959,6 +959,76 @@ def tool_get_settlement_page(case_id: str) -> str:
     })
 
 
+def _update_lien_final_cost(case_id: str, provider_name: str, amount: str) -> bool:
+    """Update final_cost for a provider on the settlement page (without toggling accept).
+
+    This must be called BEFORE generating autoletter so the letter shows the correct offer amount.
+    Uses provider_name matching (not provider_id) since that's what we have from treatment page.
+    """
+    try:
+        settlement_data = json.loads(tool_get_settlement_page(case_id))
+        form_fields = settlement_data.get("form_fields", {})
+        providers = settlement_data.get("providers", [])
+        if not form_fields:
+            logger.warning("[CasePeer] No form fields found on settlement page")
+            return False
+
+        # Find provider_id by name match
+        import re as _re
+        def _norm(s: str) -> str:
+            s = s.lower()
+            s = _re.sub(r'[\u2010-\u2015\u2212\uFE58\uFE63\uFF0D]', '-', s)
+            s = _re.sub(r'\s+', ' ', s).strip()
+            return s
+
+        provider_norm = _norm(provider_name)
+        matched_pid = None
+        for sp in providers:
+            sp_name = _norm(sp.get("provider_name") or "")
+            if provider_norm in sp_name or sp_name in provider_norm:
+                matched_pid = sp.get("provider_id")
+                break
+        # Fallback: first significant word
+        if not matched_pid:
+            first_word = provider_norm.split()[0] if provider_norm.split() else ""
+            if first_word and len(first_word) >= 4:
+                for sp in providers:
+                    sp_name = _norm(sp.get("provider_name") or "")
+                    if first_word in sp_name:
+                        matched_pid = sp.get("provider_id")
+                        break
+
+        if not matched_pid:
+            logger.warning(f"[CasePeer] Could not find provider '{provider_name}' in settlement page")
+            return False
+
+        # Update the final_cost field
+        clean_amount = re.sub(r'[^0-9.]', '', str(amount))
+        updated = False
+        for key, value in form_fields.items():
+            if key.endswith("-id") and value == matched_pid:
+                index = re.search(r'health-liens-(\d+)-id', key)
+                if index:
+                    cost_key = f"health-liens-{index.group(1)}-final_cost"
+                    form_fields[cost_key] = clean_amount
+                    updated = True
+                    break
+
+        if not updated:
+            logger.warning(f"[CasePeer] Provider ID {matched_pid} not found in form fields")
+            return False
+
+        # POST updated form
+        from casepeer_helpers import casepeer_post_form
+        form_body = "&".join(f"{quote(str(k), safe='')}={quote(str(v), safe='')}" for k, v in form_fields.items())
+        casepeer_post_form(f"case/{case_id}/settlement/negotiations/", form_body, timeout=90)
+        logger.info(f"[CasePeer] Updated final_cost to ${clean_amount} for '{provider_name}' (pid={matched_pid})")
+        return True
+    except Exception as e:
+        logger.error(f"[CasePeer] Failed to update final_cost for '{provider_name}': {e}")
+        return False
+
+
 def tool_accept_lien(case_id: str, provider_id: str, offered_amount: str) -> str:
     """Accept a lien: update the final cost and mark as accepted."""
     # Step 1: Get current form fields
@@ -1995,14 +2065,18 @@ IMPORTANT: After using tools and gathering information, you MUST return a final 
                     patient_name = result.get("patient_name", "Patient")
 
                     if offered_bill and float(offered_bill) > 0:
+                        # Update final_cost on CasePeer BEFORE generating the letter
+                        # so the autoletter template shows the correct offer amount
+                        await asyncio.to_thread(
+                            _update_lien_final_cost, case_id, provider_name, str(offered_bill)
+                        )
+
                         # Look up lien_id and template_id from CasePeer treatment page
                         lien_id, template_id = _find_lien_id_for_provider(case_id, provider_name)
 
                         file_bytes = None
                         file_format = None
                         if lien_id and template_id:
-                            # Generate letter via CasePeer's built-in autoletters (auto-saved to case)
-                            # Returns (bytes, "pdf"|"docx") — converts to PDF via LibreOffice, falls back to DOCX
                             file_bytes, file_format = await asyncio.to_thread(
                                 _generate_casepeer_offer_letter, case_id, lien_id, template_id
                             )
@@ -2039,6 +2113,10 @@ IMPORTANT: After using tools and gathering information, you MUST return a final 
                         provider_name = result.get("provider_name", "Provider")
                         patient_name = result.get("patient_name", "Patient")
                         if offered_bill and float(offered_bill) > 0:
+                            # Update final_cost before generating letter
+                            await asyncio.to_thread(
+                                _update_lien_final_cost, case_id, provider_name, str(offered_bill)
+                            )
                             lien_id, template_id = _find_lien_id_for_provider(case_id, provider_name)
                             if lien_id and template_id:
                                 file_bytes, file_format = await asyncio.to_thread(
