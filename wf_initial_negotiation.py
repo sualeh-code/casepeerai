@@ -147,6 +147,13 @@ async def run_initial_negotiation(case_id: str) -> Dict[str, Any]:
             bill_amount=bill,
         )
 
+        # Build subject with client name and DOL
+        dol_part = f" - DOL {incident_date}" if incident_date and incident_date != "N/A" else ""
+        email_subject = f"Balance Confirmation - {patient_name}{dol_part}"
+
+        # BCC the case email so thread shows in CasePeer
+        bcc_addr = f"{case_id}@bcc.casepeer.com"
+
         # Send with retry (up to 3 attempts, 5s delay)
         sent = False
         last_error = None
@@ -155,8 +162,9 @@ async def run_initial_negotiation(case_id: str) -> Dict[str, Any]:
                 sent = await asyncio.to_thread(
                     _send_via_gmail_api,
                     gmail_email, send_to,
-                    "Balance Confirmation Request",
+                    email_subject,
                     email_html,
+                    bcc=bcc_addr,
                 )
                 if sent:
                     break

@@ -321,18 +321,44 @@ WORKFLOW:
 4. Decide on the appropriate action and compose a reply if needed.
 5. Return your decision as a structured JSON response.
 
-CLASSIFICATION INTENTS:
-- "accepted" — Provider agreed to settlement verbally but has NOT returned signed offer letter
-- "rejected" — Provider declined, refused, or countered
-- "provided_details" — Provider sent payment/mailing details without explicit acceptance
-- "accepted_and_provided_details" — Provider returned signed offer letter AND/OR included payment details
-- "asked_for_clarification" — Provider is asking a question about our last message
-- "asking_for_payment" — Provider is requesting payment status
-- "bill_correction" — Provider says billed amount is wrong (unprompted)
-- "bill_confirmation" — Provider responds to our balance confirmation request
-- "no_action" — Auto-reply, bare "thank you", no response needed
-- "escalate" — Threats, legal demands, phone-only, or all tactics exhausted → route to human
-- "unclear" — Cannot determine intent
+CLASSIFICATION INTENTS — pick the ONE that best fits the provider's MOST RECENT message:
+
+- "accepted" — Provider EXPLICITLY agrees to our offer amount. They say "yes", "we accept", "let's proceed",
+  "please send the letter", "agreed", or similar clear acceptance. This triggers the system to auto-generate
+  and send the Offer to Settle letter. USE THIS when they agree — even if they also ask "what's next?"
+  Examples: "Yes, we'll accept $1,452", "Please proceed", "Ok let's do it", "Agreed, send the paperwork"
+
+- "rejected" — Provider says NO, counters with a HIGHER amount, or refuses our offer.
+  Examples: "That's too low", "We need $3,000", "We can't accept less than $2,500", "No"
+
+- "bill_confirmation" — Provider CONFIRMS or STATES their outstanding balance (in response to our initial
+  balance confirmation request OR unprompted). Any mention of a specific balance amount counts.
+  Examples: "Balance is $4,400", "Yes that's correct", "The amount owed is $5,000", "5k"
+
+- "bill_correction" — Provider says our billed amount is WRONG and provides a DIFFERENT number.
+  Examples: "Actually the balance is $3,200 not $4,400", "The bill has been adjusted to $2,800"
+
+- "accepted_and_provided_details" — Provider returned the SIGNED offer letter AND/OR sent W9/payment details.
+  This means they already accepted previously AND are now completing the paperwork. This triggers
+  auto-acceptance of the lien in CasePeer.
+
+- "provided_details" — Provider sent payment/mailing details (W9, remittance info, address) WITHOUT
+  explicitly accepting an offer. They may be getting ahead of themselves.
+
+- "asked_for_clarification" — Provider is asking a QUESTION about our offer, the process, the case,
+  or requesting something (like "can you resend the letter?"). NOT a rejection or acceptance.
+  Examples: "What does the settlement cover?", "Can you send that letter again?", "Who is this patient?"
+
+- "asking_for_payment" — Provider is asking about payment STATUS on a previously accepted lien.
+  Examples: "When will we receive payment?", "What's the status of our check?"
+
+- "no_action" — Message needs no reply: auto-reply, out-of-office, bare "thank you" with no question,
+  read receipt, marketing email, or system notification.
+
+- "escalate" — Threats of legal action, board complaints, insists on phone-only, or all tactics exhausted
+  (Round 5). Route to human. Do NOT use this just because they reject — use "rejected" instead.
+
+- "unclear" — Cannot determine intent from the message. Ask for clarification.
 
 SCENARIO REPLY GUIDELINES (use as starting points — adapt with persuasion tactics):
 
@@ -2018,6 +2044,64 @@ IMPORTANT: After using tools and gathering information, you MUST return a final 
                         logger.warning(f"[PostProcess] No offered_bill for offer letter generation")
                 except Exception as e:
                     logger.error(f"[PostProcess] Offer letter generation/send failed: {e}", exc_info=True)
+
+            # 4b. For asked_for_clarification: if the bot says it's re-sending the offer letter,
+            #     actually trigger letter generation (handles case where original send failed)
+            if intent == "asked_for_clarification":
+                reply_text = (result.get("reply_message") or "").lower()
+                if any(phrase in reply_text for phrase in ["re-sent", "resent", "re-send", "resend", "sending it now", "having it sent"]):
+                    try:
+                        offered_bill = result.get("offered_bill")
+                        provider_name = result.get("provider_name", "Provider")
+                        patient_name = result.get("patient_name", "Patient")
+                        if offered_bill and float(offered_bill) > 0:
+                            lien_id, template_id = _find_lien_id_for_provider(case_id, provider_name)
+                            if lien_id and template_id:
+                                file_bytes, file_format = await asyncio.to_thread(
+                                    _generate_casepeer_offer_letter, case_id, lien_id, template_id
+                                )
+                                if file_bytes:
+                                    if file_format == "pdf":
+                                        filename = f"Offer to Settle - {provider_name} For {patient_name}.pdf"
+                                        mime_type = "application/pdf"
+                                    else:
+                                        filename = f"Offer to Settle - {provider_name} For {patient_name}.docx"
+                                        mime_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+                                    from gmail_poller import send_email_with_attachment, _get_gmail_creds
+                                    gmail_email, _, _ = _get_gmail_creds()
+                                    provider_msg = _find_provider_message(messages)
+                                    rfc_msg_id = provider_msg.get("Message-ID", "") if provider_msg else ""
+                                    rfc_refs = provider_msg.get("References", "") if provider_msg else ""
+                                    refs = f"{rfc_refs} {rfc_msg_id}".strip() if rfc_msg_id else rfc_refs
+                                    bcc_addr = f"{case_id}@bcc.casepeer.com" if case_id else ""
+
+                                    offer_body = (
+                                        f"Please find attached the formal Offer to Settle letter for "
+                                        f"{provider_name} regarding {patient_name} in the amount of "
+                                        f"${float(offered_bill):,.2f}.</br></br>"
+                                        f"Please sign and return the attached letter, along with a completed W9 "
+                                        f"and remittance instructions, so we can process payment."
+                                    )
+                                    attach_sent = await asyncio.to_thread(
+                                        send_email_with_attachment,
+                                        gmail_email, clean_sender, thread_subject,
+                                        offer_body, file_bytes, filename,
+                                        in_reply_to=rfc_msg_id, references=refs,
+                                        thread_id=thread_data.get("thread_id", ""),
+                                        content_type=mime_type, bcc=bcc_addr,
+                                    )
+                                    if attach_sent:
+                                        actions_taken.append("auto:resend_offer_letter_email")
+                                        logger.info(f"[PostProcess] Re-sent offer letter to {clean_sender}")
+                                    else:
+                                        logger.error(f"[PostProcess] Failed to re-send offer letter to {clean_sender}")
+                                else:
+                                    logger.warning(f"[PostProcess] Re-send: autoletters failed for {provider_name}")
+                            else:
+                                logger.warning(f"[PostProcess] Re-send: could not find lien/template for {provider_name}")
+                    except Exception as e:
+                        logger.error(f"[PostProcess] Offer letter re-send failed: {e}", exc_info=True)
 
             # 5. For accepted_and_provided_details: provider returned signed letter — auto-accept lien
             #    (provider confirmed acceptance + payment details). Plain "accepted" just logs —
