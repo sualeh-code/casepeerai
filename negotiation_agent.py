@@ -2029,7 +2029,7 @@ IMPORTANT: After using tools and gathering information, you MUST return a final 
                                 offer_body, file_bytes, filename,
                                 in_reply_to=rfc_msg_id,
                                 references=refs,
-                                thread_id=thread_data.get("thread_id", ""),
+                                thread_id=thread_id,
                                 content_type=mime_type,
                                 bcc=bcc_addr,
                             )
@@ -2088,7 +2088,7 @@ IMPORTANT: After using tools and gathering information, you MUST return a final 
                                         gmail_email, clean_sender, thread_subject,
                                         offer_body, file_bytes, filename,
                                         in_reply_to=rfc_msg_id, references=refs,
-                                        thread_id=thread_data.get("thread_id", ""),
+                                        thread_id=thread_id,
                                         content_type=mime_type, bcc=bcc_addr,
                                     )
                                     if attach_sent:
