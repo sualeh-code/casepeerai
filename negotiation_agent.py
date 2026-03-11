@@ -2169,6 +2169,12 @@ IMPORTANT: After using tools and gathering information, you MUST return a final 
                 except Exception as e:
                     logger.error(f"[PostProcess] PDF attachment upload failed: {e}")
 
+        # If we already sent the offer letter with attachment, suppress the plain reply
+        # to avoid sending two emails in the same thread
+        if any(a in actions_taken for a in ("auto:send_offer_letter_email", "auto:resend_offer_letter_email")):
+            result["reply_message"] = None
+            logger.info("[PostProcess] Suppressed plain reply — offer letter already sent with attachment")
+
         # Save conversation history for future continuity
         _save_conversation_history(
             discovered_case_id, clean_sender,
