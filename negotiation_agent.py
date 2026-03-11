@@ -745,38 +745,70 @@ def _patch_docx_offer_amount(docx_bytes: bytes, offered_amount: str) -> bytes:
     """Patch the offer amount in the DOCX letter.
 
     CasePeer's autoletter renders the wrong amount ($0.00 or full bill).
-    Works at the raw XML level to avoid DOCX run-splitting issues.
-    Targets 'offer $X' and replaces $X with the correct amount.
+    Uses two strategies:
+    1. Regex on raw XML for 'offer $X' in same text node
+    2. Find paragraph containing 'offer' via python-docx and replace the dollar amount
     """
-    import zipfile
     import io
-
     amount_str = f"${float(offered_amount):,.2f}"
 
-    in_buf = io.BytesIO(docx_bytes)
-    out_buf = io.BytesIO()
+    # Strategy: use python-docx to find the paragraph with "offer" and patch the amount
+    from docx import Document
+    doc = Document(io.BytesIO(docx_bytes))
+    patched = False
 
-    with zipfile.ZipFile(in_buf, 'r') as zin, zipfile.ZipFile(out_buf, 'w') as zout:
-        for item in zin.infolist():
-            data = zin.read(item.filename)
-            if item.filename == 'word/document.xml':
-                xml_str = data.decode('utf-8')
-                original_xml = xml_str
-                # Replace any dollar amount after "offer " — handles $0.00, $6,512.70, etc.
-                # Works even if "offer" and "$X" are in the same XML text node
-                xml_str = re.sub(
-                    r'(offer\s+)\$[\d,]+\.?\d*',
-                    lambda m: m.group(1) + amount_str,
-                    xml_str
-                )
-                if xml_str != original_xml:
-                    logger.info(f"[DOCX] Patched offer amount → {amount_str}")
-                else:
-                    logger.info(f"[DOCX] No 'offer $X' pattern found to patch")
-                data = xml_str.encode('utf-8')
-            zout.writestr(item, data)
+    for para in doc.paragraphs:
+        full_text = para.text
+        # Look for the paragraph containing "allowed us to offer $X"
+        if "offer" in full_text.lower() and "$" in full_text:
+            # Find the dollar amount in this paragraph that follows "offer"
+            match = re.search(r'offer\s+\$[\d,]+\.?\d*', full_text, re.IGNORECASE)
+            if match:
+                wrong_amount = re.search(r'\$[\d,]+\.?\d*', match.group()).group()
+                if wrong_amount != amount_str:
+                    # Replace in the runs
+                    for run in para.runs:
+                        if wrong_amount in run.text:
+                            run.text = run.text.replace(wrong_amount, amount_str)
+                            patched = True
+                            break
+                    # If amount was split across runs or in a single run with "$"
+                    if not patched:
+                        # Try replacing just the numeric part after $
+                        wrong_num = wrong_amount[1:]  # strip $
+                        correct_num = amount_str[1:]
+                        for run in para.runs:
+                            if wrong_num in run.text:
+                                run.text = run.text.replace(wrong_num, correct_num)
+                                patched = True
+                                break
+                    if patched:
+                        logger.info(f"[DOCX] Patched offer {wrong_amount} → {amount_str}")
+                        break
 
-    return out_buf.getvalue()
+    if not patched:
+        logger.warning(f"[DOCX] Could not find offer amount to patch in paragraphs, trying raw XML")
+        # Fallback: raw XML replacement for $0.00 specifically (safe — no provider shows $0.00)
+        import zipfile
+        in_buf = io.BytesIO(docx_bytes)
+        out_buf = io.BytesIO()
+        with zipfile.ZipFile(in_buf, 'r') as zin, zipfile.ZipFile(out_buf, 'w') as zout:
+            for item in zin.infolist():
+                data = zin.read(item.filename)
+                if item.filename == 'word/document.xml':
+                    xml_str = data.decode('utf-8')
+                    original = xml_str
+                    xml_str = xml_str.replace('$0.00', amount_str)
+                    if xml_str != original:
+                        logger.info(f"[DOCX] Patched $0.00 → {amount_str} via raw XML")
+                        patched = True
+                    data = xml_str.encode('utf-8')
+                zout.writestr(item, data)
+        return out_buf.getvalue()
+
+    buf = io.BytesIO()
+    doc.save(buf)
+    return buf.getvalue()
 
 
 def _generate_casepeer_offer_letter(case_id: str, lien_id: str, template_id: str, offered_amount: str = "") -> Optional[bytes]:
