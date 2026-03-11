@@ -1098,8 +1098,16 @@ def _update_lien_final_cost(case_id: str, provider_name: str, amount: str) -> bo
 
         # POST updated form
         from casepeer_helpers import casepeer_post_form
+        # Log the field being changed
+        cost_key_log = f"health-liens-{index.group(1)}-final_cost" if index else "?"
+        logger.info(f"[CasePeer] Updating {cost_key_log}={clean_amount} for '{provider_name}' (pid={matched_pid})")
+        logger.info(f"[CasePeer] Form has {len(form_fields)} fields, CSRF={'yes' if form_fields.get('csrfmiddlewaretoken') else 'NO'}")
         form_body = "&".join(f"{quote(str(k), safe='')}={quote(str(v), safe='')}" for k, v in form_fields.items())
-        casepeer_post_form(f"case/{case_id}/settlement/negotiations/", form_body, timeout=90)
+        resp = casepeer_post_form(f"case/{case_id}/settlement/negotiations/", form_body, timeout=90)
+        logger.info(f"[CasePeer] Settlement POST response: status={resp.status_code}, len={len(resp.text)}, url={resp.url}")
+        if resp.status_code >= 400:
+            logger.error(f"[CasePeer] Settlement POST FAILED: {resp.text[:500]}")
+            return False
         logger.info(f"[CasePeer] Updated final_cost to ${clean_amount} for '{provider_name}' (pid={matched_pid})")
         return True
     except Exception as e:
