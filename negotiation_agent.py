@@ -2018,46 +2018,10 @@ IMPORTANT: After using tools and gathering information, you MUST return a final 
                             actions_taken.append(f"auto:casepeer_offer_letter(lien={lien_id}, format={file_format})")
                             logger.info(f"[PostProcess] CasePeer generated offer letter for {provider_name} ({len(file_bytes)} bytes, {file_format})")
 
-                            # Send as attachment in the same email thread
-                            from gmail_poller import send_email_with_attachment, _get_gmail_creds
-                            gmail_email, _, _ = _get_gmail_creds()
-
-                            provider_msg = _find_provider_message(messages)
-                            rfc_msg_id = provider_msg.get("Message-ID", "") if provider_msg else ""
-                            rfc_refs = provider_msg.get("References", "") if provider_msg else ""
-                            if rfc_msg_id:
-                                refs = f"{rfc_refs} {rfc_msg_id}".strip() if rfc_refs else rfc_msg_id
-                            else:
-                                refs = rfc_refs
-
-                            offer_body = (
-                                f"Thank you for accepting our settlement offer.</br></br>"
-                                f"Please find attached our formal Offer to Settle letter for the lien of "
-                                f"{provider_name} regarding {patient_name} in the amount of "
-                                f"${float(offered_bill):,.2f}.</br></br>"
-                                f"To finalize, please sign the attached letter and return it to our office "
-                                f"via email, along with a completed W9 and remittance instructions. "
-                                f"Once we receive the signed letter, we will process payment accordingly."
-                            )
-
-                            # BCC the case email so offer letter shows in CasePeer
-                            bcc_addr = f"{case_id}@bcc.casepeer.com" if case_id else ""
-
-                            attach_sent = await asyncio.to_thread(
-                                send_email_with_attachment,
-                                gmail_email, clean_sender, thread_subject,
-                                offer_body, file_bytes, filename,
-                                in_reply_to=rfc_msg_id,
-                                references=refs,
-                                thread_id=thread_id,
-                                content_type=mime_type,
-                                bcc=bcc_addr,
-                            )
-                            if attach_sent:
-                                actions_taken.append("auto:send_offer_letter_email")
-                                logger.info(f"[PostProcess] Sent offer letter ({file_format}) to {clean_sender} for signing")
-                            else:
-                                logger.error(f"[PostProcess] Failed to send offer letter to {clean_sender}")
+                            # Store attachment in result — poller will send ONE email with reply + attachment
+                            result["_attachment_bytes"] = file_bytes
+                            result["_attachment_filename"] = filename
+                            result["_attachment_content_type"] = mime_type
                         else:
                             logger.warning(f"[PostProcess] CasePeer autoletters failed — lien_id={lien_id}, template_id={template_id}")
                     else:
@@ -2088,34 +2052,11 @@ IMPORTANT: After using tools and gathering information, you MUST return a final 
                                         filename = f"Offer to Settle - {provider_name} For {patient_name}.docx"
                                         mime_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
-                                    from gmail_poller import send_email_with_attachment, _get_gmail_creds
-                                    gmail_email, _, _ = _get_gmail_creds()
-                                    provider_msg = _find_provider_message(messages)
-                                    rfc_msg_id = provider_msg.get("Message-ID", "") if provider_msg else ""
-                                    rfc_refs = provider_msg.get("References", "") if provider_msg else ""
-                                    refs = f"{rfc_refs} {rfc_msg_id}".strip() if rfc_msg_id else rfc_refs
-                                    bcc_addr = f"{case_id}@bcc.casepeer.com" if case_id else ""
-
-                                    offer_body = (
-                                        f"Please find attached the formal Offer to Settle letter for "
-                                        f"{provider_name} regarding {patient_name} in the amount of "
-                                        f"${float(offered_bill):,.2f}.</br></br>"
-                                        f"Please sign and return the attached letter, along with a completed W9 "
-                                        f"and remittance instructions, so we can process payment."
-                                    )
-                                    attach_sent = await asyncio.to_thread(
-                                        send_email_with_attachment,
-                                        gmail_email, clean_sender, thread_subject,
-                                        offer_body, file_bytes, filename,
-                                        in_reply_to=rfc_msg_id, references=refs,
-                                        thread_id=thread_id,
-                                        content_type=mime_type, bcc=bcc_addr,
-                                    )
-                                    if attach_sent:
-                                        actions_taken.append("auto:resend_offer_letter_email")
-                                        logger.info(f"[PostProcess] Re-sent offer letter to {clean_sender}")
-                                    else:
-                                        logger.error(f"[PostProcess] Failed to re-send offer letter to {clean_sender}")
+                                    # Store attachment in result — poller will send ONE email with reply + attachment
+                                    result["_attachment_bytes"] = file_bytes
+                                    result["_attachment_filename"] = filename
+                                    result["_attachment_content_type"] = mime_type
+                                    logger.info(f"[PostProcess] Prepared re-send offer letter for {provider_name} ({len(file_bytes)} bytes)")
                                 else:
                                     logger.warning(f"[PostProcess] Re-send: autoletters failed for {provider_name}")
                             else:
@@ -2168,12 +2109,6 @@ IMPORTANT: After using tools and gathering information, you MUST return a final 
                                 logger.error(f"[PostProcess] PDF attachment upload failed: {upload_result.get('error')}")
                 except Exception as e:
                     logger.error(f"[PostProcess] PDF attachment upload failed: {e}")
-
-        # If we already sent the offer letter with attachment, suppress the plain reply
-        # to avoid sending two emails in the same thread
-        if any(a in actions_taken for a in ("auto:send_offer_letter_email", "auto:resend_offer_letter_email")):
-            result["reply_message"] = None
-            logger.info("[PostProcess] Suppressed plain reply — offer letter already sent with attachment")
 
         # Save conversation history for future continuity
         _save_conversation_history(

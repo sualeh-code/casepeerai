@@ -939,15 +939,31 @@ async def _poll_loop():
 
                             logger.info(f"[Poller] Sending reply to: {to_address} | Subject: {subject} | BCC: {_bcc_addr or '(none)'}")
                             logger.info(f"[Poller] Threading: threadId={thread_id} | In-Reply-To={rfc_msg_id[:50] if rfc_msg_id else '(none)'} | References={'yes' if refs else '(none)'}")
-                            sent = await asyncio.to_thread(
-                                send_reply,
-                                gmail_email, gmail_password,
-                                to_address, subject, reply_message,
-                                in_reply_to=rfc_msg_id,
-                                references=refs,
-                                thread_id=thread_id,
-                                bcc=_bcc_addr,
-                            )
+
+                            # If agent prepared an attachment, send reply + attachment as one email
+                            _attach_bytes = result.get("_attachment_bytes")
+                            if _attach_bytes:
+                                _attach_name = result.get("_attachment_filename", "document.pdf")
+                                _attach_ct = result.get("_attachment_content_type", "application/pdf")
+                                logger.info(f"[Poller] Sending reply WITH attachment: {_attach_name}")
+                                sent = await asyncio.to_thread(
+                                    send_email_with_attachment,
+                                    gmail_email, to_address, subject,
+                                    reply_message, _attach_bytes, _attach_name,
+                                    in_reply_to=rfc_msg_id, references=refs,
+                                    thread_id=thread_id,
+                                    content_type=_attach_ct, bcc=_bcc_addr,
+                                )
+                            else:
+                                sent = await asyncio.to_thread(
+                                    send_reply,
+                                    gmail_email, gmail_password,
+                                    to_address, subject, reply_message,
+                                    in_reply_to=rfc_msg_id,
+                                    references=refs,
+                                    thread_id=thread_id,
+                                    bcc=_bcc_addr,
+                                )
                             if sent:
                                 _poller_stats["emails_replied"] += 1
                                 # Log outgoing reply to negotiations table
