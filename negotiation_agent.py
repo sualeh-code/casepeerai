@@ -1110,125 +1110,30 @@ async def _upload_thread_pdf(case_id: str, messages: List[Dict], subject: str, p
 
 
 def tool_get_treatment_page(case_id: str) -> str:
-    """Scrape the CasePeer treatment page and extract provider/bill data with offer calculations."""
-    result = _casepeer_get(f"case/{case_id}/medical/treatment/")
-    html = result.get("response", "") if isinstance(result, dict) else ""
-    if not html:
-        return json.dumps({"error": "No HTML returned from treatment page"})
+    """Scrape the CasePeer treatment page and extract provider/bill data with offer calculations.
 
-    soup = BeautifulSoup(html, "html.parser")
+    Delegates to casepeer_helpers.get_treatment_providers() which properly handles
+    JSON.parse(...) extraction and the nested HEALTH_LIENS_DATA structure.
+    """
+    from casepeer_helpers import get_treatment_providers
+    try:
+        data = get_treatment_providers(case_id)
+        if "error" in data:
+            return json.dumps(data)
 
-    # --- Extract patient info from page ---
-    patient_name = ""
-    patient_dob = ""
-    incident_date = ""
-
-    # Patient name from panel-title
-    panel_title = soup.select_one(".panel-title")
-    if panel_title:
-        patient_name = panel_title.get_text(strip=True)
-
-    # --- Extract HEALTH_LIENS_DATA from embedded script ---
-    health_liens_data = []
-    lien_letters = []
-    for script in soup.select("script"):
-        script_text = script.string or ""
-        # window.HEALTH_LIENS_DATA = [...]
-        liens_match = re.search(r'window\.HEALTH_LIENS_DATA\s*=\s*(\[.*?\]);', script_text, re.DOTALL)
-        if liens_match:
-            try:
-                health_liens_data = json.loads(liens_match.group(1))
-            except json.JSONDecodeError:
-                pass
-
-        # window.LIEN_LETTERS = [...]
-        letters_match = re.search(r'window\.LIEN_LETTERS\s*=\s*(\[.*?\]);', script_text, re.DOTALL)
-        if letters_match:
-            try:
-                lien_letters = json.loads(letters_match.group(1))
-            except json.JSONDecodeError:
-                pass
-
-    # --- Extract provider rows from treatment page HTML ---
-    providers = []
-
-    # Look for provider sections (MuiTypography or similar)
-    provider_sections = soup.select(".MuiTypography-root.sc-dSCufp.lfDujM.MuiTypography-body1")
-    if not provider_sections:
-        # Fallback: try table rows
-        provider_sections = soup.select("tr")
-
-    # Parse provider data from the treatment table
-    rows = soup.select("table tr, .treatment-row, [class*='provider']")
-    for row in rows:
-        cells = row.select("td")
-        if len(cells) >= 2:
-            # Try to extract provider name and amounts
-            text = row.get_text(separator=" ", strip=True)
-            amounts = re.findall(r'\$[\d,]+\.?\d*', text)
-            name_cell = cells[0] if cells else None
-            if name_cell:
-                name = name_cell.get_text(strip=True)
-                if name and len(name) > 2:
-                    providers.append({
-                        "name": name,
-                        "amounts_raw": amounts,
-                        "row_text": text[:200]
-                    })
-
-    # --- Calculate offers for each provider based on n8n logic ---
-    # MRI = $400, X-Ray/Xray = $50, others = 2/3 of 33% of bill
-    calculated_providers = []
-    for lien in health_liens_data:
-        provider_name = lien.get("provider_name", lien.get("name", "Unknown"))
-        category = lien.get("category", "")
-        bill_amount_str = str(lien.get("bill_amount", lien.get("amount", "0")))
-        bill_amount = float(re.sub(r'[^0-9.]', '', bill_amount_str) or "0")
-
-        # Determine offer
-        is_mri = "mri" in category.lower() or "mri" in provider_name.lower()
-        is_xray = "x-ray" in category.lower() or "xray" in category.lower() or "x-ray" in provider_name.lower()
-
-        if is_mri:
-            offered = 400.0
-            offer_reason = "MRI fixed rate"
-        elif is_xray:
-            offered = 50.0
-            offer_reason = "X-Ray fixed rate"
-        else:
-            max_offer = bill_amount * 0.33
-            offered = round(max_offer * (2 / 3), 2)
-            offer_reason = "2/3 of 33% of bill"
-
-        calculated_providers.append({
-            "provider_name": provider_name,
-            "category": category,
-            "bill_amount": bill_amount,
-            "offered_amount": offered,
-            "max_offer_33pct": round(bill_amount * 0.33, 2),
-            "offer_reason": offer_reason,
-            "lien_id": str(lien.get("id", "")),
+        # Reshape to match what the agent expects
+        return json.dumps({
+            "patient_name": data.get("patient_name", ""),
+            "patient_dob": data.get("patient_dob", ""),
+            "incident_date": data.get("incident_date", ""),
+            "health_liens_count": data.get("health_liens_count", 0),
+            "providers_calculated": data.get("providers", []),
+            "lien_letters": data.get("lien_letters", []),
+            "offer_letter_template_id": data.get("offer_letter_template_id", ""),
         })
-
-    # Find the "Offer to settle lien for" letter template ID
-    offer_letter_id = ""
-    for letter in lien_letters:
-        letter_label = (letter.get("label") or letter.get("name") or "").lower()
-        if "offer to settle lien" in letter_label:
-            offer_letter_id = str(letter.get("value") or letter.get("id") or "")
-            break
-
-    return json.dumps({
-        "patient_name": patient_name,
-        "patient_dob": patient_dob,
-        "incident_date": incident_date,
-        "health_liens_count": len(health_liens_data),
-        "health_liens_raw": health_liens_data[:20],  # cap at 20 to avoid token bloat
-        "providers_calculated": calculated_providers,
-        "lien_letters": [{"id": l.get("id"), "name": l.get("name"), "label": l.get("label"), "value": l.get("value")} for l in lien_letters],
-        "offer_letter_template_id": offer_letter_id,
-        "html_providers": providers[:20],
-    })
+    except Exception as e:
+        logger.error(f"[Agent] get_treatment_page failed: {e}")
+        return json.dumps({"error": str(e)})
 
 
 def tool_generate_bill_correction_pdf(case_id: str, letter_type: str, patient_name: str,
@@ -1863,7 +1768,7 @@ INSTRUCTIONS:
 5. Return your final decision as a JSON object with these fields:
    - intent: the classification
    - reply_message: the HTML email to send back (or null if no reply needed)
-   - provider_name: extracted from the conversation
+   - provider_name: the MEDICAL FACILITY or COMPANY name (e.g. "Methodist Hospital", "Precise Imaging"), NOT the contact person's name. Extract from the email subject, our initial outreach, or the negotiation context.
    - patient_name: extracted from the conversation
    - actual_bill: the provider's total bill amount (number, e.g. 1500.00)
    - offered_bill: the settlement amount being discussed (number, e.g. 450.00)
