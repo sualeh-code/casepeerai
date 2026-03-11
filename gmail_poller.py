@@ -891,6 +891,40 @@ async def _poll_loop():
 
                     logger.info(f"[Poller] Agent result: intent={intent}, reply={'yes' if reply_message else 'no'}")
 
+                    # Forward provider's incoming email to CasePeer so both sides are saved
+                    _fwd_case_id = result.get("case_id", "")
+                    if _fwd_case_id:
+                        try:
+                            _fwd_messages = thread_data.get("messages", [])
+                            _fwd_provider_msg = None
+                            for m in reversed(_fwd_messages):
+                                if gmail_email.lower() not in m.get("From", "").lower():
+                                    _fwd_provider_msg = m
+                                    break
+                            if _fwd_provider_msg:
+                                _fwd_from = _fwd_provider_msg.get("From", "Unknown")
+                                _fwd_subject = _fwd_provider_msg.get("Subject", "")
+                                _fwd_body_html = _fwd_provider_msg.get("body_html", "") or _fwd_provider_msg.get("body", "")
+                                _fwd_date = _fwd_provider_msg.get("Date", "")
+                                # Build forwarded email body
+                                _fwd_html = (
+                                    f"<p><strong>---------- Forwarded Provider Email ----------</strong></p>"
+                                    f"<p><strong>From:</strong> {_fwd_from}<br>"
+                                    f"<strong>Date:</strong> {_fwd_date}<br>"
+                                    f"<strong>Subject:</strong> {_fwd_subject}</p>"
+                                    f"<hr>{_fwd_body_html}"
+                                )
+                                _fwd_to = f"{_fwd_case_id}@bcc.casepeer.com"
+                                await asyncio.to_thread(
+                                    _send_via_gmail_api,
+                                    gmail_email, _fwd_to,
+                                    f"Fwd: {_fwd_subject}",
+                                    _fwd_html,
+                                )
+                                logger.info(f"[Poller] Forwarded provider email to CasePeer: {_fwd_to}")
+                        except Exception as _fwd_err:
+                            logger.error(f"[Poller] Failed to forward provider email to CasePeer: {_fwd_err}")
+
                     # Send reply if the agent generated one
                     if reply_message and intent not in ("no_action", "escalate"):
                         thread_messages = thread_data.get("messages", [])
