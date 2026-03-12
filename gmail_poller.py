@@ -58,7 +58,7 @@ _poller_stats = {
 # Track recently processed threads to avoid duplicate processing
 # Key: thread_id, Value: timestamp of last processing
 _recently_processed: Dict[str, float] = {}
-THREAD_COOLDOWN_SECONDS = 300  # 5 minutes between processing same thread
+THREAD_COOLDOWN_SECONDS = 60  # 1 minute between processing same thread
 
 
 def get_poller_stats() -> Dict[str, Any]:
