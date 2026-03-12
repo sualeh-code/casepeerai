@@ -913,6 +913,8 @@ async def _poll_loop():
                                 _fwd_subject = _fwd_provider_msg.get("Subject", "")
                                 _fwd_body_html = _fwd_provider_msg.get("_decoded_body", "")
                                 _fwd_date = _fwd_provider_msg.get("Date", "")
+                                logger.info(f"[Poller] Fwd body length: {len(_fwd_body_html)}, snippet: {_fwd_provider_msg.get('snippet', '')[:100]}")
+                                logger.info(f"[Poller] Fwd msg keys: {list(_fwd_provider_msg.keys())}")
                                 # Build forwarded email body
                                 _fwd_html = (
                                     f"<p><strong>---------- Forwarded Provider Email ----------</strong></p>"
