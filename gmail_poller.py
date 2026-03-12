@@ -911,7 +911,7 @@ async def _poll_loop():
                             if _fwd_provider_msg:
                                 _fwd_from = _fwd_provider_msg.get("From", "Unknown")
                                 _fwd_subject = _fwd_provider_msg.get("Subject", "")
-                                _fwd_body_html = _fwd_provider_msg.get("body_html", "") or _fwd_provider_msg.get("body", "")
+                                _fwd_body_html = _fwd_provider_msg.get("_decoded_body", "")
                                 _fwd_date = _fwd_provider_msg.get("Date", "")
                                 # Build forwarded email body
                                 _fwd_html = (
