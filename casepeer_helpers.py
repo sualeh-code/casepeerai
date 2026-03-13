@@ -481,10 +481,12 @@ def get_treatment_providers(case_id: str) -> Dict[str, Any]:
         bill = parse_dollar_amount(bill_str)
 
         # Detect MRI/X-Ray from name or specialties
+        # Note: "radiology" and "imaging" are too broad — could be MRI, CT, ultrasound, etc.
+        # Only match explicit "x-ray"/"xray" in name or specialties.
         name_lower = name.lower()
         is_mri = "mri" in name_lower or "mri" in specialties
         is_xray = any(x in name_lower for x in ["x-ray", "xray"]) or \
-                   any(x in specialties for x in ["x-ray", "xray", "radiology"])
+                   any(x in specialties for x in ["x-ray", "xray"])
 
         if is_mri:
             offered = min(400.0, bill)

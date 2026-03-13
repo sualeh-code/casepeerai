@@ -471,19 +471,23 @@ def analyze_pdf_with_gemini(pdf_bytes: bytes, filename: str = "attachment.pdf") 
     pdf_b64 = base64.standard_b64encode(pdf_bytes).decode("ascii")
 
     prompt = (
-        "Extract exactly three dollar amounts from this legal settlement letter and return "
+        "Analyze this legal settlement/offer letter PDF and return "
         "ONLY a valid JSON object with no markdown, no explanation, no extra text.\n\n"
-        "Rules:\n"
+        "Extract these fields:\n"
         '- "originalBill" = the amount billed to the specific patient (labeled as the amount billed to [patient name])\n'
         '- "offeredAmount" = the settlement offer amount made to the provider\n'
-        '- "totalBill" = the "Total Medical Bills" amount\n\n'
+        '- "totalBill" = the "Total Medical Bills" amount\n'
+        '- "isSigned" = true if the document has a handwritten signature, digital signature, '
+        'or any visible signature mark in the signature area. false if the signature line is blank/empty.\n'
+        '- "signerName" = the name of the person who signed (if readable), or null if not signed or unreadable\n\n'
         "CRITICAL:\n"
         '- Strip any "$" or "$$" symbols before parsing numbers\n'
         "- Preserve decimal points exactly as written (e.g. 41,722.80 → 41722.80, NOT 41722080)\n"
         "- Remove commas from numbers (e.g. 41,722.80 → 41722.80)\n"
-        "- Return numbers as JSON numbers, not strings\n\n"
+        "- Return numbers as JSON numbers, not strings\n"
+        '- "isSigned" must be a boolean (true/false), not a string\n\n'
         'Output format (and nothing else):\n'
-        '{"originalBill": 0.00, "offeredAmount": 0.00, "totalBill": 0.00}'
+        '{"originalBill": 0.00, "offeredAmount": 0.00, "totalBill": 0.00, "isSigned": false, "signerName": null}'
     )
 
     try:

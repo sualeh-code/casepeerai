@@ -584,7 +584,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "get_treatment_page",
-            "description": "Scrape the CasePeer treatment page for a case. Returns all providers with their names, categories, procedures, bill amounts, and calculated offer amounts (MRI=$400, X-Ray=$50, others=2/3 of 33% of bill). Also returns health lien IDs and letter template IDs.",
+            "description": "Scrape the CasePeer treatment page for a case. Returns all providers with their names, categories, procedures, bill amounts, and calculated offer amounts (MRI=$400, explicit X-Ray=$50, others=2/3 of 33% of bill). Also returns health lien IDs and letter template IDs.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1941,6 +1941,9 @@ KNOWN PROVIDER CONTEXT (from database — this provider has prior negotiations):
                 pdf_context += f"  Original Bill: ${analysis.get('originalBill', 'N/A')}\n"
                 pdf_context += f"  Offered Amount: ${analysis.get('offeredAmount', 'N/A')}\n"
                 pdf_context += f"  Total Medical Bills: ${analysis.get('totalBill', 'N/A')}\n"
+                pdf_context += f"  Document Signed: {'YES' if analysis.get('isSigned') else 'NO'}\n"
+                if analysis.get('signerName'):
+                    pdf_context += f"  Signer Name: {analysis.get('signerName')}\n"
             else:
                 pdf_context += "  (Gemini could not extract amounts from this PDF)\n"
         pdf_context += "\nUse these amounts when they are relevant to the negotiation (e.g. verifying bills, checking offers against the 33% cap).\n"
@@ -2232,29 +2235,44 @@ IMPORTANT: After using tools and gathering information, you MUST return a final 
             #    (provider confirmed acceptance + payment details). Plain "accepted" just logs —
             #    we need payment details before toggling the lien in CasePeer.
             if intent == "accepted_and_provided_details":
-                try:
-                    settlement_json = tool_get_settlement_page(case_id)
-                    settlement = json.loads(settlement_json)
-                    providers_list = settlement.get("providers", [])
-                    provider_name_lower = (result.get("provider_name") or "").lower()
+                # Check if any PDF attachment is actually signed
+                pdf_analyses = thread_data.get("_pdf_analyses", [])
+                has_signed_pdf = False
+                for pa in pdf_analyses:
+                    analysis = pa.get("analysis") or {}
+                    if analysis.get("isSigned"):
+                        has_signed_pdf = True
+                        signer = analysis.get("signerName", "unknown")
+                        logger.info(f"[PostProcess] Verified signed PDF: '{pa.get('filename')}' signed by: {signer}")
+                        break
 
-                    # Match provider by name (fuzzy)
-                    matched_provider = None
-                    for sp in providers_list:
-                        sp_name = (sp.get("provider_name") or "").lower()
-                        if provider_name_lower and (provider_name_lower in sp_name or sp_name in provider_name_lower):
-                            matched_provider = sp
-                            break
+                if pdf_analyses and not has_signed_pdf:
+                    logger.warning(f"[PostProcess] PDF attachment(s) found but NONE are signed — skipping auto-accept")
+                    actions_taken.append("auto:skip_accept_lien(reason=unsigned_pdf)")
+                else:
+                    try:
+                        settlement_json = tool_get_settlement_page(case_id)
+                        settlement = json.loads(settlement_json)
+                        providers_list = settlement.get("providers", [])
+                        provider_name_lower = (result.get("provider_name") or "").lower()
 
-                    if matched_provider:
-                        offered = result.get("offered_bill") or "0"
-                        accept_result = tool_accept_lien(case_id, matched_provider["provider_id"], str(offered))
-                        actions_taken.append(f"auto:accept_lien(provider_id={matched_provider['provider_id']}, amount={offered})")
-                        logger.info(f"[PostProcess] Accepted lien for {matched_provider.get('provider_name')} | {accept_result[:200]}")
-                    else:
-                        logger.warning(f"[PostProcess] Could not match provider '{result.get('provider_name')}' in settlement page ({len(providers_list)} providers)")
-                except Exception as e:
-                    logger.error(f"[PostProcess] accept_lien flow failed: {e}")
+                        # Match provider by name (fuzzy)
+                        matched_provider = None
+                        for sp in providers_list:
+                            sp_name = (sp.get("provider_name") or "").lower()
+                            if provider_name_lower and (provider_name_lower in sp_name or sp_name in provider_name_lower):
+                                matched_provider = sp
+                                break
+
+                        if matched_provider:
+                            offered = result.get("offered_bill") or "0"
+                            accept_result = tool_accept_lien(case_id, matched_provider["provider_id"], str(offered))
+                            actions_taken.append(f"auto:accept_lien(provider_id={matched_provider['provider_id']}, amount={offered})")
+                            logger.info(f"[PostProcess] Accepted lien for {matched_provider.get('provider_name')} | {accept_result[:200]}")
+                        else:
+                            logger.warning(f"[PostProcess] Could not match provider '{result.get('provider_name')}' in settlement page ({len(providers_list)} providers)")
+                    except Exception as e:
+                        logger.error(f"[PostProcess] accept_lien flow failed: {e}")
 
             # Upload PDF attachments for both accepted intents
             if intent in ("accepted", "accepted_and_provided_details"):
