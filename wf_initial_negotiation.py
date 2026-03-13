@@ -217,20 +217,9 @@ async def run_initial_negotiation(case_id: str) -> Dict[str, Any]:
             skipped_list.append({"provider": name, "reason": f"send failed: {last_error}"})
             logger.error(f"[InitialNeg] Failed to send to {send_to}: {last_error}")
 
-    # 4. Log to Turso + save conversation history for agent continuity
-    from turso_client import turso
+    # 4. Save conversation history for agent continuity
     import json
     for item in sent_list:
-        try:
-            turso.execute(
-                'INSERT INTO negotiations (case_id, negotiation_type, "to", email_body, date, actual_bill, offered_bill, sent_by_us, result) VALUES (?, ?, ?, ?, datetime(\'now\'), ?, ?, 1, ?)',
-                [case_id, "Balance Confirmation", item["email"],
-                 f"[{item['provider']}] Balance confirmation email sent",
-                 item["bill"], 0.0, "Awaiting Confirmation"]
-            )
-        except Exception as e:
-            logger.error(f"[InitialNeg] Failed to log: {e}")
-
         # Save initial outbound email to conversation_history so the agent
         # has context when the provider replies (keyed by case_id + provider_email)
         try:

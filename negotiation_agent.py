@@ -903,42 +903,73 @@ def _find_lien_id_for_provider(case_id: str, provider_name: str) -> tuple:
 
 
 def _update_case_stats(case_id: str):
-    """Recalculate and update case-level stats from the negotiations table.
+    """Recalculate and update case-level stats from conversation_history.
 
-    Updates: status, fees_taken (total savings), savings, emails_sent, emails_received.
-    Called after each negotiation is processed.
+    Parses the last agent response JSON from each provider's conversation
+    to extract bill/offer amounts and intent (accepted/rejected/etc).
+    Updates: status, fees_taken, savings, emails_sent, emails_received.
     """
     from turso_client import turso
 
-    # Get all negotiations for this case
+    # Get all conversation histories for this case
     rows = turso.fetch_all(
-        'SELECT "to", actual_bill, offered_bill, result, sent_by_us FROM negotiations WHERE case_id = ?',
+        'SELECT sender_email, messages_json, last_intent FROM conversation_history WHERE case_id = ?',
         [case_id]
     )
     if not rows:
         return
 
-    # Count emails
-    emails_sent = sum(1 for r in rows if r.get("sent_by_us"))
-    emails_received = sum(1 for r in rows if not r.get("sent_by_us"))
-
-    # Group by provider email to determine per-provider status
     providers = {}
+    total_sent = 0
+    total_received = 0
+
     for r in rows:
-        email = (r.get("to") or "").lower()
+        email = (r.get("sender_email") or "").lower()
+        intent = (r.get("last_intent") or "").lower()
         if not email:
             continue
+
+        # Parse messages to extract bill/offer from the latest agent response
+        bill = 0
+        offer = 0
+        msg_count_sent = 0
+        msg_count_received = 0
+        try:
+            messages = json.loads(r.get("messages_json") or "[]")
+            for msg in messages:
+                role = msg.get("role", "")
+                if role == "assistant":
+                    msg_count_sent += 1
+                elif role == "user":
+                    msg_count_received += 1
+                # Extract bill/offer from assistant JSON responses
+                if role == "assistant":
+                    content = msg.get("content", "")
+                    try:
+                        parsed = json.loads(content) if content.startswith("{") else None
+                        if parsed:
+                            b = float(parsed.get("actual_bill") or 0)
+                            o = float(parsed.get("offered_bill") or 0)
+                            if b > bill:
+                                bill = b
+                            if o > offer:
+                                offer = o
+                    except (json.JSONDecodeError, ValueError, TypeError):
+                        pass
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+        total_sent += msg_count_sent
+        total_received += msg_count_received
+
+        # Keep the best data per provider
         if email not in providers:
             providers[email] = {"bill": 0, "offer": 0, "accepted": False}
-        bill = float(r.get("actual_bill") or 0)
-        offer = float(r.get("offered_bill") or 0)
-        result_str = (r.get("result") or "").lower()
-
         if bill > providers[email]["bill"]:
             providers[email]["bill"] = bill
         if offer > providers[email]["offer"]:
             providers[email]["offer"] = offer
-        if "accepted" in result_str:
+        if "accepted" in intent:
             providers[email]["accepted"] = True
 
     # Calculate savings: sum of (bill - offer) for accepted providers
@@ -954,7 +985,7 @@ def _update_case_stats(case_id: str):
                 total_savings += saving
             total_fees += p["offer"]
             any_accepted = True
-        else:
+        elif p["bill"] > 0:
             all_accepted = False
 
     # Determine overall case status
@@ -970,15 +1001,15 @@ def _update_case_stats(case_id: str):
     if existing:
         turso.execute(
             "UPDATE cases SET status = ?, savings = ?, fees_taken = ?, emails_sent = ?, emails_received = ? WHERE id = ?",
-            [status, round(total_savings, 2), round(total_fees, 2), emails_sent, emails_received, case_id]
+            [status, round(total_savings, 2), round(total_fees, 2), total_sent, total_received, case_id]
         )
     else:
         turso.execute(
             "INSERT INTO cases (id, status, savings, fees_taken, emails_sent, emails_received) VALUES (?, ?, ?, ?, ?, ?)",
-            [case_id, status, round(total_savings, 2), round(total_fees, 2), emails_sent, emails_received]
+            [case_id, status, round(total_savings, 2), round(total_fees, 2), total_sent, total_received]
         )
 
-    logger.info(f"[PostProcess] Updated case {case_id} stats: status={status}, savings=${total_savings:.2f}, fees=${total_fees:.2f}, sent={emails_sent}, received={emails_received}")
+    logger.info(f"[PostProcess] Updated case {case_id} stats: status={status}, savings=${total_savings:.2f}, fees=${total_fees:.2f}, sent={total_sent}, received={total_received}")
 
 
 def _lookup_negotiation_history(provider_email: str) -> str:
@@ -2151,22 +2182,7 @@ IMPORTANT: After using tools and gathering information, you MUST return a final 
         case_id = discovered_case_id
 
         if intent not in ("no_action", "unclear") and case_id:
-            # 1. Always log the negotiation
-            try:
-                tool_log_negotiation(
-                    case_id=case_id,
-                    negotiation_type=intent,
-                    email_body=result.get("reasoning", "")[:500],
-                    to=clean_sender,
-                    actual_bill=float(result.get("actual_bill") or 0),
-                    offered_bill=float(result.get("offered_bill") or 0),
-                    result=intent,
-                    sent_by_us=False,
-                )
-                actions_taken.append("auto:log_negotiation(provider incoming)")
-                logger.info(f"[PostProcess] Logged negotiation for {clean_sender} | intent={intent}")
-            except Exception as e:
-                logger.error(f"[PostProcess] Failed to log negotiation: {e}")
+            logger.info(f"[PostProcess] Processing intent={intent} for {clean_sender} | case={case_id}")
 
             # 2. Case notes removed — BCC'd email thread shows full negotiation in the case
 
