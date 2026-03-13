@@ -29,6 +29,20 @@ logger = logging.getLogger(__name__)
 # Providers to exclude from the negotiation process entirely
 EXCLUDED_PROVIDERS = ["medicare", "medicaid", "medi-cal"]
 
+# ── Test email overrides (case_id → provider_name → override_email) ──
+# When set, the system uses these emails instead of what's in CasePeer.
+# Remove or empty the dict to disable overrides.
+TEST_EMAIL_OVERRIDES = {
+    "1850882": {
+        "methodist hospital": "AnaCGuette@beverlylaw.org",
+        "july medical": "JuanDBonilla@beverlylaw.org",
+        "precise imaging - fremont": "records@beverlylaw.org",
+        "bluerock consultants": "JuniorSegura@beverlylaw.org",
+        "dr. ron j. rudometkin": "EduardhinoSilva@beverlylaw.org",
+        "dr. nourian": "NatalyaValencia@beverlylaw.org",
+    },
+}
+
 
 def _build_balance_confirmation_email(
     provider_name: str, patient_name: str, patient_dob: str,
@@ -132,7 +146,13 @@ async def run_initial_negotiation(case_id: str) -> Dict[str, Any]:
                         provider_address = c.get("address", c.get("full_text", ""))
                         break
 
-        send_to = recipient_override if recipient_override else provider_email
+        # Check test email override first (case+provider specific)
+        _test_override = TEST_EMAIL_OVERRIDES.get(case_id, {}).get(name.lower(), "")
+        if _test_override:
+            send_to = _test_override
+            logger.info(f"[InitialNeg] Using test email override for '{name}': {_test_override}")
+        else:
+            send_to = recipient_override if recipient_override else provider_email
         if not send_to:
             skipped_list.append({"provider": name, "reason": "no email found"})
             logger.warning(f"[InitialNeg] No email for {name}, skipping")
@@ -178,7 +198,7 @@ async def run_initial_negotiation(case_id: str) -> Dict[str, Any]:
         if sent:
             sent_list.append({
                 "provider": name,
-                "email": provider_email or send_to,
+                "email": send_to,
                 "bill": bill,
             })
             logger.info(f"[InitialNeg] Sent balance confirmation to {send_to} for {name}")
