@@ -2101,50 +2101,10 @@ IMPORTANT: After using tools and gathering information, you MUST return a final 
                 except Exception as e:
                     logger.error(f"[PostProcess] Thread PDF failed: {e}")
 
-                # Update settlement page with confirmed balance amount
-                try:
-                    confirmed_amount = result.get("actual_bill")
-                    if confirmed_amount and float(confirmed_amount) > 0:
-                        settlement_json = tool_get_settlement_page(case_id)
-                        settlement = json.loads(settlement_json)
-                        form_fields = settlement.get("form_fields", {})
-                        providers_list = settlement.get("providers", [])
-                        provider_name_lower = (result.get("provider_name") or "").lower()
-
-                        # Match provider by name (fuzzy)
-                        matched_provider = None
-                        for sp in providers_list:
-                            sp_name = (sp.get("provider_name") or "").lower()
-                            if provider_name_lower and (provider_name_lower in sp_name or sp_name in provider_name_lower):
-                                matched_provider = sp
-                                break
-
-                        if matched_provider and matched_provider.get("provider_id") and form_fields:
-                            pid = matched_provider["provider_id"]
-                            clean_amount = re.sub(r'[^0-9.]', '', str(confirmed_amount))
-                            # Update final_cost for this provider
-                            updated = False
-                            for key, value in form_fields.items():
-                                if key.endswith("-id") and value == pid:
-                                    index = re.search(r'health-liens-(\d+)-id', key)
-                                    if index:
-                                        cost_key = f"health-liens-{index.group(1)}-final_cost"
-                                        form_fields[cost_key] = clean_amount
-                                        updated = True
-                                        break
-
-                            if updated:
-                                from casepeer_helpers import casepeer_post_form
-                                form_body = "&".join(f"{quote(str(k), safe='')}={quote(str(v), safe='')}" for k, v in form_fields.items())
-                                casepeer_post_form(f"case/{case_id}/settlement/negotiations/", form_body, timeout=90)
-                                actions_taken.append(f"auto:update_settlement_amount(provider={pid}, amount={clean_amount})")
-                                logger.info(f"[PostProcess] Updated settlement amount for {provider_name}: ${clean_amount}")
-                            else:
-                                logger.warning(f"[PostProcess] Provider ID {pid} not found in settlement form fields")
-                        else:
-                            logger.warning(f"[PostProcess] Could not match provider '{provider_name}' for settlement update")
-                except Exception as e:
-                    logger.error(f"[PostProcess] Settlement amount update failed: {e}")
+                # NOTE: Do NOT update the settlement Amount column during bill_confirmation.
+                # The Amount column is used by CasePeer for pro rata calculations.
+                # Writing the full bill amount here would inflate the pro rata above the actual bill.
+                # Amount should only be set when we make an OFFER (during 'accepted' intent).
 
             # 4. For "accepted": generate offer letter via CasePeer autoletters, send for signing
             if intent == "accepted":
