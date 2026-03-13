@@ -88,6 +88,17 @@ async def run_initial_negotiation(case_id: str) -> Dict[str, Any]:
     incident_date = treatment_data.get("incident_date", "N/A")
     providers = treatment_data.get("providers", [])
 
+    # Create/update the case record in Turso for dashboard tracking
+    from turso_client import turso
+    existing_case = turso.fetch_one("SELECT id FROM cases WHERE id = ?", [case_id])
+    if not existing_case:
+        turso.execute(
+            "INSERT INTO cases (id, patient_name, status) VALUES (?, ?, ?)",
+            [case_id, patient_name, "In Progress"]
+        )
+    else:
+        turso.execute("UPDATE cases SET patient_name = ? WHERE id = ?", [patient_name, case_id])
+
     if not providers:
         logger.warning(f"[InitialNeg] No providers found for case {case_id}")
         return {"case_id": case_id, "status": "no_providers", "message": "No providers found on treatment page"}

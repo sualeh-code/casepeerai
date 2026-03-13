@@ -902,6 +902,85 @@ def _find_lien_id_for_provider(case_id: str, provider_name: str) -> tuple:
         return None, None
 
 
+def _update_case_stats(case_id: str):
+    """Recalculate and update case-level stats from the negotiations table.
+
+    Updates: status, fees_taken (total savings), savings, emails_sent, emails_received.
+    Called after each negotiation is processed.
+    """
+    from turso_client import turso
+
+    # Get all negotiations for this case
+    rows = turso.fetch_all(
+        'SELECT "to", actual_bill, offered_bill, result, sent_by_us FROM negotiations WHERE case_id = ?',
+        [case_id]
+    )
+    if not rows:
+        return
+
+    # Count emails
+    emails_sent = sum(1 for r in rows if r.get("sent_by_us"))
+    emails_received = sum(1 for r in rows if not r.get("sent_by_us"))
+
+    # Group by provider email to determine per-provider status
+    providers = {}
+    for r in rows:
+        email = (r.get("to") or "").lower()
+        if not email:
+            continue
+        if email not in providers:
+            providers[email] = {"bill": 0, "offer": 0, "accepted": False}
+        bill = float(r.get("actual_bill") or 0)
+        offer = float(r.get("offered_bill") or 0)
+        result_str = (r.get("result") or "").lower()
+
+        if bill > providers[email]["bill"]:
+            providers[email]["bill"] = bill
+        if offer > providers[email]["offer"]:
+            providers[email]["offer"] = offer
+        if "accepted" in result_str:
+            providers[email]["accepted"] = True
+
+    # Calculate savings: sum of (bill - offer) for accepted providers
+    total_savings = 0
+    total_fees = 0
+    all_accepted = True
+    any_accepted = False
+
+    for p in providers.values():
+        if p["accepted"] and p["offer"] > 0 and p["bill"] > 0:
+            saving = p["bill"] - p["offer"]
+            if saving > 0:
+                total_savings += saving
+            total_fees += p["offer"]
+            any_accepted = True
+        else:
+            all_accepted = False
+
+    # Determine overall case status
+    if not any_accepted:
+        status = "In Progress"
+    elif all_accepted:
+        status = "Disbursement"
+    else:
+        status = "In Progress"
+
+    # Upsert the case record
+    existing = turso.fetch_one("SELECT id FROM cases WHERE id = ?", [case_id])
+    if existing:
+        turso.execute(
+            "UPDATE cases SET status = ?, savings = ?, fees_taken = ?, emails_sent = ?, emails_received = ? WHERE id = ?",
+            [status, round(total_savings, 2), round(total_fees, 2), emails_sent, emails_received, case_id]
+        )
+    else:
+        turso.execute(
+            "INSERT INTO cases (id, status, savings, fees_taken, emails_sent, emails_received) VALUES (?, ?, ?, ?, ?, ?)",
+            [case_id, status, round(total_savings, 2), round(total_fees, 2), emails_sent, emails_received]
+        )
+
+    logger.info(f"[PostProcess] Updated case {case_id} stats: status={status}, savings=${total_savings:.2f}, fees=${total_fees:.2f}, sent={emails_sent}, received={emails_received}")
+
+
 def _lookup_negotiation_history(provider_email: str) -> str:
     """Look up existing negotiation history by provider email, grouped by case_id.
 
@@ -2258,6 +2337,13 @@ IMPORTANT: After using tools and gathering information, you MUST return a final 
             agent_messages, actions_taken,
             result.get("intent", "unclear"),
         )
+
+        # Update case-level stats (status, savings, fees, email counts)
+        if discovered_case_id:
+            try:
+                _update_case_stats(discovered_case_id)
+            except Exception as e:
+                logger.error(f"[PostProcess] Case stats update failed: {e}")
 
         result["case_id"] = discovered_case_id
         return result
