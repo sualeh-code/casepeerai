@@ -31,17 +31,8 @@ EXCLUDED_PROVIDERS = ["medicare", "medicaid", "medi-cal"]
 
 # ── Test email overrides (case_id → provider_name → override_email) ──
 # When set, the system uses these emails instead of what's in CasePeer.
-# Remove or empty the dict to disable overrides.
-TEST_EMAIL_OVERRIDES = {
-    "1850882": {
-        "methodist hospital": "AnaCGuette@beverlylaw.org",
-        "july medical": "JuanDBonilla@beverlylaw.org",
-        "precise imaging - fremont": "records@beverlylaw.org",
-        "bluerock consultants": "JuniorSegura@beverlylaw.org",
-        "dr. ron j. rudometkin": "EduardhinoSilva@beverlylaw.org",
-        "dr. nourian": "NatalyaValencia@beverlylaw.org",
-    },
-}
+# Empty dict = disabled (emails go to actual providers).
+TEST_EMAIL_OVERRIDES = {}
 
 
 def _build_balance_confirmation_email(
