@@ -584,7 +584,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "get_treatment_page",
-            "description": "Scrape the CasePeer treatment page for a case. Returns all providers with their names, categories, procedures, bill amounts, and calculated offer amounts (MRI=$400, explicit X-Ray=$50, others=2/3 of 33% of bill). Also returns health lien IDs and letter template IDs.",
+            "description": "Scrape the CasePeer treatment page for a case. Returns all providers with their names, categories, procedures, bill amounts, and calculated offer amounts (MRI=$400, explicit X-Ray=$50, others=2/3 of CasePeer 33% Pro Rata). Also returns health lien IDs and letter template IDs.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1107,8 +1107,28 @@ def tool_get_settlement_page(case_id: str) -> str:
     soup = BeautifulSoup(html, "html.parser")
     providers = []
 
-    # Extract provider rows from the settlement table
-    rows = soup.select("tr")
+    # Detect column layout from <th> headers in the health liens table
+    # CasePeer puts <th> directly inside <thead> (not wrapped in <tr>)
+    header_cols = []
+    pro_rata_col_idx = -1
+    still_owed_col_idx = -1
+    thead = soup.select_one("#dataTableHealthLiensSettlementNego thead")
+    if not thead:
+        thead = soup.select_one("thead")
+    if thead:
+        for i, th in enumerate(thead.select("th")):
+            text = th.get_text(strip=True)
+            header_cols.append(text)
+            lower = text.lower()
+            if "pro rata" in lower or "prorata" in lower:
+                pro_rata_col_idx = i
+            if "still owed" in lower:
+                still_owed_col_idx = i
+    logger.info(f"[Settlement] Headers: {header_cols}, pro_rata_col={pro_rata_col_idx}, still_owed_col={still_owed_col_idx}")
+
+    # Extract provider rows from the health liens table specifically
+    liens_table = soup.select_one("#dataTableHealthLiensSettlementNego tbody")
+    rows = liens_table.select("tr") if liens_table else soup.select("tr")
     for row in rows:
         cells = row.select("td")
         if len(cells) >= 3:
@@ -1124,12 +1144,23 @@ def tool_get_settlement_page(case_id: str) -> str:
                     if id_match:
                         provider_id = id_match.group(1)
 
-                # Try to get amounts from the row
+                # Extract specific column values
+                pro_rata_33 = 0.0
+                if 0 <= pro_rata_col_idx < len(cells):
+                    from casepeer_helpers import parse_dollar_amount
+                    pro_rata_33 = parse_dollar_amount(cells[pro_rata_col_idx].get_text(strip=True))
+                still_owed = 0.0
+                if 0 <= still_owed_col_idx < len(cells):
+                    from casepeer_helpers import parse_dollar_amount
+                    still_owed = parse_dollar_amount(cells[still_owed_col_idx].get_text(strip=True))
+
                 amounts = re.findall(r'\$[\d,]+\.?\d*', row.get_text())
                 providers.append({
                     "provider_name": provider_name,
                     "provider_id": provider_id,
-                    "amounts": amounts
+                    "amounts": amounts,
+                    "pro_rata_33": pro_rata_33,
+                    "still_owed": still_owed,
                 })
 
     # Extract ALL form fields — Django requires every formset's management fields
@@ -1143,6 +1174,7 @@ def tool_get_settlement_page(case_id: str) -> str:
     return json.dumps({
         "providers": providers,
         "form_fields": form_data,
+        "header_columns": header_cols,
         "raw_length": len(html)
     })
 

@@ -459,6 +459,38 @@ def get_treatment_providers(case_id: str) -> Dict[str, Any]:
         has_lien = "LIEN_LETTERS" in html
         logger.warning(f"[Helpers] HEALTH_LIENS_DATA in HTML: {has_health}, LIEN_LETTERS in HTML: {has_lien}, HTML length: {len(html)}")
 
+    # Fetch settlement page pro rata values (CasePeer-calculated)
+    pro_rata_map = {}
+    try:
+        settlement = get_settlement_page(case_id)
+        if "error" not in settlement:
+            for sp in settlement.get("providers", []):
+                pr = sp.get("pro_rata_33", 0)
+                if pr > 0:
+                    sp_name = re.sub(r'\s+', ' ', sp["provider_name"]).strip().lower()
+                    pro_rata_map[sp_name] = pr
+            logger.info(f"[Helpers] Pro rata map from settlement page: {pro_rata_map}")
+    except Exception as e:
+        logger.warning(f"[Helpers] Could not fetch settlement pro rata: {e}")
+
+    def _find_pro_rata(name: str) -> float:
+        """Fuzzy-match provider name to settlement page pro rata value."""
+        norm = re.sub(r'\s+', ' ', name).strip().lower()
+        # Exact match
+        if norm in pro_rata_map:
+            return pro_rata_map[norm]
+        # Substring match
+        for sp_name, pr in pro_rata_map.items():
+            if norm in sp_name or sp_name in norm:
+                return pr
+        # First-word match (for "Dr. Nourian" vs "Dr. Nourian, D.C.")
+        first_word = norm.split()[0] if norm.split() else ""
+        if first_word and len(first_word) >= 4:
+            for sp_name, pr in pro_rata_map.items():
+                if first_word in sp_name:
+                    return pr
+        return 0.0
+
     # Calculate offers for each provider
     providers = []
     for lien in health_liens_data:
@@ -488,6 +520,10 @@ def get_treatment_providers(case_id: str) -> Dict[str, Any]:
         is_xray = any(x in name_lower for x in ["x-ray", "xray"]) or \
                    any(x in specialties for x in ["x-ray", "xray"])
 
+        # Use CasePeer's actual 33% Pro Rata when available, else fall back to bill * 0.33
+        casepeer_pro_rata = _find_pro_rata(name)
+        max_offer = casepeer_pro_rata if casepeer_pro_rata > 0 else round(bill * 0.33, 2)
+
         if is_mri:
             offered = min(400.0, bill)
             reason = "MRI fixed rate"
@@ -495,16 +531,15 @@ def get_treatment_providers(case_id: str) -> Dict[str, Any]:
             offered = min(50.0, bill)
             reason = "X-Ray fixed rate"
         else:
-            max_offer = bill * 0.33
             offered = round(max_offer * (2 / 3), 2)
-            reason = "2/3 of 33% of bill"
+            reason = f"2/3 of CasePeer pro rata (${max_offer:,.2f})" if casepeer_pro_rata > 0 else "2/3 of 33% of bill"
 
         providers.append({
             "provider_name": name,
             "specialties": specialties,
             "bill_amount": bill,
             "offered_amount": offered,
-            "max_offer_33pct": round(bill * 0.33, 2),
+            "max_offer_33pct": max_offer,
             "offer_reason": reason,
             "lien_id": str(lien.get("id", "")),
             "phone": phone,
@@ -532,7 +567,8 @@ def get_treatment_providers(case_id: str) -> Dict[str, Any]:
 
 
 def get_settlement_page(case_id: str) -> Dict[str, Any]:
-    """Fetch and parse the settlement/negotiations page for a case."""
+    """Fetch and parse the settlement/negotiations page for a case.
+    Extracts per-provider column values including 33% Pro Rata."""
     result = casepeer_get(f"case/{case_id}/settlement/negotiations/")
     html = extract_html(result)
     if not html:
@@ -541,7 +577,28 @@ def get_settlement_page(case_id: str) -> Dict[str, Any]:
     soup = BeautifulSoup(html, "html.parser")
     providers = []
 
-    rows = soup.select("tr")
+    # Detect column layout from <th> headers in the health liens table
+    # CasePeer puts <th> directly inside <thead> (not wrapped in <tr>)
+    header_cols = []
+    pro_rata_col_idx = -1
+    still_owed_col_idx = -1
+    thead = soup.select_one("#dataTableHealthLiensSettlementNego thead")
+    if not thead:
+        thead = soup.select_one("thead")
+    if thead:
+        for i, th in enumerate(thead.select("th")):
+            text = th.get_text(strip=True)
+            header_cols.append(text)
+            lower = text.lower()
+            if "pro rata" in lower or "prorata" in lower:
+                pro_rata_col_idx = i
+            if "still owed" in lower:
+                still_owed_col_idx = i
+    logger.info(f"[Settlement] Headers: {header_cols}, pro_rata_col={pro_rata_col_idx}, still_owed_col={still_owed_col_idx}")
+
+    # Get rows from the health liens table specifically
+    liens_table = soup.select_one("#dataTableHealthLiensSettlementNego tbody")
+    rows = liens_table.select("tr") if liens_table else soup.select("tr")
     for row in rows:
         cells = row.select("td")
         if len(cells) >= 3:
@@ -555,11 +612,22 @@ def get_settlement_page(case_id: str) -> Dict[str, Any]:
                     id_match = re.search(r'/(\d+)/?$', href)
                     if id_match:
                         provider_id = id_match.group(1)
+
+                # Extract specific column values
+                pro_rata_33 = 0.0
+                if 0 <= pro_rata_col_idx < len(cells):
+                    pro_rata_33 = parse_dollar_amount(cells[pro_rata_col_idx].get_text(strip=True))
+                still_owed = 0.0
+                if 0 <= still_owed_col_idx < len(cells):
+                    still_owed = parse_dollar_amount(cells[still_owed_col_idx].get_text(strip=True))
+
                 amounts = re.findall(r'\$[\d,]+\.?\d*', row.get_text())
                 providers.append({
                     "provider_name": provider_name,
                     "provider_id": provider_id,
                     "amounts": amounts,
+                    "pro_rata_33": pro_rata_33,
+                    "still_owed": still_owed,
                 })
 
     # Extract ALL form fields — Django requires every formset's management fields
@@ -572,6 +640,7 @@ def get_settlement_page(case_id: str) -> Dict[str, Any]:
     return {
         "providers": providers,
         "form_fields": form_data,
+        "header_columns": header_cols,
         "raw_html": html,
     }
 
