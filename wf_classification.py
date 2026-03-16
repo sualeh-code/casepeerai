@@ -184,12 +184,11 @@ def _fetch_case_documents(case_id: str) -> List[Dict]:
 
 
 def _download_document(case_id: str, doc_id: str) -> Optional[bytes]:
-    """Download a document from CasePeer."""
-    import requests as req
-    base = get_local_base()
+    """Download a document from CasePeer using authenticated session."""
+    from casepeer_helpers import casepeer_get_raw
     try:
-        resp = req.get(
-            f"{base}/api/v1/case/case-documents/{case_id}/{doc_id}/download/",
+        resp = casepeer_get_raw(
+            f"api/v1/case/case-documents/{case_id}/{doc_id}/download/",
             timeout=60,
         )
         if resp.status_code == 200:

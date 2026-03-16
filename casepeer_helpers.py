@@ -69,6 +69,15 @@ def _parse_form_fields(html: str) -> Dict[str, str]:
 # Direct CasePeer requests (no proxy)
 # ---------------------------------------------------------------------------
 
+def get_local_base() -> str:
+    """Return the CasePeer base URL (used by workflow modules)."""
+    try:
+        from turso_client import get_setting
+        return get_setting("casepeer_base_url", _DEFAULT_BASE_URL)
+    except Exception:
+        return _DEFAULT_BASE_URL
+
+
 def casepeer_get(endpoint: str, timeout: int = 90) -> Dict[str, Any]:
     """GET a CasePeer page directly. Returns {"response": html_text}."""
     try:

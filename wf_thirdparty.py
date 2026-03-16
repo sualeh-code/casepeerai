@@ -53,6 +53,12 @@ async def run_thirdparty_processing(case_id: str) -> Dict[str, Any]:
 
     logger.info(f"[ThirdParty] Case {case_id}: defendant={full_name}, insurance_id={insurance_id}, deposited=${deposited_amount:,.2f}")
 
+    # Check if an offer already exists (avoid duplicating)
+    existing_accept_id = await asyncio.to_thread(_get_accept_offer_id, case_id)
+    if existing_accept_id:
+        logger.info(f"[ThirdParty] Offer already accepted (id={existing_accept_id}) — skipping")
+        return {"case_id": case_id, "status": "already_accepted", "accept_offer_id": existing_accept_id}
+
     today = datetime.now().strftime("%Y-%m-%d")
 
     # Step 2: Create third-party demand
@@ -186,26 +192,19 @@ async def run_thirdparty_processing(case_id: str) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 def _post_form(case_id: str, endpoint: str, data: Dict) -> bool:
-    """POST form data to CasePeer endpoint with CSRF injection."""
-    import requests as req
-
-    base = get_local_base()
+    """POST form data to CasePeer endpoint using authenticated session."""
     try:
-        # First GET the page to extract CSRF token
-        get_resp = req.get(f"{base}/{endpoint.lstrip('/')}", timeout=90)
-        from bs4 import BeautifulSoup
-        soup = BeautifulSoup(get_resp.text, "html.parser")
-
-        csrf_input = soup.select_one("input[name='csrfmiddlewaretoken']")
-        if csrf_input:
-            data["csrfmiddlewaretoken"] = csrf_input.get("value", "")
-
-        resp = req.post(
-            f"{base}/{endpoint.lstrip('/')}",
+        result = casepeer_post(
+            endpoint,
             data=data,
+            content_type="application/x-www-form-urlencoded",
             timeout=90,
         )
-        return resp.status_code in (200, 302)
+        status = result.get("status_code", 0)
+        if result.get("error"):
+            logger.error(f"[ThirdParty] POST {endpoint} error: {result['error']}")
+            return False
+        return status in (200, 302) or status == 0  # 0 means no status but got response
     except Exception as e:
         logger.error(f"[ThirdParty] POST {endpoint} failed: {e}")
         return False
