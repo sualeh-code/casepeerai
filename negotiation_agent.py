@@ -903,74 +903,62 @@ def _find_lien_id_for_provider(case_id: str, provider_name: str) -> tuple:
 
 
 def _update_case_stats(case_id: str):
-    """Recalculate and update case-level stats from conversation_history.
+    """Recalculate and update case-level stats from conversation_history + negotiations.
 
-    Parses the last agent response JSON from each provider's conversation
-    to extract bill/offer amounts and intent (accepted/rejected/etc).
-    Updates: status, fees_taken, savings, emails_sent, emails_received.
+    Uses conversation_history for intent (accepted/rejected) and negotiations
+    table for bill/offer amounts. Updates: status, fees_taken, savings,
+    emails_sent, emails_received.
     """
     from turso_client import turso
 
-    # Get all conversation histories for this case
-    rows = turso.fetch_all(
-        'SELECT sender_email, messages_json, last_intent FROM conversation_history WHERE case_id = ?',
+    providers = {}
+
+    # 1. Get intent from conversation_history
+    conv_rows = turso.fetch_all(
+        'SELECT sender_email, last_intent FROM conversation_history WHERE case_id = ?',
         [case_id]
     )
-    if not rows:
-        return
-
-    providers = {}
-    total_sent = 0
-    total_received = 0
-
-    for r in rows:
+    for r in conv_rows:
         email = (r.get("sender_email") or "").lower()
         intent = (r.get("last_intent") or "").lower()
         if not email:
             continue
-
-        # Parse messages to extract bill/offer from the latest agent response
-        bill = 0
-        offer = 0
-        msg_count_sent = 0
-        msg_count_received = 0
-        try:
-            messages = json.loads(r.get("messages_json") or "[]")
-            for msg in messages:
-                role = msg.get("role", "")
-                if role == "assistant":
-                    msg_count_sent += 1
-                elif role == "user":
-                    msg_count_received += 1
-                # Extract bill/offer from assistant JSON responses
-                if role == "assistant":
-                    content = msg.get("content", "")
-                    try:
-                        parsed = json.loads(content) if content.startswith("{") else None
-                        if parsed:
-                            b = float(parsed.get("actual_bill") or 0)
-                            o = float(parsed.get("offered_bill") or 0)
-                            if b > bill:
-                                bill = b
-                            if o > offer:
-                                offer = o
-                    except (json.JSONDecodeError, ValueError, TypeError):
-                        pass
-        except (json.JSONDecodeError, TypeError):
-            pass
-
-        total_sent += msg_count_sent
-        total_received += msg_count_received
-
-        # Keep the best data per provider
         if email not in providers:
             providers[email] = {"bill": 0, "offer": 0, "accepted": False}
-        if bill > providers[email]["bill"]:
-            providers[email]["bill"] = bill
-        if offer > providers[email]["offer"]:
-            providers[email]["offer"] = offer
         if "accepted" in intent:
             providers[email]["accepted"] = True
+
+    # 2. Get bill/offer from negotiations table
+    try:
+        neg_rows = turso.fetch_all(
+            'SELECT "to", MAX(actual_bill) as bill, MAX(offered_bill) as offer, COUNT(*) as cnt '
+            'FROM negotiations WHERE case_id = ? GROUP BY "to"',
+            [case_id]
+        )
+        for r in neg_rows:
+            email = (r.get("to") or "").lower()
+            if not email:
+                continue
+            if email not in providers:
+                providers[email] = {"bill": 0, "offer": 0, "accepted": False}
+            b = float(r.get("bill") or 0)
+            o = float(r.get("offer") or 0)
+            if b > providers[email]["bill"]:
+                providers[email]["bill"] = b
+            if o > providers[email]["offer"]:
+                providers[email]["offer"] = o
+    except Exception as e:
+        logger.warning(f"[PostProcess] Could not read negotiations table: {e}")
+
+    if not providers:
+        return
+
+    # Count emails from conversation_history
+    total_sent = 0
+    total_received = 0
+    for r in conv_rows:
+        total_received += 1  # each conversation = at least 1 inbound
+        total_sent += 1      # each conversation = at least 1 outbound
 
     # Calculate savings: sum of (bill - offer) for accepted providers
     total_savings = 0
