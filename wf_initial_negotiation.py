@@ -122,7 +122,10 @@ async def run_initial_negotiation(case_id: str) -> Dict[str, Any]:
 
     # 3. Look up provider emails and send balance confirmation emails
     gmail_email, gmail_password, _ = _get_gmail_creds()
-    recipient_override = get_setting("neg0sub_recipient_override", "")
+    recipient_override = get_setting("neg0sub_recipient_override", "") or ""
+    # Guard against string "None" stored in Turso
+    if recipient_override.lower() in ("none", "null", ""):
+        recipient_override = ""
 
     sent_list = []
     skipped_list = []

@@ -1000,6 +1000,63 @@ def _update_case_stats(case_id: str):
     logger.info(f"[PostProcess] Updated case {case_id} stats: status={status}, savings=${total_savings:.2f}, fees=${total_fees:.2f}, sent={total_sent}, received={total_received}")
 
 
+def _resolve_case_id_from_subject(subject: str, candidate_case_ids: list = None) -> str:
+    """Extract patient name from email subject and match to a case_id deterministically.
+
+    Subject format: "Re: Balance Confirmation - LastName, FirstName - DOL MM/DD/YYYY"
+    Tries:
+      1. Match against candidate_case_ids (from multi-case negotiation lookup)
+      2. Search CasePeer API by patient name
+    Returns case_id or empty string.
+    """
+    from turso_client import turso
+
+    # Extract patient name from subject
+    # Patterns: "Balance Confirmation - Name - DOL..." or just "- Name -"
+    name = ""
+    m = re.search(r'(?:Balance Confirmation|Lien Negotiation|Offer to Settle)[:\s]*-?\s*(.+?)(?:\s*-\s*DOL|\s*$)', subject, re.IGNORECASE)
+    if m:
+        name = m.group(1).strip().rstrip('-').strip()
+    if not name:
+        # Fallback: grab text between first two dashes
+        m = re.search(r'-\s*(.+?)\s*-', subject)
+        if m:
+            name = m.group(1).strip()
+    if not name:
+        return ""
+
+    # Normalize: "LastName, FirstName" → split into parts for matching
+    name_parts = [p.strip().lower() for p in re.split(r'[,\s]+', name) if p.strip()]
+    if not name_parts:
+        return ""
+
+    logger.info(f"[CaseResolve] Extracted name parts from subject: {name_parts}")
+
+    # 1. If we have candidate case_ids, check their patient_name in DB
+    if candidate_case_ids:
+        for cid in candidate_case_ids:
+            row = turso.fetch_one("SELECT patient_name FROM cases WHERE id = ?", [cid])
+            if row and row.get("patient_name"):
+                stored_name = row["patient_name"].lower()
+                # Check if all name parts appear in the stored patient name
+                if all(part in stored_name for part in name_parts):
+                    logger.info(f"[CaseResolve] Matched case {cid} via DB patient_name='{row['patient_name']}'")
+                    return cid
+
+    # 2. Fallback: search CasePeer API
+    try:
+        search_term = name_parts[0]  # Use last name (first part of "LastName, FirstName")
+        result_json = tool_search_case(search_term)
+        result = json.loads(result_json)
+        if result.get("case_id"):
+            logger.info(f"[CaseResolve] Found case {result['case_id']} via CasePeer search for '{search_term}'")
+            return result["case_id"]
+    except Exception as e:
+        logger.warning(f"[CaseResolve] CasePeer search failed: {e}")
+
+    return ""
+
+
 def _lookup_negotiation_history(provider_email: str) -> str:
     """Look up existing negotiation history by provider email, grouped by case_id.
 
@@ -1012,6 +1069,17 @@ def _lookup_negotiation_history(provider_email: str) -> str:
             'SELECT case_id, negotiation_type, email_body, actual_bill, offered_bill, result, date, sent_by_us FROM negotiations WHERE "to" = ? ORDER BY date DESC LIMIT 30',
             [provider_email]
         )
+
+        # Fallback: domain-level match (e.g. alen@nourianmd.com matches leslie@nourianmd.com)
+        if not rows:
+            domain = provider_email.lower().split("@")[-1] if "@" in provider_email else ""
+            if domain and domain not in ("gmail.com", "yahoo.com", "hotmail.com", "outlook.com", "aol.com"):
+                rows = turso.fetch_all(
+                    'SELECT case_id, negotiation_type, email_body, actual_bill, offered_bill, result, date, sent_by_us FROM negotiations WHERE "to" LIKE ? ORDER BY date DESC LIMIT 30',
+                    [f"%@{domain}"]
+                )
+                if rows:
+                    logger.info(f"[Agent] Domain-matched negotiation history for {provider_email} via @{domain} ({len(rows)} rows)")
 
         if not rows:
             return json.dumps({"found": False, "message": f"No negotiation history for {provider_email}"})
@@ -1794,9 +1862,14 @@ def _get_conversation_key(case_id: str, provider_email: str) -> str:
     return f"{case_id}|{provider_email.lower()}"
 
 
-def _load_conversation_history(case_id: str, provider_email: str) -> Optional[List[Dict]]:
-    """Load previous AI conversation for this case+provider from Turso."""
+def _load_conversation_history(case_id: str, provider_email: str) -> tuple:
+    """Load previous AI conversation for this case+provider from Turso.
+
+    Returns (messages_list, resolved_case_id) where resolved_case_id may be
+    discovered from the conversation_history row when the caller had no case_id.
+    """
     from turso_client import turso
+    resolved_case_id = case_id or ""
     try:
         if case_id:
             key = _get_conversation_key(case_id, provider_email)
@@ -1805,16 +1878,38 @@ def _load_conversation_history(case_id: str, provider_email: str) -> Optional[Li
                 [key]
             )
         else:
-            # No case_id yet — look up by provider email
+            # No case_id yet — look up by provider email (exact match)
             row = turso.fetch_one(
                 "SELECT messages_json, tools_used, case_id FROM conversation_history WHERE sender_email = ? ORDER BY updated_at DESC LIMIT 1",
                 [provider_email.lower()]
             )
+            # Fallback: try domain match (e.g. alen@nourianmd.com matches leslie@nourianmd.com)
+            if not row:
+                domain = provider_email.lower().split("@")[-1] if "@" in provider_email else ""
+                if domain and domain not in ("gmail.com", "yahoo.com", "hotmail.com", "outlook.com", "aol.com"):
+                    # Check how many distinct case_ids exist for this domain
+                    domain_rows = turso.fetch_all(
+                        "SELECT DISTINCT case_id FROM conversation_history WHERE sender_email LIKE ?",
+                        [f"%@{domain}"]
+                    )
+                    if len(domain_rows) == 1:
+                        # Single case — safe to use
+                        row = turso.fetch_one(
+                            "SELECT messages_json, tools_used, case_id FROM conversation_history WHERE sender_email LIKE ? ORDER BY updated_at DESC LIMIT 1",
+                            [f"%@{domain}"]
+                        )
+                        if row:
+                            logger.info(f"[Agent] Domain-matched conversation history for {provider_email} via @{domain}")
+                    elif len(domain_rows) > 1:
+                        # Multiple cases — case_id will be resolved by _resolve_case_id_from_subject in main flow
+                        logger.info(f"[Agent] Domain @{domain} has {len(domain_rows)} cases — deferring to subject-based resolution")
+            if row and row.get("case_id"):
+                resolved_case_id = row["case_id"]
         if row and row.get("messages_json"):
-            return json.loads(row["messages_json"])
+            return json.loads(row["messages_json"]), resolved_case_id
     except Exception as e:
         logger.warning(f"[Agent] Failed to load conversation history: {e}")
-    return None
+    return None, resolved_case_id
 
 
 def _save_conversation_history(case_id: str, provider_email: str,
@@ -1969,26 +2064,50 @@ async def process_negotiation_email(thread_data: Dict) -> Dict[str, Any]:
         negotiation_history = _lookup_negotiation_history(clean_sender)
         history_data = json.loads(negotiation_history)
 
+        _thread_subject = last_msg.get("Subject", "")
+
         if history_data.get("found"):
             if history_data.get("multiple_cases"):
-                # Provider has multiple clients — present each case separately
-                provider_context = f"""
+                # Provider has multiple clients — resolve by patient name in subject
+                candidate_ids = [c["case_id"] for c in history_data.get("cases", [])]
+                resolved = _resolve_case_id_from_subject(_thread_subject, candidate_ids)
+                if resolved:
+                    pre_loaded_case_id = resolved
+                    # Find the matched case's history
+                    matched_case = next((c for c in history_data.get("cases", []) if c["case_id"] == resolved), None)
+                    if matched_case:
+                        provider_context = f"""
+KNOWN PROVIDER CONTEXT (from database — resolved from {history_data['case_count']} cases by patient name):
+- Case ID: {resolved}
+- Provider Email: {history_data['provider_email']}
+- Latest Actual Bill: ${matched_case.get('latest_actual_bill', 'N/A')}
+- Our Last Offered Amount (ALREADY SENT — do NOT reuse as next offer, adjust per Rule 5): ${matched_case.get('latest_offered_bill', 'N/A')}
+- Total Negotiations on Record: {len(matched_case.get('history', []))}
+- Negotiation History (most recent first):
+"""
+                        for h in matched_case.get("history", []):
+                            direction = "WE SENT" if h.get("sent_by_us") else "PROVIDER SENT"
+                            provider_context += f"  [{h.get('date', '?')}] {direction} | Type: {h.get('type', '?')} | Bill: ${h.get('actual_bill', '?')} | Offer: ${h.get('offered_bill', '?')} | Result: {h.get('result', '')} | {h.get('summary', '')}\n"
+                        provider_context += f"\nYou already have the case_id={resolved}. Do NOT call search_case. Use this case_id for all tool calls."
+                    logger.info(f"[Agent] Multi-case resolved to case {resolved} for {clean_sender} via subject match")
+                else:
+                    # Could not resolve — present all cases (fallback)
+                    provider_context = f"""
 KNOWN PROVIDER CONTEXT (this provider has {history_data['case_count']} active cases with Beverly Law):
 - Provider Email: {history_data['provider_email']}
 - IMPORTANT: Match the patient name in the email to the correct case below.
 """
-                for case_data in history_data.get("cases", []):
-                    cid = case_data["case_id"]
-                    provider_context += f"\n--- CASE {cid} ---\n"
-                    provider_context += f"  Latest Actual Bill: ${case_data.get('latest_actual_bill', 'N/A')}\n"
-                    provider_context += f"  Latest Offered Amount: ${case_data.get('latest_offered_bill', 'N/A')}\n"
-                    provider_context += f"  Negotiations: {len(case_data.get('history', []))}\n"
-                    for h in case_data.get("history", []):
-                        direction = "WE SENT" if h.get("sent_by_us") else "PROVIDER SENT"
-                        provider_context += f"    [{h.get('date', '?')}] {direction} | Type: {h.get('type', '?')} | Bill: ${h.get('actual_bill', '?')} | Offer: ${h.get('offered_bill', '?')} | Result: {h.get('result', '')} | {h.get('summary', '')}\n"
-
-                provider_context += "\nMatch the patient name from the email to the correct case above. Use ONLY that case_id for all tool calls."
-                logger.info(f"[Agent] Pre-loaded multi-case context for {clean_sender}: {history_data['case_count']} cases")
+                    for case_data in history_data.get("cases", []):
+                        cid = case_data["case_id"]
+                        provider_context += f"\n--- CASE {cid} ---\n"
+                        provider_context += f"  Latest Actual Bill: ${case_data.get('latest_actual_bill', 'N/A')}\n"
+                        provider_context += f"  Latest Offered Amount: ${case_data.get('latest_offered_bill', 'N/A')}\n"
+                        provider_context += f"  Negotiations: {len(case_data.get('history', []))}\n"
+                        for h in case_data.get("history", []):
+                            direction = "WE SENT" if h.get("sent_by_us") else "PROVIDER SENT"
+                            provider_context += f"    [{h.get('date', '?')}] {direction} | Type: {h.get('type', '?')} | Bill: ${h.get('actual_bill', '?')} | Offer: ${h.get('offered_bill', '?')} | Result: {h.get('result', '')} | {h.get('summary', '')}\n"
+                    provider_context += "\nMatch the patient name from the email to the correct case above. Use search_case with the patient name to get the case_id."
+                    logger.warning(f"[Agent] Multi-case could NOT resolve for {clean_sender} — presenting all {history_data['case_count']} cases")
             else:
                 # Single case — straightforward
                 pre_loaded_case_id = history_data.get("case_id", "")
@@ -2008,8 +2127,15 @@ KNOWN PROVIDER CONTEXT (from database — this provider has prior negotiations):
                 provider_context += f"\nYou already have the case_id={history_data['case_id']}. Do NOT call search_case. Use this case_id for all tool calls."
                 logger.info(f"[Agent] Pre-loaded context for {clean_sender}: case_id={pre_loaded_case_id}, {history_data.get('negotiation_count', 0)} prior negotiations")
         else:
-            provider_context = f"\nNO PRIOR NEGOTIATIONS FOUND for {clean_sender}. This may be a new provider. Call search_case with the patient name to find the case."
-            logger.info(f"[Agent] No prior negotiations for {clean_sender}")
+            # No negotiations found — try to resolve case_id from email subject
+            resolved = _resolve_case_id_from_subject(_thread_subject)
+            if resolved:
+                pre_loaded_case_id = resolved
+                logger.info(f"[Agent] No prior negotiations for {clean_sender}, but resolved case_id={resolved} from subject")
+                provider_context = f"\nNO PRIOR NEGOTIATIONS FOUND for {clean_sender}, but case_id={resolved} resolved from email subject. Use this case_id for all tool calls."
+            else:
+                provider_context = f"\nNO PRIOR NEGOTIATIONS FOUND for {clean_sender}. This may be a new provider. Call search_case with the patient name to find the case."
+                logger.info(f"[Agent] No prior negotiations for {clean_sender}")
 
     except Exception as e:
         logger.warning(f"[Agent] Failed to pre-load provider context: {e}")
@@ -2017,7 +2143,11 @@ KNOWN PROVIDER CONTEXT (from database — this provider has prior negotiations):
 
     # --- LOAD PREVIOUS CONVERSATION HISTORY ---
     thread_subject = last_msg.get("Subject", "")
-    prev_conversation = _load_conversation_history(pre_loaded_case_id, clean_sender)
+    prev_conversation, conv_case_id = _load_conversation_history(pre_loaded_case_id, clean_sender)
+    # If negotiation lookup didn't find a case_id but conversation history did, use it
+    if not pre_loaded_case_id and conv_case_id:
+        pre_loaded_case_id = conv_case_id
+        logger.info(f"[Agent] Recovered case_id={conv_case_id} from conversation history for {clean_sender}")
     prior_context_note = ""
     prior_messages_to_inject = []  # Full messages to prepend to agent context
     if prev_conversation:
