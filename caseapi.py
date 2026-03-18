@@ -2571,6 +2571,19 @@ async def resend_offer_letter(case_id: str, provider_email: str, request: Reques
             content_type=ct, bcc=bcc_addr,
         )
 
+        # Log to negotiations table so it shows in Agent Activity
+        try:
+            from datetime import datetime
+            turso.execute(
+                'INSERT INTO negotiations (case_id, negotiation_type, "to", email_body, date, actual_bill, offered_bill, sent_by_us, result) '
+                'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                [case_id, "resend_offer_letter", provider_email,
+                 f"Resent offer letter with attachment ({filename})",
+                 datetime.now().isoformat(), 0, float(offered) if offered else 0, 1, "sent"]
+            )
+        except Exception as log_err:
+            logger.warning(f"[ResendLetter] Failed to log negotiation: {log_err}")
+
         return {"success": True, "message": f"Offer letter sent to {provider_email}" + (f" (thread: {thread_id[:15]})" if thread_id else " (new thread)"), "format": fmt}
     except HTTPException:
         raise
