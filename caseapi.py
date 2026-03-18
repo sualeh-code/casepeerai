@@ -2086,6 +2086,24 @@ async def get_agent_providers(case_id: str):
     except Exception as e:
         logger.warning(f"[AgentDashboard] Failed to query conversation_history: {e}")
 
+    # 3. Enrich with provider names from treatment page
+    try:
+        from casepeer_helpers import get_treatment_providers
+        treatment = get_treatment_providers(case_id)
+        if not treatment.get("error"):
+            for tp in treatment.get("providers", []):
+                tp_email = (tp.get("email") or "").strip().lower()
+                tp_name = tp.get("provider_name", "")
+                if tp_email and tp_email in providers and tp_name:
+                    providers[tp_email]["provider_name"] = tp_name
+    except Exception as e:
+        logger.warning(f"[AgentDashboard] Could not enrich provider names: {e}")
+
+    # Ensure all providers have a provider_name key
+    for p in providers.values():
+        if "provider_name" not in p:
+            p["provider_name"] = ""
+
     return {
         "case_id": case_id,
         "provider_count": len(providers),

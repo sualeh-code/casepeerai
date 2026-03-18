@@ -136,6 +136,7 @@ const ConversationCard = ({ conv }) => {
 const AgentActivity = ({ caseId }) => {
     const [providers, setProviders] = useState([]);
     const [selectedProvider, setSelectedProvider] = useState(null);
+    const [selectedProviderName, setSelectedProviderName] = useState('');
     const [providerHistory, setProviderHistory] = useState(null);
     const [loading, setLoading] = useState(true);
     const [loadingHistory, setLoadingHistory] = useState(false);
@@ -161,9 +162,10 @@ const AgentActivity = ({ caseId }) => {
         if (caseId) fetchProviders();
     }, [caseId]);
 
-    const fetchProviderHistory = async (email) => {
+    const fetchProviderHistory = async (email, providerName) => {
         setLoadingHistory(true);
         setSelectedProvider(email);
+        setSelectedProviderName(providerName || '');
         try {
             const res = await fetch(`/internal-api/cases/${caseId}/agent/providers/${encodeURIComponent(email)}/history`);
             if (res.ok) {
@@ -206,15 +208,15 @@ const AgentActivity = ({ caseId }) => {
         finally { setActionLoading(null); }
     };
 
-    // Derive provider name from negotiation history or email
+    // Derive provider name: API data > timeline > email fallback
     const getProviderName = () => {
-        if (!providerHistory) return selectedProvider;
-        // Try to get from timeline
-        for (const item of (providerHistory.timeline || [])) {
-            if (item.provider_name) return item.provider_name;
+        if (selectedProviderName) return selectedProviderName;
+        if (providerHistory) {
+            for (const item of (providerHistory.timeline || [])) {
+                if (item.provider_name) return item.provider_name;
+            }
         }
-        // Fallback: use the part before @ as rough name
-        return selectedProvider.split('@')[0].replace(/[._]/g, ' ');
+        return selectedProvider;
     };
 
     if (loading) return <div className="p-4 text-muted-foreground">Loading agent activity...</div>;
@@ -224,7 +226,7 @@ const AgentActivity = ({ caseId }) => {
         const providerName = getProviderName();
         return (
             <div className="space-y-4">
-                <Button variant="outline" size="sm" onClick={() => { setSelectedProvider(null); setProviderHistory(null); setActionResult(null); setLookupResults(null); }}>
+                <Button variant="outline" size="sm" onClick={() => { setSelectedProvider(null); setSelectedProviderName(''); setProviderHistory(null); setActionResult(null); setLookupResults(null); }}>
                     <ChevronLeft className="h-4 w-4 mr-1" /> Back to providers
                 </Button>
 
@@ -232,7 +234,7 @@ const AgentActivity = ({ caseId }) => {
                     <CardHeader>
                         <CardTitle className="flex items-center gap-2">
                             <Bot className="h-5 w-5" />
-                            {selectedProvider}
+                            {providerName !== selectedProvider ? `${providerName} — ` : ''}{selectedProvider}
                         </CardTitle>
                     </CardHeader>
                     <CardContent className="space-y-6">
@@ -330,7 +332,7 @@ const AgentActivity = ({ caseId }) => {
                                 <div
                                     key={i}
                                     className="flex items-center justify-between p-3 rounded-lg border hover:bg-muted/50 cursor-pointer transition-colors"
-                                    onClick={() => fetchProviderHistory(p.email)}
+                                    onClick={() => fetchProviderHistory(p.email, p.provider_name)}
                                 >
                                     <div className="flex items-center gap-3">
                                         <div className={`w-2 h-2 rounded-full ${
@@ -339,7 +341,8 @@ const AgentActivity = ({ caseId }) => {
                                             'bg-blue-500'
                                         }`} />
                                         <div>
-                                            <div className="font-medium text-sm">{p.email}</div>
+                                            {p.provider_name && <div className="font-medium text-sm">{p.provider_name}</div>}
+                                            <div className={`text-sm ${p.provider_name ? 'text-muted-foreground text-xs' : 'font-medium'}`}>{p.email}</div>
                                             <div className="text-xs text-muted-foreground">
                                                 {p.negotiation_count} interactions &middot; {p.last_activity || 'No activity'}
                                             </div>
