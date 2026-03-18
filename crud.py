@@ -46,35 +46,8 @@ def get_all_settings(db, skip: int = 0, limit: int = 100):
 
 # CASE CRUD (models.Case)
 def get_all_cases(db, skip: int = 0, limit: int = 100) -> List[Dict]:
-    """Get all cases with nested negotiations."""
-    cases = turso.fetch_all("SELECT * FROM cases LIMIT ? OFFSET ?", [limit, skip])
-    
-    if not cases:
-        return []
-
-    # Fetch negotiations for these cases to populate the relationship
-    # This mimics 'joinedload' in manual SQL
-    case_ids = [c["id"] for c in cases]
-    if not case_ids:
-        return cases
-        
-    placeholders = ", ".join(["?" for _ in case_ids])
-    query = f"SELECT * FROM negotiations WHERE case_id IN ({placeholders})"
-    all_negotiations = turso.fetch_all(query, case_ids)
-    
-    # Group by case_id
-    neg_map = {}
-    for n in all_negotiations:
-        cid = n["case_id"]
-        if cid not in neg_map:
-            neg_map[cid] = []
-        neg_map[cid].append(n)
-        
-    # Attach to cases
-    for c in cases:
-        c["negotiations"] = neg_map.get(c["id"], [])
-
-    return cases
+    """Get all cases."""
+    return turso.fetch_all("SELECT * FROM cases LIMIT ? OFFSET ?", [limit, skip]) or []
 
 def get_case_by_id(db, case_id: str) -> Optional[Dict]:
     """Get a case by ID."""
@@ -113,18 +86,6 @@ def create_case_metric(db, case: schemas.CaseMetricCreate):
     # Get last inserted id (Turso pipeline doesn't return it easily, so we query)
     return turso.fetch_one("SELECT * FROM case_metrics ORDER BY id DESC LIMIT 1")
 
-# NEGOTIATION CRUD
-def create_negotiation(db, negotiation: schemas.NegotiationCreate):
-    neg_dict = negotiation.dict()
-    cols = ", ".join([f'"{k}"' for k in neg_dict.keys()])
-    placeholders = ", ".join(["?" for _ in neg_dict])
-    vals = list(neg_dict.values())
-    turso.execute(f"INSERT INTO negotiations ({cols}) VALUES ({placeholders})", vals)
-    return turso.fetch_one("SELECT * FROM negotiations WHERE case_id = ? ORDER BY id DESC LIMIT 1", [negotiation.case_id])
-
-def get_negotiations_by_case(db, case_id: str):
-    return turso.fetch_all("SELECT * FROM negotiations WHERE case_id = ?", [case_id])
-
 # CLASSIFICATION CRUD
 def create_classification(db, classification: schemas.ClassificationCreate):
     cls_dict = classification.dict()
@@ -156,10 +117,10 @@ def get_latest_session(db):
 
 # DELETE CRUD
 def delete_case(db, case_id: str) -> bool:
-    """Delete a case and all related data (negotiations, classifications, reminders)."""
-    turso.execute("DELETE FROM negotiations WHERE case_id = ?", [case_id])
+    """Delete a case and all related data (classifications, reminders, conversation_history)."""
     turso.execute("DELETE FROM classifications WHERE case_id = ?", [case_id])
     turso.execute("DELETE FROM reminders WHERE case_id = ?", [case_id])
+    turso.execute("DELETE FROM conversation_history WHERE case_id = ?", [case_id])
     turso.execute("DELETE FROM cases WHERE id = ?", [case_id])
     return True
 
@@ -167,9 +128,9 @@ def delete_all_cases(db) -> int:
     """Delete all cases and all related data. Returns count of deleted cases."""
     cases = turso.fetch_all("SELECT id FROM cases")
     count = len(cases)
-    turso.execute("DELETE FROM negotiations")
     turso.execute("DELETE FROM classifications")
     turso.execute("DELETE FROM reminders")
+    turso.execute("DELETE FROM conversation_history")
     turso.execute("DELETE FROM cases")
     turso.execute("DELETE FROM case_metrics")
     return count

@@ -39,7 +39,7 @@ const CaseDetails = ({ caseId, onBack }) => {
 
                 const [classRes, remRes] = await Promise.all([
                     fetch(`/internal-api/classifications?case_id=${caseId}`),
-                    fetch(`/internal-api/reminders?case_id=${caseId}`)
+                    fetch(`/internal-api/cases/${caseId}/reminders`)
                 ]);
 
                 if (classRes.ok) setClassifications(await classRes.json());

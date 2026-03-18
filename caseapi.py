@@ -1136,7 +1136,7 @@ def read_case(case_id: str):
 
 @app.delete("/internal-api/cases/{case_id}")
 def delete_case(case_id: str):
-    """Delete a case and all its related data (negotiations, classifications, reminders)."""
+    """Delete a case and all its related data (classifications, reminders, conversation_history)."""
     db_case = crud.get_case_by_id(None, case_id=case_id)
     if db_case is None:
         raise HTTPException(status_code=404, detail="Case not found")
@@ -1150,19 +1150,6 @@ def delete_all_cases():
     count = crud.delete_all_cases(None)
     logger.info(f"Deleted all cases ({count} cases and all related data)")
     return {"message": f"Deleted {count} cases and all related data", "count": count}
-
-# Negotiations
-@app.post("/internal-api/negotiations", response_model=schemas.Negotiation)
-def create_negotiation(negotiation: schemas.NegotiationCreate):
-    # Verify case exists
-    db_case = crud.get_case_by_id(None, case_id=negotiation.case_id)
-    if not db_case:
-        raise HTTPException(status_code=404, detail="Case not found")
-    return crud.create_negotiation(None, negotiation=negotiation)
-
-@app.get("/internal-api/negotiations", response_model=list[schemas.Negotiation])
-def read_negotiations(case_id: str):
-    return crud.get_negotiations_by_case(None, case_id=case_id)
 
 # Classifications
 @app.post("/internal-api/classifications", response_model=schemas.Classification)
@@ -2027,38 +2014,12 @@ async def get_agent_providers(case_id: str):
     """
     GENERIC_DOMAINS = {"gmail.com", "yahoo.com", "hotmail.com", "outlook.com", "aol.com", "icloud.com", "live.com"}
 
-    # Collect per-email data from DB
+    # Collect per-email data from conversation_history
     email_data = {}
 
-    # 1. From negotiations table
-    try:
-        neg_rows = turso.fetch_all(
-            'SELECT DISTINCT "to", negotiation_type, COUNT(*) as count, '
-            'MAX(date) as last_date, '
-            'MAX(actual_bill) as latest_bill, MAX(offered_bill) as latest_offer '
-            'FROM negotiations WHERE case_id = ? GROUP BY "to"',
-            [case_id]
-        )
-        for row in neg_rows:
-            email = (row.get("to") or "").strip().lower()
-            if not email:
-                continue
-            email_data[email] = {
-                "email": email,
-                "negotiation_count": row.get("count", 0),
-                "last_activity": row.get("last_date", ""),
-                "latest_bill": row.get("latest_bill", 0),
-                "latest_offer": row.get("latest_offer", 0),
-                "has_conversation": False,
-                "last_intent": "",
-            }
-    except Exception as e:
-        logger.warning(f"[AgentDashboard] Failed to query negotiations: {e}")
-
-    # 2. From conversation_history
     try:
         conv_rows = turso.fetch_all(
-            "SELECT sender_email, thread_subject, tools_used, last_intent, updated_at "
+            "SELECT sender_email, thread_subject, tools_used, last_intent, updated_at, messages_json "
             "FROM conversation_history WHERE case_id = ?",
             [case_id]
         )
@@ -2066,19 +2027,41 @@ async def get_agent_providers(case_id: str):
             email = (row.get("sender_email") or "").strip().lower()
             if not email:
                 continue
+
+            # Extract bill/offer from the agent's last assistant message
+            bill, offer = 0, 0
+            try:
+                messages = json.loads(row.get("messages_json") or "[]")
+                for msg in reversed(messages):
+                    if msg.get("role") == "assistant" and msg.get("content"):
+                        try:
+                            data = json.loads(msg["content"])
+                            bill = float(data.get("actual_bill", 0) or 0)
+                            offer = float(data.get("offered_bill", 0) or 0)
+                            break
+                        except (json.JSONDecodeError, ValueError, TypeError):
+                            continue
+            except Exception:
+                pass
+
             if email in email_data:
                 email_data[email]["has_conversation"] = True
                 email_data[email]["last_intent"] = row.get("last_intent", "")
                 conv_date = row.get("updated_at", "")
                 if conv_date > (email_data[email].get("last_activity") or ""):
                     email_data[email]["last_activity"] = conv_date
+                if bill > email_data[email].get("latest_bill", 0):
+                    email_data[email]["latest_bill"] = bill
+                if offer > email_data[email].get("latest_offer", 0):
+                    email_data[email]["latest_offer"] = offer
+                email_data[email]["negotiation_count"] += 1
             else:
                 email_data[email] = {
                     "email": email,
-                    "negotiation_count": 0,
+                    "negotiation_count": 1,
                     "last_activity": row.get("updated_at", ""),
-                    "latest_bill": 0,
-                    "latest_offer": 0,
+                    "latest_bill": bill,
+                    "latest_offer": offer,
                     "has_conversation": True,
                     "last_intent": row.get("last_intent", ""),
                 }
@@ -2175,31 +2158,7 @@ async def get_agent_provider_history(case_id: str, provider_email: str, request:
 
     timeline = []
 
-    # 1. Negotiations across all emails
-    for em in emails:
-        try:
-            neg_rows = turso.fetch_all(
-                'SELECT id, negotiation_type, "to", email_body, date, actual_bill, offered_bill, sent_by_us, result '
-                'FROM negotiations WHERE case_id = ? AND LOWER("to") = ? ORDER BY date ASC',
-                [case_id, em]
-            )
-            for row in neg_rows:
-                direction = "outbound" if row.get("sent_by_us") else "inbound"
-                timeline.append({
-                    "type": "negotiation",
-                    "timestamp": row.get("date", ""),
-                    "direction": direction,
-                    "negotiation_type": row.get("negotiation_type", ""),
-                    "email_body": row.get("email_body", ""),
-                    "actual_bill": row.get("actual_bill", 0),
-                    "offered_bill": row.get("offered_bill", 0),
-                    "result": row.get("result", ""),
-                    "email": em,
-                })
-        except Exception as e:
-            logger.warning(f"[AgentDashboard] Failed to query negotiations for {em}: {e}")
-
-    # 2. Conversation history across all emails
+    # Conversation history across all emails
     conversations = []
     for em in emails:
         try:
@@ -2270,7 +2229,7 @@ async def get_agent_provider_history(case_id: str, provider_email: str, request:
         "case_id": case_id,
         "provider_email": provider_email,
         "emails": emails,
-        "negotiation_count": len([t for t in timeline if t["type"] == "negotiation"]),
+        "negotiation_count": len(conversations),
         "conversation_count": len(conversations),
         "timeline": timeline,
         "conversations": conversations,
@@ -2526,12 +2485,25 @@ async def resend_offer_letter(case_id: str, provider_email: str, request: Reques
         if not lien_id or not template_id:
             raise HTTPException(status_code=404, detail=f"Could not find lien for provider '{provider_name}'")
 
-        # Get the latest offered amount from negotiations table
-        neg_row = turso.fetch_one(
-            'SELECT offered_bill FROM negotiations WHERE case_id = ? AND "to" = ? ORDER BY date DESC LIMIT 1',
-            [case_id, provider_email]
-        )
-        offered = str(neg_row.get("offered_bill", "")) if neg_row else ""
+        # Get the latest offered amount from conversation_history
+        offered = ""
+        try:
+            conv_row = turso.fetch_one(
+                "SELECT messages_json FROM conversation_history WHERE case_id = ? AND sender_email = ? ORDER BY updated_at DESC LIMIT 1",
+                [case_id, provider_email]
+            )
+            if conv_row and conv_row.get("messages_json"):
+                msgs = json.loads(conv_row["messages_json"])
+                for msg in reversed(msgs):
+                    if msg.get("role") == "assistant" and msg.get("content"):
+                        try:
+                            data = json.loads(msg["content"])
+                            offered = str(data.get("offered_bill", "")) if data.get("offered_bill") else ""
+                            break
+                        except (json.JSONDecodeError, ValueError, TypeError):
+                            continue
+        except Exception:
+            pass
 
         # Generate the letter
         file_bytes, fmt = await asyncio.to_thread(_generate_casepeer_offer_letter, case_id, lien_id, template_id, offered)
@@ -2571,18 +2543,43 @@ async def resend_offer_letter(case_id: str, provider_email: str, request: Reques
             content_type=ct, bcc=bcc_addr,
         )
 
-        # Log to negotiations table so it shows in Agent Activity
+        # Log to conversation_history so it shows in Agent Activity
         try:
             from datetime import datetime
-            turso.execute(
-                'INSERT INTO negotiations (case_id, negotiation_type, "to", email_body, date, actual_bill, offered_bill, sent_by_us, result) '
-                'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                [case_id, "resend_offer_letter", provider_email,
-                 f"Resent offer letter with attachment ({filename})",
-                 datetime.now().isoformat(), 0, float(offered) if offered else 0, 1, "sent"]
+            conv_key = f"{case_id}|{provider_email.lower()}"
+            existing = turso.fetch_one(
+                "SELECT messages_json FROM conversation_history WHERE id = ?", [conv_key]
             )
+            resend_entry = {
+                "role": "assistant",
+                "content": json.dumps({
+                    "intent": "resend_offer_letter",
+                    "reply_message": f"Resent offer letter with attachment ({filename})",
+                    "provider_name": provider_name,
+                    "patient_name": patient,
+                    "actual_bill": 0,
+                    "offered_bill": float(offered) if offered else 0,
+                })
+            }
+            if existing and existing.get("messages_json"):
+                msgs = json.loads(existing["messages_json"])
+                msgs.append({"role": "user", "content": f"[System] Resend offer letter triggered at {datetime.now().isoformat()}"})
+                msgs.append(resend_entry)
+                turso.execute(
+                    "UPDATE conversation_history SET messages_json = ?, last_intent = 'resend_offer_letter', updated_at = datetime('now') WHERE id = ?",
+                    [json.dumps(msgs), conv_key]
+                )
+            else:
+                msgs = [
+                    {"role": "user", "content": f"[System] Resend offer letter triggered at {datetime.now().isoformat()}"},
+                    resend_entry,
+                ]
+                turso.execute(
+                    "INSERT INTO conversation_history (id, case_id, sender_email, thread_subject, messages_json, tools_used, last_intent, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))",
+                    [conv_key, case_id, provider_email.lower(), "", json.dumps(msgs), "[]", "resend_offer_letter"]
+                )
         except Exception as log_err:
-            logger.warning(f"[ResendLetter] Failed to log negotiation: {log_err}")
+            logger.warning(f"[ResendLetter] Failed to log to conversation_history: {log_err}")
 
         return {"success": True, "message": f"Offer letter sent to {provider_email}" + (f" (thread: {thread_id[:15]})" if thread_id else " (new thread)"), "format": fmt}
     except HTTPException:

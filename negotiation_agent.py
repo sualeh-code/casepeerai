@@ -404,7 +404,6 @@ WHAT YOU DO (AI only):
 6. For "asking_for_payment": Call get_case_status to check if case is in Lien Negotiations or Disbursement.
 
 WHAT THE SYSTEM HANDLES AUTOMATICALLY (do NOT do these yourself):
-- Logging the negotiation (log_negotiation) — done by code after you return.
 - Adding a case note (add_case_note) — done by code after you return.
 - Accepting liens (get_settlement_page + accept_lien) — done by code for "accepted_and_provided_details" intents ONLY.
 - Saving bill confirmation evidence — for "bill_confirmation" intents, the system auto-saves the original email thread as a PDF to CasePeer.
@@ -532,51 +531,6 @@ TOOLS = [
                     }
                 },
                 "required": ["case_id"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "log_negotiation",
-            "description": "Log a negotiation event (email sent/received, offer, acceptance, etc.) to the database.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "case_id": {
-                        "type": "string",
-                        "description": "The CasePeer case ID"
-                    },
-                    "negotiation_type": {
-                        "type": "string",
-                        "description": "Type: 'Accepted', 'Rejected', 'Counter-offer', 'Payment Inquiry', 'Bill Correction', 'Bill Confirmation', 'Clarification', 'Escalation'"
-                    },
-                    "email_body": {
-                        "type": "string",
-                        "description": "Summary of the email content"
-                    },
-                    "to": {
-                        "type": "string",
-                        "description": "Provider email address"
-                    },
-                    "actual_bill": {
-                        "type": "number",
-                        "description": "The original bill amount"
-                    },
-                    "offered_bill": {
-                        "type": "number",
-                        "description": "The amount offered/accepted"
-                    },
-                    "result": {
-                        "type": "string",
-                        "description": "Result of this negotiation step"
-                    },
-                    "sent_by_us": {
-                        "type": "boolean",
-                        "description": "True if this logs OUR reply/action, False if logging the provider's incoming message. Default: false (provider message)."
-                    }
-                },
-                "required": ["case_id", "negotiation_type", "email_body"]
             }
         }
     },
@@ -903,19 +857,19 @@ def _find_lien_id_for_provider(case_id: str, provider_name: str) -> tuple:
 
 
 def _update_case_stats(case_id: str):
-    """Recalculate and update case-level stats from conversation_history + negotiations.
+    """Recalculate and update case-level stats from conversation_history.
 
-    Uses conversation_history for intent (accepted/rejected) and negotiations
-    table for bill/offer amounts. Updates: status, fees_taken, savings,
-    emails_sent, emails_received.
+    Uses conversation_history for intent (accepted/rejected) and parses
+    bill/offer amounts from the agent's final response in messages_json.
+    Updates: status, fees_taken, savings, emails_sent, emails_received.
     """
     from turso_client import turso
 
     providers = {}
 
-    # 1. Get intent from conversation_history
+    # Get intent + bill/offer from conversation_history
     conv_rows = turso.fetch_all(
-        'SELECT sender_email, last_intent FROM conversation_history WHERE case_id = ?',
+        'SELECT sender_email, last_intent, messages_json FROM conversation_history WHERE case_id = ?',
         [case_id]
     )
     for r in conv_rows:
@@ -928,27 +882,24 @@ def _update_case_stats(case_id: str):
         if "accepted" in intent:
             providers[email]["accepted"] = True
 
-    # 2. Get bill/offer from negotiations table
-    try:
-        neg_rows = turso.fetch_all(
-            'SELECT "to", MAX(actual_bill) as bill, MAX(offered_bill) as offer, COUNT(*) as cnt '
-            'FROM negotiations WHERE case_id = ? GROUP BY "to"',
-            [case_id]
-        )
-        for r in neg_rows:
-            email = (r.get("to") or "").lower()
-            if not email:
-                continue
-            if email not in providers:
-                providers[email] = {"bill": 0, "offer": 0, "accepted": False}
-            b = float(r.get("bill") or 0)
-            o = float(r.get("offer") or 0)
-            if b > providers[email]["bill"]:
-                providers[email]["bill"] = b
-            if o > providers[email]["offer"]:
-                providers[email]["offer"] = o
-    except Exception as e:
-        logger.warning(f"[PostProcess] Could not read negotiations table: {e}")
+        # Extract bill/offer from the agent's last assistant message
+        try:
+            messages = json.loads(r.get("messages_json") or "[]")
+            for msg in reversed(messages):
+                if msg.get("role") == "assistant" and msg.get("content"):
+                    try:
+                        data = json.loads(msg["content"])
+                        b = float(data.get("actual_bill", 0) or 0)
+                        o = float(data.get("offered_bill", 0) or 0)
+                        if b > providers[email]["bill"]:
+                            providers[email]["bill"] = b
+                        if o > providers[email]["offer"]:
+                            providers[email]["offer"] = o
+                        break
+                    except (json.JSONDecodeError, ValueError, TypeError):
+                        continue
+        except Exception:
+            pass
 
     if not providers:
         return
@@ -1058,7 +1009,7 @@ def _resolve_case_id_from_subject(subject: str, candidate_case_ids: list = None)
 
 
 def _lookup_negotiation_history(provider_email: str) -> str:
-    """Look up existing negotiation history by provider email, grouped by case_id.
+    """Look up existing negotiation history by provider email from conversation_history.
 
     A provider can have multiple clients/cases, so we group history per case
     and return all of them so the agent can match the right one.
@@ -1066,48 +1017,73 @@ def _lookup_negotiation_history(provider_email: str) -> str:
     from turso_client import turso
     try:
         rows = turso.fetch_all(
-            'SELECT case_id, negotiation_type, email_body, actual_bill, offered_bill, result, date, sent_by_us FROM negotiations WHERE "to" = ? ORDER BY date DESC LIMIT 30',
-            [provider_email]
+            'SELECT case_id, messages_json, last_intent, updated_at FROM conversation_history WHERE sender_email = ? ORDER BY updated_at DESC LIMIT 10',
+            [provider_email.lower()]
         )
 
-        # Fallback: domain-level match (e.g. alen@nourianmd.com matches leslie@nourianmd.com)
+        # Fallback: domain-level match
         if not rows:
             domain = provider_email.lower().split("@")[-1] if "@" in provider_email else ""
             if domain and domain not in ("gmail.com", "yahoo.com", "hotmail.com", "outlook.com", "aol.com"):
                 rows = turso.fetch_all(
-                    'SELECT case_id, negotiation_type, email_body, actual_bill, offered_bill, result, date, sent_by_us FROM negotiations WHERE "to" LIKE ? ORDER BY date DESC LIMIT 30',
+                    'SELECT case_id, messages_json, last_intent, updated_at FROM conversation_history WHERE sender_email LIKE ? ORDER BY updated_at DESC LIMIT 10',
                     [f"%@{domain}"]
                 )
                 if rows:
-                    logger.info(f"[Agent] Domain-matched negotiation history for {provider_email} via @{domain} ({len(rows)} rows)")
+                    logger.info(f"[Agent] Domain-matched conversation history for {provider_email} via @{domain} ({len(rows)} rows)")
 
         if not rows:
             return json.dumps({"found": False, "message": f"No negotiation history for {provider_email}"})
 
-        # Group negotiations by case_id (provider may have multiple clients)
+        # Extract bill/offer from the agent's last assistant message in each conversation
+        def _extract_amounts(messages_json_str):
+            try:
+                messages = json.loads(messages_json_str or "[]")
+                for msg in reversed(messages):
+                    if msg.get("role") == "assistant" and msg.get("content"):
+                        try:
+                            data = json.loads(msg["content"])
+                            bill = float(data.get("actual_bill", 0) or 0)
+                            offer = float(data.get("offered_bill", 0) or 0)
+                            return bill, offer
+                        except (json.JSONDecodeError, ValueError, TypeError):
+                            continue
+            except Exception:
+                pass
+            return 0, 0
+
+        # Group by case_id
         cases = {}
         for r in rows:
             cid = str(r.get("case_id", ""))
+            bill, offer = _extract_amounts(r.get("messages_json", ""))
+            intent = r.get("last_intent", "")
+
             if cid not in cases:
                 cases[cid] = {
                     "case_id": cid,
-                    "latest_actual_bill": r.get("actual_bill"),
-                    "latest_offered_bill": r.get("offered_bill"),
+                    "latest_actual_bill": bill,
+                    "latest_offered_bill": offer,
                     "history": []
                 }
+            else:
+                if bill > (cases[cid]["latest_actual_bill"] or 0):
+                    cases[cid]["latest_actual_bill"] = bill
+                if offer > (cases[cid]["latest_offered_bill"] or 0):
+                    cases[cid]["latest_offered_bill"] = offer
+
             cases[cid]["history"].append({
-                "type": r.get("negotiation_type", ""),
-                "summary": (r.get("email_body", "") or "")[:200],
-                "actual_bill": r.get("actual_bill"),
-                "offered_bill": r.get("offered_bill"),
-                "result": r.get("result", ""),
-                "date": r.get("date", ""),
-                "sent_by_us": bool(r.get("sent_by_us", 0))
+                "type": intent,
+                "summary": intent,
+                "actual_bill": bill,
+                "offered_bill": offer,
+                "result": intent,
+                "date": r.get("updated_at", ""),
+                "sent_by_us": False
             })
 
         cases_list = list(cases.values())
 
-        # If only one case, return it directly
         if len(cases_list) == 1:
             c = cases_list[0]
             return json.dumps({
@@ -1121,7 +1097,6 @@ def _lookup_negotiation_history(provider_email: str) -> str:
                 "history": c["history"]
             })
 
-        # Multiple cases — return all so agent can match by patient name in email
         return json.dumps({
             "found": True,
             "multiple_cases": True,
@@ -1384,19 +1359,6 @@ def tool_get_case_status(case_id: str) -> str:
     return json.dumps({"case_status": case_status, "patient_name": patient_name})
 
 
-def tool_log_negotiation(case_id: str, negotiation_type: str, email_body: str,
-                         to: str = "", actual_bill: float = 0, offered_bill: float = 0,
-                         result: str = "", sent_by_us: bool = False) -> str:
-    """Log a negotiation event to the Turso database."""
-    from turso_client import turso
-    try:
-        turso.execute(
-            "INSERT INTO negotiations (case_id, negotiation_type, \"to\", email_body, date, actual_bill, offered_bill, sent_by_us, result) VALUES (?, ?, ?, ?, datetime('now'), ?, ?, ?, ?)",
-            [case_id, negotiation_type, to, email_body, actual_bill, offered_bill, 1 if sent_by_us else 0, result]
-        )
-        return json.dumps({"success": True})
-    except Exception as e:
-        return json.dumps({"error": str(e)})
 
 
 async def _generate_original_thread_pdf(messages: List[Dict], subject: str) -> bytes:
@@ -1836,7 +1798,6 @@ TOOL_FUNCTIONS = {
     "accept_lien": lambda args: tool_accept_lien(args["case_id"], args["provider_id"], args["offered_amount"]),
     "add_case_note": lambda args: tool_add_case_note(args["case_id"], args["note"]),
     "get_case_status": lambda args: tool_get_case_status(args["case_id"]),
-    "log_negotiation": lambda args: tool_log_negotiation(**args),
     "generate_bill_correction_pdf": lambda args: tool_generate_bill_correction_pdf(
         case_id=args["case_id"],
         letter_type=args["letter_type"],
@@ -2228,7 +2189,7 @@ INSTRUCTIONS:
 2. You already have the case_id and full negotiation history pre-loaded above. Use them directly
    — do NOT call search_case unless no case_id was provided.
 3. Use tools only when needed (e.g. get_treatment_page for bill lookup, generate_bill_correction_pdf for corrections).
-   Do NOT call log_negotiation, add_case_note, accept_lien, or get_settlement_page — the system handles these automatically.
+   Do NOT call add_case_note, accept_lien, or get_settlement_page — the system handles these automatically.
 4. Compose a reply email if one is needed.
 5. Return your final decision as a JSON object with these fields:
    - intent: the classification

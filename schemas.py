@@ -59,28 +59,7 @@ class CaseCreate(CaseBase):
     pass
 
 class Case(CaseBase):
-    negotiations: list["Negotiation"] = []
     documents: list["Document"] = []
-    class Config:
-        orm_mode = True
-
-# Negotiation Schemas
-class NegotiationBase(BaseModel):
-    case_id: Optional[str] = ""
-    negotiation_type: Optional[str] = ""
-    to: Optional[str] = ""
-    email_body: Optional[str] = ""
-    date: Optional[str] = ""
-    actual_bill: Optional[float] = 0.0
-    offered_bill: Optional[float] = 0.0
-    sent_by_us: Optional[bool] = True
-    result: Optional[str] = ""
-
-class NegotiationCreate(NegotiationBase):
-    pass
-
-class Negotiation(NegotiationBase):
-    id: int
     class Config:
         orm_mode = True
 

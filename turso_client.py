@@ -61,8 +61,7 @@ class TursoClient:
             {"sql": "CREATE TABLE IF NOT EXISTS app_sessions (name TEXT PRIMARY KEY, session_data TEXT, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP)"},
             # Cases
             {"sql": "CREATE TABLE IF NOT EXISTS cases (id TEXT PRIMARY KEY, patient_name TEXT, status TEXT, fees_taken REAL DEFAULT 0, savings REAL DEFAULT 0, revenue REAL DEFAULT 0, emails_received INTEGER DEFAULT 0, emails_sent INTEGER DEFAULT 0)"},
-            # Negotiations
-            {"sql": "CREATE TABLE IF NOT EXISTS negotiations (id INTEGER PRIMARY KEY AUTOINCREMENT, case_id TEXT, negotiation_type TEXT, \"to\" TEXT, email_body TEXT, date TEXT, actual_bill REAL, offered_bill REAL, sent_by_us INTEGER DEFAULT 1, result TEXT)"},
+            # (negotiations table removed — all data lives in conversation_history)
             # Classifications
             {"sql": "CREATE TABLE IF NOT EXISTS classifications (id INTEGER PRIMARY KEY AUTOINCREMENT, case_id TEXT, ocr_performed INTEGER DEFAULT 0, number_of_documents INTEGER, confidence REAL)"},
             # Reminders
@@ -80,7 +79,8 @@ class TursoClient:
         ]
         # Migration: add case_id column if table already exists without it
         migration_stmts = [
-            {"sql": "ALTER TABLE conversation_history ADD COLUMN case_id TEXT"}
+            {"sql": "ALTER TABLE conversation_history ADD COLUMN case_id TEXT"},
+            {"sql": "DROP TABLE IF EXISTS negotiations"},
         ]
         try:
             self.execute_many(statements)
