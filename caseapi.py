@@ -2021,11 +2021,16 @@ async def gmail_oauth_callback(request: Request, code: str = None, error: str = 
 async def get_agent_providers(case_id: str):
     """
     List all providers the AI agent has interacted with for a given case.
-    Combines data from negotiations table and conversation_history table.
+    Groups multiple email addresses under the same provider using treatment
+    page data (exact email match + domain match).
+    Returns: { providers: [{ provider_name, lien_id, emails: [{ email, ... }], ... }] }
     """
-    providers = {}
+    GENERIC_DOMAINS = {"gmail.com", "yahoo.com", "hotmail.com", "outlook.com", "aol.com", "icloud.com", "live.com"}
 
-    # 1. From negotiations table — providers we emailed
+    # Collect per-email data from DB
+    email_data = {}
+
+    # 1. From negotiations table
     try:
         neg_rows = turso.fetch_all(
             'SELECT DISTINCT "to", negotiation_type, COUNT(*) as count, '
@@ -2038,7 +2043,7 @@ async def get_agent_providers(case_id: str):
             email = (row.get("to") or "").strip().lower()
             if not email:
                 continue
-            providers[email] = {
+            email_data[email] = {
                 "email": email,
                 "negotiation_count": row.get("count", 0),
                 "last_activity": row.get("last_date", ""),
@@ -2050,7 +2055,7 @@ async def get_agent_providers(case_id: str):
     except Exception as e:
         logger.warning(f"[AgentDashboard] Failed to query negotiations: {e}")
 
-    # 2. From conversation_history — threads the AI has processed
+    # 2. From conversation_history
     try:
         conv_rows = turso.fetch_all(
             "SELECT sender_email, thread_subject, tools_used, last_intent, updated_at "
@@ -2061,20 +2066,14 @@ async def get_agent_providers(case_id: str):
             email = (row.get("sender_email") or "").strip().lower()
             if not email:
                 continue
-            if email in providers:
-                providers[email]["has_conversation"] = True
-                providers[email]["last_intent"] = row.get("last_intent", "")
-                # Use most recent date
+            if email in email_data:
+                email_data[email]["has_conversation"] = True
+                email_data[email]["last_intent"] = row.get("last_intent", "")
                 conv_date = row.get("updated_at", "")
-                if conv_date > (providers[email].get("last_activity") or ""):
-                    providers[email]["last_activity"] = conv_date
+                if conv_date > (email_data[email].get("last_activity") or ""):
+                    email_data[email]["last_activity"] = conv_date
             else:
-                tools_list = []
-                try:
-                    tools_list = json.loads(row.get("tools_used") or "[]")
-                except Exception:
-                    pass
-                providers[email] = {
+                email_data[email] = {
                     "email": email,
                     "negotiation_count": 0,
                     "last_activity": row.get("updated_at", ""),
@@ -2086,149 +2085,191 @@ async def get_agent_providers(case_id: str):
     except Exception as e:
         logger.warning(f"[AgentDashboard] Failed to query conversation_history: {e}")
 
-    # 3. Enrich with provider names from treatment page
+    # 3. Enrich with treatment page — build email→provider and domain→provider maps
+    tp_email_map = {}   # email → {name, lien_id, phone}
+    tp_domain_map = {}  # domain → {name, lien_id, phone}
     try:
         from casepeer_helpers import get_treatment_providers
         treatment = await asyncio.to_thread(get_treatment_providers, case_id)
         if not treatment.get("error"):
-            # Build email→name and domain→name maps from treatment page
-            tp_email_map = {}
-            tp_domain_map = {}
             for tp in treatment.get("providers", []):
                 tp_email = (tp.get("email") or "").strip().lower()
                 tp_name = tp.get("provider_name", "")
+                tp_lien_id = tp.get("lien_id", "")
+                tp_phone = tp.get("phone", "")
                 if tp_email and tp_name:
-                    tp_email_map[tp_email] = tp_name
+                    tp_email_map[tp_email] = {"name": tp_name, "lien_id": tp_lien_id, "phone": tp_phone}
                     domain = tp_email.split("@")[-1] if "@" in tp_email else ""
-                    if domain and domain not in ("gmail.com", "yahoo.com", "hotmail.com", "outlook.com"):
-                        tp_domain_map[domain] = tp_name
-
-            # Match by exact email first, then by domain
-            for email, pdata in providers.items():
-                if email in tp_email_map:
-                    pdata["provider_name"] = tp_email_map[email]
-                else:
-                    domain = email.split("@")[-1] if "@" in email else ""
-                    if domain in tp_domain_map:
-                        pdata["provider_name"] = tp_domain_map[domain]
+                    if domain and domain not in GENERIC_DOMAINS:
+                        tp_domain_map[domain] = {"name": tp_name, "lien_id": tp_lien_id, "phone": tp_phone}
     except Exception as e:
         logger.warning(f"[AgentDashboard] Could not enrich provider names: {e}")
 
-    # Ensure all providers have a provider_name key
-    for p in providers.values():
-        if "provider_name" not in p:
-            p["provider_name"] = ""
+    # 4. Group emails by provider name
+    # First, assign provider_name to each email
+    for email, edata in email_data.items():
+        if email in tp_email_map:
+            edata["provider_name"] = tp_email_map[email]["name"]
+            edata["lien_id"] = tp_email_map[email]["lien_id"]
+        else:
+            domain = email.split("@")[-1] if "@" in email else ""
+            if domain in tp_domain_map:
+                edata["provider_name"] = tp_domain_map[domain]["name"]
+                edata["lien_id"] = tp_domain_map[domain]["lien_id"]
+            else:
+                edata["provider_name"] = ""
+                edata["lien_id"] = ""
+
+    # Group by provider_name (unresolved emails get their own group)
+    grouped = {}
+    for email, edata in email_data.items():
+        pname = edata["provider_name"]
+        group_key = pname if pname else f"_unknown_{email}"
+        if group_key not in grouped:
+            grouped[group_key] = {
+                "provider_name": pname,
+                "lien_id": edata.get("lien_id", ""),
+                "emails": [],
+                "total_negotiations": 0,
+                "latest_bill": 0,
+                "latest_offer": 0,
+                "last_activity": "",
+                "last_intent": "",
+            }
+        grouped[group_key]["emails"].append(edata)
+        grouped[group_key]["total_negotiations"] += edata.get("negotiation_count", 0)
+        if edata.get("latest_bill", 0) > grouped[group_key]["latest_bill"]:
+            grouped[group_key]["latest_bill"] = edata["latest_bill"]
+        if edata.get("latest_offer", 0) > grouped[group_key]["latest_offer"]:
+            grouped[group_key]["latest_offer"] = edata["latest_offer"]
+        if (edata.get("last_activity") or "") > (grouped[group_key]["last_activity"] or ""):
+            grouped[group_key]["last_activity"] = edata["last_activity"]
+        if edata.get("last_intent"):
+            grouped[group_key]["last_intent"] = edata["last_intent"]
+
+    providers_list = sorted(grouped.values(), key=lambda p: p.get("last_activity", ""), reverse=True)
 
     return {
         "case_id": case_id,
-        "provider_count": len(providers),
-        "providers": sorted(providers.values(), key=lambda p: p.get("last_activity", ""), reverse=True)
+        "provider_count": len(providers_list),
+        "providers": providers_list,
     }
 
 
 @app.get("/internal-api/cases/{case_id}/agent/providers/{provider_email}/history")
-async def get_agent_provider_history(case_id: str, provider_email: str):
+async def get_agent_provider_history(case_id: str, provider_email: str, request: Request):
     """
-    Full AI interaction history for a specific provider on a case.
-    Returns: timeline of tool calls, emails, negotiations, and AI decisions.
+    Full AI interaction history for a specific provider email on a case.
+    Supports ?emails=a@x.com,b@x.com to merge history across multiple emails
+    belonging to the same provider.
     """
     import urllib.parse
     provider_email = urllib.parse.unquote(provider_email).strip().lower()
 
+    # Support merging history across multiple emails for same provider
+    emails_param = request.query_params.get("emails", "")
+    if emails_param:
+        emails = [e.strip().lower() for e in emails_param.split(",") if e.strip()]
+    else:
+        emails = [provider_email]
+
     timeline = []
 
-    # 1. Negotiations (individual logged events)
-    try:
-        neg_rows = turso.fetch_all(
-            'SELECT id, negotiation_type, "to", email_body, date, actual_bill, offered_bill, sent_by_us, result '
-            'FROM negotiations WHERE case_id = ? AND LOWER("to") = ? ORDER BY date ASC',
-            [case_id, provider_email]
-        )
-        for row in neg_rows:
-            direction = "outbound" if row.get("sent_by_us") else "inbound"
-            timeline.append({
-                "type": "negotiation",
-                "timestamp": row.get("date", ""),
-                "direction": direction,
-                "negotiation_type": row.get("negotiation_type", ""),
-                "email_body": row.get("email_body", ""),
-                "actual_bill": row.get("actual_bill", 0),
-                "offered_bill": row.get("offered_bill", 0),
-                "result": row.get("result", ""),
-            })
-    except Exception as e:
-        logger.warning(f"[AgentDashboard] Failed to query negotiations for {provider_email}: {e}")
+    # 1. Negotiations across all emails
+    for em in emails:
+        try:
+            neg_rows = turso.fetch_all(
+                'SELECT id, negotiation_type, "to", email_body, date, actual_bill, offered_bill, sent_by_us, result '
+                'FROM negotiations WHERE case_id = ? AND LOWER("to") = ? ORDER BY date ASC',
+                [case_id, em]
+            )
+            for row in neg_rows:
+                direction = "outbound" if row.get("sent_by_us") else "inbound"
+                timeline.append({
+                    "type": "negotiation",
+                    "timestamp": row.get("date", ""),
+                    "direction": direction,
+                    "negotiation_type": row.get("negotiation_type", ""),
+                    "email_body": row.get("email_body", ""),
+                    "actual_bill": row.get("actual_bill", 0),
+                    "offered_bill": row.get("offered_bill", 0),
+                    "result": row.get("result", ""),
+                    "email": em,
+                })
+        except Exception as e:
+            logger.warning(f"[AgentDashboard] Failed to query negotiations for {em}: {e}")
 
-    # 2. Conversation history — full AI chat + tool calls
+    # 2. Conversation history across all emails
     conversations = []
-    try:
-        conv_rows = turso.fetch_all(
-            "SELECT id, thread_subject, messages_json, tools_used, last_intent, updated_at "
-            "FROM conversation_history WHERE case_id = ? AND sender_email = ? ORDER BY updated_at ASC",
-            [case_id, provider_email]
-        )
-        for row in conv_rows:
-            messages = []
-            try:
-                messages = json.loads(row.get("messages_json") or "[]")
-            except Exception:
-                pass
+    for em in emails:
+        try:
+            conv_rows = turso.fetch_all(
+                "SELECT id, thread_subject, messages_json, tools_used, last_intent, updated_at "
+                "FROM conversation_history WHERE case_id = ? AND sender_email = ? ORDER BY updated_at ASC",
+                [case_id, em]
+            )
+            for row in conv_rows:
+                messages = []
+                try:
+                    messages = json.loads(row.get("messages_json") or "[]")
+                except Exception:
+                    pass
 
-            tools = []
-            try:
-                tools = json.loads(row.get("tools_used") or "[]")
-            except Exception:
-                pass
+                tools = []
+                try:
+                    tools = json.loads(row.get("tools_used") or "[]")
+                except Exception:
+                    pass
 
-            # Parse messages into a readable timeline
-            chat_entries = []
-            for msg in messages:
-                if not isinstance(msg, dict):
-                    continue
-                role = msg.get("role", "")
-                if role == "system":
-                    continue  # Skip system prompt
-                if role == "user":
-                    # The initial email content sent to the agent
-                    content = msg.get("content", "")
-                    if len(content) > 500:
-                        content = content[:500] + "..."
-                    chat_entries.append({"role": "user", "content": content})
-                elif role == "assistant":
-                    content = msg.get("content", "")
-                    tool_calls_data = msg.get("tool_calls", [])
-                    if tool_calls_data:
-                        for tc in tool_calls_data:
-                            fn = tc.get("function", {})
-                            chat_entries.append({
-                                "role": "tool_call",
-                                "function": fn.get("name", "unknown"),
-                                "arguments": fn.get("arguments", "{}"),
-                            })
-                    if content:
-                        chat_entries.append({"role": "assistant", "content": content})
-                elif role == "tool":
-                    content = msg.get("content", "")
-                    if len(content) > 300:
-                        content = content[:300] + "..."
-                    chat_entries.append({"role": "tool_result", "content": content})
+                chat_entries = []
+                for msg in messages:
+                    if not isinstance(msg, dict):
+                        continue
+                    role = msg.get("role", "")
+                    if role == "system":
+                        continue
+                    if role == "user":
+                        content = msg.get("content", "")
+                        if len(content) > 500:
+                            content = content[:500] + "..."
+                        chat_entries.append({"role": "user", "content": content})
+                    elif role == "assistant":
+                        content = msg.get("content", "")
+                        tool_calls_data = msg.get("tool_calls", [])
+                        if tool_calls_data:
+                            for tc in tool_calls_data:
+                                fn = tc.get("function", {})
+                                chat_entries.append({
+                                    "role": "tool_call",
+                                    "function": fn.get("name", "unknown"),
+                                    "arguments": fn.get("arguments", "{}"),
+                                })
+                        if content:
+                            chat_entries.append({"role": "assistant", "content": content})
+                    elif role == "tool":
+                        content = msg.get("content", "")
+                        if len(content) > 300:
+                            content = content[:300] + "..."
+                        chat_entries.append({"role": "tool_result", "content": content})
 
-            conversations.append({
-                "thread_subject": row.get("thread_subject", ""),
-                "last_intent": row.get("last_intent", ""),
-                "updated_at": row.get("updated_at", ""),
-                "tools_used": tools,
-                "chat": chat_entries,
-            })
-    except Exception as e:
-        logger.warning(f"[AgentDashboard] Failed to query conversation_history for {provider_email}: {e}")
+                conversations.append({
+                    "email": em,
+                    "thread_subject": row.get("thread_subject", ""),
+                    "last_intent": row.get("last_intent", ""),
+                    "updated_at": row.get("updated_at", ""),
+                    "tools_used": tools,
+                    "chat": chat_entries,
+                })
+        except Exception as e:
+            logger.warning(f"[AgentDashboard] Failed to query conversation_history for {em}: {e}")
 
-    # Sort timeline by timestamp
     timeline.sort(key=lambda x: x.get("timestamp", ""))
+    conversations.sort(key=lambda x: x.get("updated_at", ""))
 
     return {
         "case_id": case_id,
         "provider_email": provider_email,
+        "emails": emails,
         "negotiation_count": len([t for t in timeline if t["type"] == "negotiation"]),
         "conversation_count": len(conversations),
         "timeline": timeline,

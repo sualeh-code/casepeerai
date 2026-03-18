@@ -48,6 +48,7 @@ const TimelineItem = ({ item }) => {
                         {isOutbound ? <Send className="h-3 w-3" /> : <Inbox className="h-3 w-3" />}
                         {isOutbound ? 'Us' : 'Provider'}
                     </span>
+                    {item.email && <span className="text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded">{item.email}</span>}
                     <StatusBadge intent={item.negotiation_type || item.result} />
                 </div>
                 {(item.actual_bill > 0 || item.offered_bill > 0) && (
@@ -88,6 +89,7 @@ const ConversationCard = ({ conv }) => {
                 <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2 text-sm">
                         <StatusBadge intent={conv.last_intent} />
+                        {conv.email && <span className="text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded">{conv.email}</span>}
                         <span className="text-muted-foreground">{conv.updated_at}</span>
                     </div>
                     <div className="flex items-center gap-2">
@@ -135,8 +137,7 @@ const ConversationCard = ({ conv }) => {
 
 const AgentActivity = ({ caseId }) => {
     const [providers, setProviders] = useState([]);
-    const [selectedProvider, setSelectedProvider] = useState(null);
-    const [selectedProviderName, setSelectedProviderName] = useState('');
+    const [selectedProvider, setSelectedProvider] = useState(null); // provider group object
     const [providerHistory, setProviderHistory] = useState(null);
     const [loading, setLoading] = useState(true);
     const [loadingHistory, setLoadingHistory] = useState(false);
@@ -162,12 +163,17 @@ const AgentActivity = ({ caseId }) => {
         if (caseId) fetchProviders();
     }, [caseId]);
 
-    const fetchProviderHistory = async (email, providerName) => {
+    const fetchProviderHistory = async (provider) => {
         setLoadingHistory(true);
-        setSelectedProvider(email);
-        setSelectedProviderName(providerName || '');
+        setSelectedProvider(provider);
+        setActionResult(null);
+        setLookupResults(null);
         try {
-            const res = await fetch(`/internal-api/cases/${caseId}/agent/providers/${encodeURIComponent(email)}/history`);
+            // Merge history across all emails in this provider group
+            const emails = provider.emails.map(e => e.email);
+            const primaryEmail = emails[0];
+            const emailsParam = emails.length > 1 ? `?emails=${encodeURIComponent(emails.join(','))}` : '';
+            const res = await fetch(`/internal-api/cases/${caseId}/agent/providers/${encodeURIComponent(primaryEmail)}/history${emailsParam}`);
             if (res.ok) {
                 setProviderHistory(await res.json());
             }
@@ -178,14 +184,14 @@ const AgentActivity = ({ caseId }) => {
         }
     };
 
-    const resendLetter = async (providerEmail, providerName) => {
+    const resendLetter = async (providerEmail) => {
         setActionLoading('resend');
         setActionResult(null);
         try {
             const res = await fetch(`/internal-api/cases/${caseId}/providers/${encodeURIComponent(providerEmail)}/resend-letter`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ provider_name: providerName }),
+                body: JSON.stringify({ provider_name: selectedProvider?.provider_name || '' }),
             });
             const data = await res.json();
             if (res.ok) setActionResult({ status: 'success', message: data.message || 'Letter sent' });
@@ -208,25 +214,18 @@ const AgentActivity = ({ caseId }) => {
         finally { setActionLoading(null); }
     };
 
-    // Derive provider name: API data > timeline > email fallback
-    const getProviderName = () => {
-        if (selectedProviderName) return selectedProviderName;
-        if (providerHistory) {
-            for (const item of (providerHistory.timeline || [])) {
-                if (item.provider_name) return item.provider_name;
-            }
-        }
-        return selectedProvider;
-    };
-
     if (loading) return <div className="p-4 text-muted-foreground">Loading agent activity...</div>;
 
-    // Provider detail view
+    // =====================================================
+    // Level 3+4: Provider detail view (emails + history)
+    // =====================================================
     if (selectedProvider && providerHistory) {
-        const providerName = getProviderName();
+        const providerName = selectedProvider.provider_name || selectedProvider.emails[0]?.email || 'Unknown';
+        const allEmails = selectedProvider.emails || [];
+
         return (
             <div className="space-y-4">
-                <Button variant="outline" size="sm" onClick={() => { setSelectedProvider(null); setSelectedProviderName(''); setProviderHistory(null); setActionResult(null); setLookupResults(null); }}>
+                <Button variant="outline" size="sm" onClick={() => { setSelectedProvider(null); setProviderHistory(null); setActionResult(null); setLookupResults(null); }}>
                     <ChevronLeft className="h-4 w-4 mr-1" /> Back to providers
                 </Button>
 
@@ -234,22 +233,49 @@ const AgentActivity = ({ caseId }) => {
                     <CardHeader>
                         <CardTitle className="flex items-center gap-2">
                             <Bot className="h-5 w-5" />
-                            {providerName !== selectedProvider ? `${providerName} — ` : ''}{selectedProvider}
+                            {providerName}
                         </CardTitle>
                     </CardHeader>
                     <CardContent className="space-y-6">
+                        {/* Email addresses for this provider */}
+                        <div>
+                            <h3 className="font-semibold mb-2 text-sm uppercase tracking-wide text-muted-foreground">
+                                Email Addresses ({allEmails.length})
+                            </h3>
+                            <div className="space-y-1">
+                                {allEmails.map((em, i) => (
+                                    <div key={i} className="flex items-center justify-between p-2 rounded border bg-muted/30 text-sm">
+                                        <div className="flex items-center gap-2">
+                                            <Mail className="h-3.5 w-3.5 text-muted-foreground" />
+                                            <span className="font-mono text-xs">{em.email}</span>
+                                            {em.last_intent && <StatusBadge intent={em.last_intent} />}
+                                        </div>
+                                        <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                                            {em.negotiation_count > 0 && <span>{em.negotiation_count} emails</span>}
+                                            {em.latest_offer > 0 && <span className="text-blue-600 font-medium">Offer: ${em.latest_offer.toLocaleString()}</span>}
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+
                         {/* Provider Actions */}
                         <div>
                             <h3 className="font-semibold mb-3 text-sm uppercase tracking-wide text-muted-foreground">Actions</h3>
                             <div className="flex flex-wrap gap-2">
-                                <Button variant="outline" size="sm" disabled={actionLoading === 'resend'} onClick={() => resendLetter(selectedProvider, providerName)}>
-                                    {actionLoading === 'resend' ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Mail className="h-4 w-4 mr-1" />}
-                                    Resend Offer Letter
-                                </Button>
-                                <Button variant="outline" size="sm" disabled={actionLoading === 'lookup'} onClick={() => lookupContact(providerName)}>
-                                    {actionLoading === 'lookup' ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Search className="h-4 w-4 mr-1" />}
-                                    Lookup Contact Info
-                                </Button>
+                                {allEmails.map((em, i) => (
+                                    <Button key={i} variant="outline" size="sm" disabled={actionLoading === 'resend'}
+                                        onClick={() => resendLetter(em.email)}>
+                                        {actionLoading === 'resend' ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Mail className="h-4 w-4 mr-1" />}
+                                        Resend Letter → {em.email.split('@')[0]}
+                                    </Button>
+                                ))}
+                                {selectedProvider.provider_name && (
+                                    <Button variant="outline" size="sm" disabled={actionLoading === 'lookup'} onClick={() => lookupContact(selectedProvider.provider_name)}>
+                                        {actionLoading === 'lookup' ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Search className="h-4 w-4 mr-1" />}
+                                        Lookup Contact Info
+                                    </Button>
+                                )}
                             </div>
                             {actionResult && (
                                 <div className={`mt-2 text-sm px-3 py-2 rounded ${actionResult.status === 'success' ? 'bg-green-50 text-green-700 dark:bg-green-950 dark:text-green-300' : 'bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-300'}`}>
@@ -273,10 +299,12 @@ const AgentActivity = ({ caseId }) => {
                             )}
                         </div>
 
-                        {/* Timeline */}
+                        {/* Combined Timeline (across all emails) */}
                         {providerHistory.timeline && providerHistory.timeline.length > 0 && (
                             <div>
-                                <h3 className="font-semibold mb-3 text-sm uppercase tracking-wide text-muted-foreground">Negotiation Timeline</h3>
+                                <h3 className="font-semibold mb-3 text-sm uppercase tracking-wide text-muted-foreground">
+                                    Negotiation Timeline ({providerHistory.timeline.length} events)
+                                </h3>
                                 <div className="ml-1">
                                     {providerHistory.timeline.map((item, i) => (
                                         <TimelineItem key={i} item={item} />
@@ -285,10 +313,12 @@ const AgentActivity = ({ caseId }) => {
                             </div>
                         )}
 
-                        {/* AI Conversations */}
+                        {/* AI Conversations (across all emails) */}
                         {providerHistory.conversations && providerHistory.conversations.length > 0 && (
                             <div>
-                                <h3 className="font-semibold mb-3 text-sm uppercase tracking-wide text-muted-foreground">AI Conversations</h3>
+                                <h3 className="font-semibold mb-3 text-sm uppercase tracking-wide text-muted-foreground">
+                                    AI Conversations ({providerHistory.conversations.length})
+                                </h3>
                                 {providerHistory.conversations.map((conv, ci) => (
                                     <ConversationCard key={ci} conv={conv} />
                                 ))}
@@ -305,7 +335,21 @@ const AgentActivity = ({ caseId }) => {
         );
     }
 
-    // Provider list view
+    // Loading state for provider detail
+    if (selectedProvider && loadingHistory) {
+        return (
+            <div className="space-y-4">
+                <Button variant="outline" size="sm" onClick={() => setSelectedProvider(null)}>
+                    <ChevronLeft className="h-4 w-4 mr-1" /> Back to providers
+                </Button>
+                <div className="p-8 text-center text-muted-foreground animate-pulse">Loading provider history...</div>
+            </div>
+        );
+    }
+
+    // =====================================================
+    // Level 2: Provider list (grouped)
+    // =====================================================
     return (
         <Card>
             <CardHeader>
@@ -328,11 +372,14 @@ const AgentActivity = ({ caseId }) => {
                     <div className="space-y-2">
                         {providers.map((p, i) => {
                             const intent = (p.last_intent || '').toLowerCase();
+                            const emailCount = (p.emails || []).length;
+                            const displayName = p.provider_name || (p.emails?.[0]?.email || 'Unknown');
+
                             return (
                                 <div
                                     key={i}
                                     className="flex items-center justify-between p-3 rounded-lg border hover:bg-muted/50 cursor-pointer transition-colors"
-                                    onClick={() => fetchProviderHistory(p.email, p.provider_name)}
+                                    onClick={() => fetchProviderHistory(p)}
                                 >
                                     <div className="flex items-center gap-3">
                                         <div className={`w-2 h-2 rounded-full ${
@@ -341,11 +388,19 @@ const AgentActivity = ({ caseId }) => {
                                             'bg-blue-500'
                                         }`} />
                                         <div>
-                                            {p.provider_name && <div className="font-medium text-sm">{p.provider_name}</div>}
-                                            <div className={`text-sm ${p.provider_name ? 'text-muted-foreground text-xs' : 'font-medium'}`}>{p.email}</div>
+                                            <div className="font-medium text-sm">{displayName}</div>
                                             <div className="text-xs text-muted-foreground">
-                                                {p.negotiation_count} interactions &middot; {p.last_activity || 'No activity'}
+                                                {emailCount} email{emailCount !== 1 ? 's' : ''} &middot; {p.total_negotiations || 0} interactions &middot; {p.last_activity || 'No activity'}
                                             </div>
+                                            {emailCount > 0 && (
+                                                <div className="flex flex-wrap gap-1 mt-1">
+                                                    {p.emails.map((em, ei) => (
+                                                        <span key={ei} className="text-xs bg-muted px-1.5 py-0.5 rounded font-mono">
+                                                            {em.email}
+                                                        </span>
+                                                    ))}
+                                                </div>
+                                            )}
                                         </div>
                                     </div>
                                     <div className="flex items-center gap-3">
