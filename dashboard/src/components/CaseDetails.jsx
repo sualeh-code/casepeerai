@@ -4,22 +4,24 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { ArrowLeft, FileText, Bell, Bot, Trash2 } from 'lucide-react';
+import { ArrowLeft, FileText, Bell, Bot, Trash2, Mail, DollarSign, Phone, Loader2, CheckCircle, XCircle, Zap } from 'lucide-react';
 import CaseNotes from './CaseNotes';
 import AgentActivity from './AgentActivity';
-import {
-    Dialog,
-    DialogContent,
-    DialogHeader,
-    DialogTitle,
-    DialogTrigger,
-} from "@/components/ui/dialog"
+
+const CASE_WORKFLOWS = [
+    { id: 'initial_negotiation', name: 'Send Initial Offers', icon: Mail, description: 'Email all providers with initial negotiation offers', endpoint: (caseId) => `/internal-api/workflows/initial-negotiation/${caseId}` },
+    { id: 'classification', name: 'Classify Documents', icon: FileText, description: 'AI classify all case documents', endpoint: (caseId) => `/internal-api/workflows/classification/${caseId}` },
+    { id: 'thirdparty', name: 'Third-Party Settlement', icon: DollarSign, description: 'Process defendant insurance settlement', endpoint: (caseId) => `/internal-api/workflows/thirdparty/${caseId}` },
+    { id: 'get_mail_sub', name: 'Get Provider Emails', icon: Phone, description: 'Phone providers to get email addresses', endpoint: (caseId) => `/internal-api/workflows/get-mail-sub/${caseId}` },
+];
 
 const CaseDetails = ({ caseId, onBack }) => {
     const [caseData, setCaseData] = useState(null);
     const [classifications, setClassifications] = useState([]);
     const [reminders, setReminders] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [runningWorkflow, setRunningWorkflow] = useState(null);
+    const [workflowResult, setWorkflowResult] = useState(null);
 
     useEffect(() => {
         const fetchData = async () => {
@@ -44,6 +46,24 @@ const CaseDetails = ({ caseId, onBack }) => {
 
         if (caseId) fetchData();
     }, [caseId]);
+
+    const triggerWorkflow = async (wf) => {
+        setRunningWorkflow(wf.id);
+        setWorkflowResult(null);
+        try {
+            const res = await fetch(wf.endpoint(caseId), { method: 'POST' });
+            if (res.ok) {
+                setWorkflowResult({ id: wf.id, status: 'success', message: `${wf.name} triggered` });
+            } else {
+                const err = await res.text();
+                setWorkflowResult({ id: wf.id, status: 'error', message: err.substring(0, 100) });
+            }
+        } catch (err) {
+            setWorkflowResult({ id: wf.id, status: 'error', message: err.message });
+        } finally {
+            setRunningWorkflow(null);
+        }
+    };
 
     if (loading) return <div>Loading details...</div>;
     if (!caseData) return <div>Case not found</div>;
@@ -102,6 +122,52 @@ const CaseDetails = ({ caseId, onBack }) => {
                     </CardContent>
                 </Card>
             </div>
+
+            {/* Workflow Action Buttons */}
+            <Card>
+                <CardHeader className="pb-3">
+                    <CardTitle className="flex items-center gap-2 text-lg">
+                        <Zap className="h-5 w-5" />
+                        Actions
+                    </CardTitle>
+                </CardHeader>
+                <CardContent>
+                    <div className="flex flex-wrap gap-3">
+                        {CASE_WORKFLOWS.map((wf) => {
+                            const Icon = wf.icon;
+                            const isRunning = runningWorkflow === wf.id;
+                            const result = workflowResult?.id === wf.id ? workflowResult : null;
+                            return (
+                                <Button
+                                    key={wf.id}
+                                    variant="outline"
+                                    size="sm"
+                                    disabled={isRunning}
+                                    onClick={() => triggerWorkflow(wf)}
+                                    title={wf.description}
+                                    className="gap-2"
+                                >
+                                    {isRunning ? (
+                                        <Loader2 className="h-4 w-4 animate-spin" />
+                                    ) : result?.status === 'success' ? (
+                                        <CheckCircle className="h-4 w-4 text-green-500" />
+                                    ) : result?.status === 'error' ? (
+                                        <XCircle className="h-4 w-4 text-red-500" />
+                                    ) : (
+                                        <Icon className="h-4 w-4" />
+                                    )}
+                                    {wf.name}
+                                </Button>
+                            );
+                        })}
+                    </div>
+                    {workflowResult && (
+                        <div className={`mt-3 text-sm px-3 py-2 rounded ${workflowResult.status === 'success' ? 'bg-green-50 text-green-700 dark:bg-green-950 dark:text-green-300' : 'bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-300'}`}>
+                            {workflowResult.message}
+                        </div>
+                    )}
+                </CardContent>
+            </Card>
 
             <Tabs defaultValue="agent" className="w-full">
                 <TabsList>
