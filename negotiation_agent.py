@@ -202,10 +202,13 @@ No offer is made before balance confirmation.
 If the provider later states a different balance, pause and reconfirm before continuing.
 
 IMPORTANT — Once the provider states or confirms a balance in ANY form:
-- "5k", "$5,000", "balance is 5000", "current balance is 5k", "yes that's correct" — ALL count as confirmation.
-- Classify as "bill_confirmation" and record the confirmed amount (convert shorthand: 5k = 5000, 24.7k = 24700, etc.).
+- "5k", "$5,000", "balance is 5000", "current balance is 5k", "yes that's correct" — ALL count.
+- CRITICAL: Compare the amount the provider states against the amount WE stated in our initial outreach.
+  If the amounts MATCH (same or very close) → "bill_confirmation".
+  If the amounts are DIFFERENT → "bill_correction". Example: we said $5,500, they say $2,500 → CORRECTION.
+- Convert shorthand: 5k = 5000, 24.7k = 24700, etc.
 - Do NOT ask them to re-confirm, verify, or restate the amount. NEVER say "please confirm the exact dollar amount."
-- Immediately proceed to make a settlement offer per Rule 5.
+- Immediately proceed to make a settlement offer per Rule 5 (using the CORRECTED amount if it was a correction).
 - A single statement of the balance is sufficient. Move forward, do not loop.
 
 RULE 2 - DOLLAR AMOUNTS ONLY:
@@ -321,7 +324,23 @@ WORKFLOW:
 4. Decide on the appropriate action and compose a reply if needed.
 5. Return your decision as a structured JSON response.
 
-CLASSIFICATION INTENTS — pick the ONE that best fits the provider's MOST RECENT message:
+CLASSIFICATION INTENTS — pick the ONE that best fits the provider's MOST RECENT message.
+IMPORTANT: To classify correctly, you MUST compare what the provider says against what WE said
+in our earlier messages. Read OUR initial outreach to find the amount we stated.
+
+- "bill_confirmation" — Provider states or confirms a balance that MATCHES what we said in our email.
+  The key test: did the provider's stated amount equal (or closely match) the amount in OUR outreach?
+  Use this ONLY when the numbers agree.
+  Examples: "Yes that's correct", "Balance is $4,400" (when we said $4,400), "Confirmed", "That's right"
+
+- "bill_correction" — Provider states a balance that is DIFFERENT from what we said in our email.
+  The key test: compare the provider's number against OUR stated amount. If they differ, it's a correction.
+  This includes: provider gives a lower balance, higher balance, says "it's not X it's Y", or states any
+  amount that doesn't match our outreach — even if they don't explicitly say "you're wrong".
+  Examples: "The final balance is $2,500" (when we said $5,500), "Actually it's $3,200 not $4,400",
+  "The bill has been adjusted to $2,800", "Balance is $2,500" (when we said $5,500)
+  NOTE: A provider simply STATING a balance is NOT automatically "bill_confirmation" — you must check
+  if it matches our stated amount. Different amount = bill_correction.
 
 - "accepted" — Provider EXPLICITLY agrees to our offer amount. They say "yes", "we accept", "let's proceed",
   "please send the letter", "agreed", or similar clear acceptance. This triggers the system to auto-generate
@@ -331,19 +350,13 @@ CLASSIFICATION INTENTS — pick the ONE that best fits the provider's MOST RECEN
 - "rejected" — Provider says NO, counters with a HIGHER amount, or refuses our offer.
   Examples: "That's too low", "We need $3,000", "We can't accept less than $2,500", "No"
 
-- "bill_confirmation" — Provider CONFIRMS or STATES their outstanding balance (in response to our initial
-  balance confirmation request OR unprompted). Any mention of a specific balance amount counts.
-  Examples: "Balance is $4,400", "Yes that's correct", "The amount owed is $5,000", "5k"
-
-- "bill_correction" — Provider says our billed amount is WRONG and provides a DIFFERENT number.
-  Examples: "Actually the balance is $3,200 not $4,400", "The bill has been adjusted to $2,800"
-
 - "accepted_and_provided_details" — Provider returned the SIGNED offer letter AND/OR sent W9/payment details.
   This means they already accepted previously AND are now completing the paperwork. This triggers
   auto-acceptance of the lien in CasePeer.
 
-- "provided_details" — Provider sent payment/mailing details (W9, remittance info, address) WITHOUT
-  explicitly accepting an offer. They may be getting ahead of themselves.
+- "provided_details" — Provider sent payment/mailing details (W9, remittance info, address, or email
+  contact updates) WITHOUT explicitly accepting an offer. They may be providing info proactively.
+  Examples: "Here's our W9", "Send payments to...", "Please email connie@... going forward"
 
 - "asked_for_clarification" — Provider is asking a QUESTION about our offer, the process, the case,
   or requesting something (like "can you resend the letter?"). NOT a rejection or acceptance.
@@ -363,6 +376,15 @@ CLASSIFICATION INTENTS — pick the ONE that best fits the provider's MOST RECEN
 SCENARIO REPLY GUIDELINES (use as starting points — adapt with persuasion tactics):
 
 bill_confirmation → Confirm the balance, make first offer with CERTAINTY OF PAYMENT framing.
+
+bill_correction → Acknowledge the corrected balance, thank the provider for the update, and make a
+  RECALCULATED first offer based on the CORRECTED amount (2/3 of 33% of the new balance).
+  Do NOT use the old bill amount for calculation. The system will update CasePeer automatically.
+  Call get_treatment_page to get the recalculated offer based on the corrected amount.
+  Call generate_bill_correction_pdf to create and upload a Bill Correction Notice to CasePeer.
+  Example: "Thank you for the correction. We've updated our records to reflect the outstanding balance
+  of $[corrected_amount]. After reviewing the case and available settlement funds, our client is
+  offering $[new_offer] as full and final settlement of your lien."
 
 accepted → Provider accepted:
   "Thank you for accepting the settlement of $[amount] for [provider].
@@ -399,8 +421,12 @@ WHAT YOU DO (AI only):
 3. Compose a reply email if one is needed, following the scenario templates above.
 4. For "bill_confirmation": Call get_treatment_page to get the calculated offer amounts,
    then use the offered_amount from the matching provider.
-5. For "bill_correction": Call generate_bill_correction_pdf with the corrected amounts.
-   Use get_treatment_page if you need to look up the original bill or calculate the new offer.
+5. For "bill_correction": First call get_treatment_page to get the original bill and calculate
+   the new offer based on the CORRECTED amount. Then call generate_bill_correction_pdf with:
+   - original_bill: the amount WE stated in our email
+   - corrected_bill: the amount the PROVIDER said
+   - offered_amount: the new settlement offer (2/3 of 33% of the corrected bill)
+   The system will automatically update CasePeer's settlement page with the corrected amount.
 6. For "asking_for_payment": Call get_case_status to check if case is in Lien Negotiations or Disbursement.
 
 WHAT THE SYSTEM HANDLES AUTOMATICALLY (do NOT do these yourself):
@@ -699,88 +725,64 @@ def _patch_docx_offer_amount(docx_bytes: bytes, offered_amount: str) -> bytes:
     """Patch the offer amount in the DOCX letter.
 
     CasePeer's autoletter renders the wrong amount ($0.00 or full bill).
-    Strategies:
-    1. Find paragraph with offer/settle keywords + $ and replace the dollar amount
-    2. Fallback: raw XML replacement for $0.00
+    Uses raw XML replacement which handles split runs reliably.
     """
-    import io
+    import io, zipfile
     amount_str = f"${float(offered_amount):,.2f}"
 
-    from docx import Document
-    doc = Document(io.BytesIO(docx_bytes))
+    # Strategy: raw XML replacement — handles all cases including split runs
+    # Find ALL dollar amounts in the document XML and replace those in offer-context
+    in_buf = io.BytesIO(docx_bytes)
+    out_buf = io.BytesIO()
     patched = False
 
-    # Keywords that indicate the offer amount paragraph
-    offer_keywords = ["offer", "settle", "settlement", "payment of", "amount of", "resolve"]
+    with zipfile.ZipFile(in_buf, 'r') as zin, zipfile.ZipFile(out_buf, 'w') as zout:
+        for item in zin.infolist():
+            data = zin.read(item.filename)
+            if item.filename == 'word/document.xml':
+                xml_str = data.decode('utf-8')
+                original = xml_str
 
-    for para in doc.paragraphs:
-        full_text = para.text
-        text_lower = full_text.lower()
-        # Look for paragraphs containing an offer keyword + dollar amount
-        if "$" in full_text and any(kw in text_lower for kw in offer_keywords):
-            # Find dollar amount near an offer keyword
-            for kw in offer_keywords:
-                pattern = rf'{kw}\s+\$[\d,]+\.?\d*'
-                match = re.search(pattern, full_text, re.IGNORECASE)
-                if match:
-                    wrong_amount = re.search(r'\$[\d,]+\.?\d*', match.group()).group()
-                    if wrong_amount != amount_str:
-                        for run in para.runs:
-                            if wrong_amount in run.text:
-                                run.text = run.text.replace(wrong_amount, amount_str)
-                                patched = True
-                                break
-                        if not patched:
-                            wrong_num = wrong_amount[1:]
-                            correct_num = amount_str[1:]
-                            for run in para.runs:
-                                if wrong_num in run.text:
-                                    run.text = run.text.replace(wrong_num, correct_num)
+                # Find all dollar amounts in the XML (they may be split across XML tags)
+                # First, extract the text content to find the wrong amount
+                import xml.etree.ElementTree as ET
+                try:
+                    root = ET.fromstring(xml_str)
+                    ns = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
+                    # Collect all paragraph texts
+                    for p_elem in root.iter('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}p'):
+                        p_text = ''.join(t.text or '' for t in p_elem.iter('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}t'))
+                        p_lower = p_text.lower()
+                        offer_keywords = ["offer", "settle", "settlement", "payment of", "amount of", "resolve"]
+                        if "$" in p_text and any(kw in p_lower for kw in offer_keywords):
+                            # Found an offer paragraph — extract the dollar amount
+                            dollar_match = re.search(r'\$([\d,]+\.?\d*)', p_text)
+                            if dollar_match:
+                                wrong_full = dollar_match.group(0)  # e.g. "$704.00"
+                                wrong_num = dollar_match.group(1)   # e.g. "704.00"
+                                correct_num = f"{float(offered_amount):,.2f}"
+                                if wrong_full != amount_str:
+                                    # Replace in raw XML — the number might be in a single <w:t> or split
+                                    xml_str = xml_str.replace(wrong_num, correct_num)
+                                    logger.info(f"[DOCX] Patched offer ${wrong_num} → ${correct_num} via XML text replacement")
                                     patched = True
-                                    break
-                        if patched:
-                            logger.info(f"[DOCX] Patched offer {wrong_amount} → {amount_str} (keyword: {kw})")
-                            break
-            if patched:
-                break
+                except ET.ParseError as e:
+                    logger.warning(f"[DOCX] XML parse failed, trying simple string replace: {e}")
 
-            # If no keyword+amount pattern matched, try any $ in this paragraph
-            if not patched:
-                dollar_match = re.search(r'\$[\d,]+\.?\d*', full_text)
-                if dollar_match:
-                    wrong_amount = dollar_match.group()
-                    if wrong_amount != amount_str and wrong_amount != "$0.00":
-                        for run in para.runs:
-                            if wrong_amount in run.text:
-                                run.text = run.text.replace(wrong_amount, amount_str)
-                                patched = True
-                                break
-                        if patched:
-                            logger.info(f"[DOCX] Patched {wrong_amount} → {amount_str} (offer keyword paragraph, no keyword+amount pattern)")
-                            break
-
-    if not patched:
-        logger.warning(f"[DOCX] Could not find offer amount to patch in paragraphs, trying raw XML")
-        import zipfile
-        in_buf = io.BytesIO(docx_bytes)
-        out_buf = io.BytesIO()
-        with zipfile.ZipFile(in_buf, 'r') as zin, zipfile.ZipFile(out_buf, 'w') as zout:
-            for item in zin.infolist():
-                data = zin.read(item.filename)
-                if item.filename == 'word/document.xml':
-                    xml_str = data.decode('utf-8')
-                    original = xml_str
-                    xml_str = xml_str.replace('$0.00', amount_str)
-                    if xml_str != original:
-                        logger.info(f"[DOCX] Patched $0.00 → {amount_str} via raw XML")
+                # Fallback: simple $0.00 replacement
+                if not patched:
+                    if '$0.00' in xml_str:
+                        xml_str = xml_str.replace('$0.00', amount_str)
+                        logger.info(f"[DOCX] Patched $0.00 → {amount_str} via simple replace")
                         patched = True
-                    data = xml_str.encode('utf-8')
-                zout.writestr(item, data)
-        return out_buf.getvalue()
 
-    buf = io.BytesIO()
-    doc.save(buf)
-    return buf.getvalue()
+                if not patched and xml_str == original:
+                    logger.warning(f"[DOCX] Could not find any amount to patch in document")
+
+                data = xml_str.encode('utf-8')
+            zout.writestr(item, data)
+
+    return out_buf.getvalue()
 
 
 def _generate_casepeer_offer_letter(case_id: str, lien_id: str, template_id: str, offered_amount: str = "") -> Optional[bytes]:
@@ -1365,6 +1367,78 @@ def _update_lien_final_cost(case_id: str, provider_name: str, amount: str) -> bo
         return True
     except Exception as e:
         logger.error(f"[CasePeer] Failed to update final_cost for '{provider_name}': {e}")
+        return False
+
+
+def _update_lien_original_cost(case_id: str, provider_name: str, amount: str) -> bool:
+    """Update original_cost (the bill amount) for a provider on the settlement page.
+
+    Used after a bill_correction to update the billed amount to the provider's corrected figure.
+    """
+    try:
+        settlement_data = json.loads(tool_get_settlement_page(case_id))
+        form_fields = settlement_data.get("form_fields", {})
+        providers = settlement_data.get("providers", [])
+        if not form_fields:
+            logger.warning("[CasePeer] No form fields found on settlement page")
+            return False
+
+        # Find provider_id by name match
+        import re as _re
+        def _norm(s: str) -> str:
+            s = s.lower()
+            s = _re.sub(r'[\u2010-\u2015\u2212\uFE58\uFE63\uFF0D]', '-', s)
+            s = _re.sub(r'\s+', ' ', s).strip()
+            return s
+
+        provider_norm = _norm(provider_name)
+        matched_pid = None
+        for sp in providers:
+            sp_name = _norm(sp.get("provider_name") or "")
+            if provider_norm in sp_name or sp_name in provider_norm:
+                matched_pid = sp.get("provider_id")
+                break
+        if not matched_pid:
+            first_word = provider_norm.split()[0] if provider_norm.split() else ""
+            if first_word and len(first_word) >= 4:
+                for sp in providers:
+                    sp_name = _norm(sp.get("provider_name") or "")
+                    if first_word in sp_name:
+                        matched_pid = sp.get("provider_id")
+                        break
+
+        if not matched_pid:
+            logger.warning(f"[CasePeer] Could not find provider '{provider_name}' in settlement page for bill correction")
+            return False
+
+        clean_amount = re.sub(r'[^0-9.]', '', str(amount))
+        updated = False
+        index = None
+        for key, value in form_fields.items():
+            if key.endswith("-id") and value == matched_pid:
+                index = re.search(r'health-liens-(\d+)-id', key)
+                if index:
+                    cost_key = f"health-liens-{index.group(1)}-original_cost"
+                    form_fields[cost_key] = clean_amount
+                    updated = True
+                    break
+
+        if not updated:
+            logger.warning(f"[CasePeer] Provider ID {matched_pid} not found in form fields for bill correction")
+            return False
+
+        from casepeer_helpers import casepeer_post_form
+        cost_key_log = f"health-liens-{index.group(1)}-original_cost" if index else "?"
+        logger.info(f"[CasePeer] Bill correction: updating {cost_key_log}={clean_amount} for '{provider_name}' (pid={matched_pid})")
+        form_body = "&".join(f"{quote(str(k), safe='')}={quote(str(v), safe='')}" for k, v in form_fields.items())
+        resp = casepeer_post_form(f"case/{case_id}/settlement/negotiations/", form_body, timeout=90)
+        if resp.status_code >= 400:
+            logger.error(f"[CasePeer] Bill correction POST FAILED: {resp.text[:500]}")
+            return False
+        logger.info(f"[CasePeer] Updated original_cost to ${clean_amount} for '{provider_name}' (bill correction)")
+        return True
+    except Exception as e:
+        logger.error(f"[CasePeer] Failed to update original_cost for '{provider_name}': {e}")
         return False
 
 
@@ -2125,6 +2199,18 @@ async def process_negotiation_email(thread_data: Dict) -> Dict[str, Any]:
     email_match = re.search(r'<(.+?)>', sender_email)
     clean_sender = email_match.group(1) if email_match else sender_email.strip()
 
+    # --- COLLECT ALL THREAD PARTICIPANTS (for cross-sender lookup) ---
+    from gmail_poller import _get_gmail_creds
+    _gmail_email_for_check, _, _ = _get_gmail_creds()
+    _gmail_lower = (_gmail_email_for_check or "").lower()
+    thread_participants = []
+    for m in messages:
+        m_from = m.get("From", "")
+        em = re.search(r'<(.+?)>', m_from)
+        addr = (em.group(1) if em else m_from.strip()).lower()
+        if addr and addr != clean_sender.lower() and addr != _gmail_lower and addr not in thread_participants:
+            thread_participants.append(addr)
+
     # --- PRE-LOAD PROVIDER CONTEXT from database ---
     # This gives the agent full history without needing to call tools first
     provider_context = ""
@@ -2196,15 +2282,45 @@ KNOWN PROVIDER CONTEXT (from database — this provider has prior negotiations):
                 provider_context += f"\nYou already have the case_id={history_data['case_id']}. Do NOT call search_case. Use this case_id for all tool calls."
                 logger.info(f"[Agent] Pre-loaded context for {clean_sender}: case_id={pre_loaded_case_id}, {history_data.get('negotiation_count', 0)} prior negotiations")
         else:
-            # No negotiations found — try to resolve case_id from email subject
-            resolved = _resolve_case_id_from_subject(_thread_subject)
-            if resolved:
-                pre_loaded_case_id = resolved
-                logger.info(f"[Agent] No prior negotiations for {clean_sender}, but resolved case_id={resolved} from subject")
-                provider_context = f"\nNO PRIOR NEGOTIATIONS FOUND for {clean_sender}, but case_id={resolved} resolved from email subject. Use this case_id for all tool calls."
-            else:
-                provider_context = f"\nNO PRIOR NEGOTIATIONS FOUND for {clean_sender}. This may be a new provider. Call search_case with the patient name to find the case."
-                logger.info(f"[Agent] No prior negotiations for {clean_sender}")
+            # No history for clean_sender — check other thread participants
+            _found_via_participant = False
+            if thread_participants:
+                from turso_client import turso as _turso
+                for participant in thread_participants:
+                    _p_row = _turso.fetch_one(
+                        "SELECT case_id, sender_email, messages_json, last_intent FROM conversation_history WHERE sender_email = ? AND case_id != '' ORDER BY updated_at DESC LIMIT 1",
+                        [participant]
+                    )
+                    if _p_row and _p_row.get("case_id"):
+                        pre_loaded_case_id = _p_row["case_id"]
+                        _p_email = _p_row.get("sender_email", participant)
+                        best_bill, best_offer = _extract_best_amounts(_p_row.get("messages_json") or "")
+                        _p_intent = _p_row.get("last_intent", "")
+                        provider_context = f"""
+KNOWN PROVIDER CONTEXT (linked via thread participant {_p_email}):
+- Case ID: {pre_loaded_case_id}
+- Original Provider Email: {_p_email}
+- Current Sender: {clean_sender} (new contact for same provider)
+- Latest Actual Bill: ${best_bill or 'N/A'}
+- Our Last Offered Amount: ${best_offer or 'N/A'}
+- Last Status: {_p_intent}
+
+NOTE: {clean_sender} is emailing on behalf of / from the same provider as {_p_email} in the same thread.
+You already have the case_id={pre_loaded_case_id}. Do NOT call search_case. Use this case_id for all tool calls."""
+                        logger.info(f"[Agent] Linked {clean_sender} to case {pre_loaded_case_id} via thread participant {_p_email}")
+                        _found_via_participant = True
+                        break
+
+            if not _found_via_participant:
+                # Fallback: try to resolve case_id from email subject
+                resolved = _resolve_case_id_from_subject(_thread_subject)
+                if resolved:
+                    pre_loaded_case_id = resolved
+                    logger.info(f"[Agent] No prior negotiations for {clean_sender}, but resolved case_id={resolved} from subject")
+                    provider_context = f"\nNO PRIOR NEGOTIATIONS FOUND for {clean_sender}, but case_id={resolved} resolved from email subject. Use this case_id for all tool calls."
+                else:
+                    provider_context = f"\nNO PRIOR NEGOTIATIONS FOUND for {clean_sender}. This may be a new provider. Call search_case with the patient name to find the case."
+                    logger.info(f"[Agent] No prior negotiations for {clean_sender}")
 
     except Exception as e:
         logger.warning(f"[Agent] Failed to pre-load provider context: {e}")
@@ -2419,6 +2535,39 @@ IMPORTANT: After using tools and gathering information, you MUST return a final 
                 # The Amount column is used by CasePeer for pro rata calculations.
                 # Writing the full bill amount here would inflate the pro rata above the actual bill.
                 # Amount should only be set when we make an OFFER (during 'accepted' intent).
+
+            # 3b. For bill_correction: update CasePeer's original_cost with the corrected bill amount
+            if intent == "bill_correction":
+                try:
+                    provider_name = result.get("provider_name", "Provider")
+                    # actual_bill = the provider's corrected bill amount (the new balance)
+                    corrected_bill = result.get("actual_bill") or ""
+                    # Fallback: check the tool call args for corrected_bill
+                    if not corrected_bill:
+                        for action in actions_taken:
+                            if "generate_bill_correction_pdf" in action:
+                                try:
+                                    args_str = action.split("(", 1)[1].rstrip(")")
+                                    args_dict = json.loads(args_str)
+                                    corrected_bill = args_dict.get("corrected_bill", "")
+                                except Exception:
+                                    pass
+
+                    if corrected_bill:
+                        corrected_numeric = str(corrected_bill).replace("$", "").replace(",", "").strip()
+                        if corrected_numeric and float(corrected_numeric) > 0:
+                            # Update the original_cost (bill amount) on CasePeer's settlement page
+                            await asyncio.to_thread(
+                                _update_lien_original_cost, case_id, provider_name, corrected_numeric
+                            )
+                            logger.info(f"[PostProcess] Updated CasePeer original_cost to ${corrected_numeric} after bill_correction for {provider_name}")
+
+                    # Also upload the original thread as evidence (like bill_confirmation does)
+                    upload_result = await _upload_thread_pdf(case_id, messages, thread_subject, provider_name)
+                    actions_taken.append("auto:upload_original_thread_pdf(bill_correction)")
+                    logger.info(f"[PostProcess] Uploaded bill correction thread PDF: {upload_result[:200]}")
+                except Exception as e:
+                    logger.error(f"[PostProcess] bill_correction update failed: {e}")
 
             # 4. For "accepted": generate offer letter via CasePeer autoletters, send for signing
             if intent == "accepted":
