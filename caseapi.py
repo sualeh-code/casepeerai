@@ -2018,6 +2018,7 @@ async def get_agent_providers(case_id: str):
     email_data = {}
 
     try:
+        from negotiation_agent import _extract_best_amounts, _count_rounds
         conv_rows = turso.fetch_all(
             "SELECT sender_email, thread_subject, tools_used, last_intent, updated_at, messages_json "
             "FROM conversation_history WHERE case_id = ?",
@@ -2028,21 +2029,10 @@ async def get_agent_providers(case_id: str):
             if not email:
                 continue
 
-            # Extract bill/offer from the agent's last assistant message
-            bill, offer = 0, 0
-            try:
-                messages = json.loads(row.get("messages_json") or "[]")
-                for msg in reversed(messages):
-                    if msg.get("role") == "assistant" and msg.get("content"):
-                        try:
-                            data = json.loads(msg["content"])
-                            bill = float(data.get("actual_bill", 0) or 0)
-                            offer = float(data.get("offered_bill", 0) or 0)
-                            break
-                        except (json.JSONDecodeError, ValueError, TypeError):
-                            continue
-            except Exception:
-                pass
+            # Extract bill/offer from ALL assistant messages (works across accumulated rounds)
+            messages_json = row.get("messages_json") or ""
+            bill, offer = _extract_best_amounts(messages_json)
+            rounds = _count_rounds(messages_json)
 
             if email in email_data:
                 email_data[email]["has_conversation"] = True
@@ -2052,13 +2042,13 @@ async def get_agent_providers(case_id: str):
                     email_data[email]["last_activity"] = conv_date
                 if bill > email_data[email].get("latest_bill", 0):
                     email_data[email]["latest_bill"] = bill
-                if offer > email_data[email].get("latest_offer", 0):
+                if offer > 0:
                     email_data[email]["latest_offer"] = offer
-                email_data[email]["negotiation_count"] += 1
+                email_data[email]["negotiation_count"] += rounds
             else:
                 email_data[email] = {
                     "email": email,
-                    "negotiation_count": 1,
+                    "negotiation_count": rounds,
                     "last_activity": row.get("updated_at", ""),
                     "latest_bill": bill,
                     "latest_offer": offer,
@@ -2156,6 +2146,8 @@ async def get_agent_provider_history(case_id: str, provider_email: str, request:
     else:
         emails = [provider_email]
 
+    from negotiation_agent import _extract_all_amounts
+
     timeline = []
 
     # Conversation history across all emails
@@ -2180,50 +2172,84 @@ async def get_agent_provider_history(case_id: str, provider_email: str, request:
                 except Exception:
                     pass
 
-                chat_entries = []
+                # Split accumulated messages into per-round conversations
+                rounds = [[]]  # list of lists of messages
                 for msg in messages:
                     if not isinstance(msg, dict):
                         continue
-                    role = msg.get("role", "")
-                    if role == "system":
+                    if msg.get("role") == "user" and "[--- NEW EMAIL ROUND ---]" in (msg.get("content") or ""):
+                        rounds.append([])  # start new round
                         continue
-                    if role == "user":
-                        content = msg.get("content", "")
-                        if len(content) > 500:
-                            content = content[:500] + "..."
-                        chat_entries.append({"role": "user", "content": content})
-                    elif role == "assistant":
-                        content = msg.get("content", "")
-                        tool_calls_data = msg.get("tool_calls", [])
-                        if tool_calls_data:
-                            for tc in tool_calls_data:
-                                fn = tc.get("function", {})
-                                chat_entries.append({
-                                    "role": "tool_call",
-                                    "function": fn.get("name", "unknown"),
-                                    "arguments": fn.get("arguments", "{}"),
-                                })
-                        if content:
-                            chat_entries.append({"role": "assistant", "content": content})
-                    elif role == "tool":
-                        content = msg.get("content", "")
-                        if len(content) > 300:
-                            content = content[:300] + "..."
-                        chat_entries.append({"role": "tool_result", "content": content})
+                    rounds[-1].append(msg)
 
-                conversations.append({
-                    "email": em,
-                    "thread_subject": row.get("thread_subject", ""),
-                    "last_intent": row.get("last_intent", ""),
-                    "updated_at": row.get("updated_at", ""),
-                    "tools_used": tools,
-                    "chat": chat_entries,
-                })
+                for round_idx, round_msgs in enumerate(rounds):
+                    chat_entries = []
+                    round_intent = row.get("last_intent", "")
+                    for msg in round_msgs:
+                        role = msg.get("role", "")
+                        if role == "system":
+                            continue
+                        if role == "user":
+                            content = msg.get("content", "")
+                            if len(content) > 500:
+                                content = content[:500] + "..."
+                            chat_entries.append({"role": "user", "content": content})
+                        elif role == "assistant":
+                            content = msg.get("content", "")
+                            tool_calls_data = msg.get("tool_calls", [])
+                            if tool_calls_data:
+                                for tc in tool_calls_data:
+                                    fn = tc.get("function", {})
+                                    chat_entries.append({
+                                        "role": "tool_call",
+                                        "function": fn.get("name", "unknown"),
+                                        "arguments": fn.get("arguments", "{}"),
+                                    })
+                            if content:
+                                chat_entries.append({"role": "assistant", "content": content})
+                                # Try to extract intent from this round's response
+                                try:
+                                    data = json.loads(content)
+                                    if data.get("intent"):
+                                        round_intent = data["intent"]
+                                except Exception:
+                                    pass
+                        elif role == "tool":
+                            content = msg.get("content", "")
+                            if len(content) > 300:
+                                content = content[:300] + "..."
+                            chat_entries.append({"role": "tool_result", "content": content})
+
+                    if chat_entries:
+                        conversations.append({
+                            "email": em,
+                            "round": round_idx + 1,
+                            "thread_subject": row.get("thread_subject", ""),
+                            "last_intent": round_intent,
+                            "updated_at": row.get("updated_at", ""),
+                            "tools_used": tools if round_idx == len(rounds) - 1 else [],
+                            "chat": chat_entries,
+                        })
+
+                # Build timeline entries from accumulated amounts
+                all_amounts = _extract_all_amounts(row.get("messages_json") or "")
+                for i, entry in enumerate(all_amounts):
+                    direction = "outbound" if entry["intent"] in ("bill_confirmation", "initial_offer", "counter_offer", "follow_up", "accepted") else "inbound"
+                    timeline.append({
+                        "timestamp": row.get("updated_at", ""),
+                        "email": em,
+                        "type": entry["intent"] or "unknown",
+                        "direction": direction,
+                        "actual_bill": entry["bill"],
+                        "offered_bill": entry["offer"],
+                        "round": i + 1,
+                    })
+
         except Exception as e:
             logger.warning(f"[AgentDashboard] Failed to query conversation_history for {em}: {e}")
 
     timeline.sort(key=lambda x: x.get("timestamp", ""))
-    conversations.sort(key=lambda x: x.get("updated_at", ""))
+    conversations.sort(key=lambda x: (x.get("email", ""), x.get("round", 0)))
 
     return {
         "case_id": case_id,
@@ -2488,20 +2514,24 @@ async def resend_offer_letter(case_id: str, provider_email: str, request: Reques
         # Get the latest offered amount from conversation_history
         offered = ""
         try:
+            from negotiation_agent import _extract_best_amounts
+            # Try exact email match first, then domain fallback
             conv_row = turso.fetch_one(
                 "SELECT messages_json FROM conversation_history WHERE case_id = ? AND sender_email = ? ORDER BY updated_at DESC LIMIT 1",
-                [case_id, provider_email]
+                [case_id, provider_email.lower()]
             )
+            if not conv_row:
+                # Domain fallback (e.g. email changed from leslie@ to alen@)
+                domain = provider_email.lower().split("@")[-1] if "@" in provider_email else ""
+                if domain and domain not in ("gmail.com", "yahoo.com", "hotmail.com", "outlook.com", "aol.com"):
+                    conv_row = turso.fetch_one(
+                        "SELECT messages_json FROM conversation_history WHERE case_id = ? AND sender_email LIKE ? ORDER BY updated_at DESC LIMIT 1",
+                        [case_id, f"%@{domain}"]
+                    )
             if conv_row and conv_row.get("messages_json"):
-                msgs = json.loads(conv_row["messages_json"])
-                for msg in reversed(msgs):
-                    if msg.get("role") == "assistant" and msg.get("content"):
-                        try:
-                            data = json.loads(msg["content"])
-                            offered = str(data.get("offered_bill", "")) if data.get("offered_bill") else ""
-                            break
-                        except (json.JSONDecodeError, ValueError, TypeError):
-                            continue
+                _, best_offer = _extract_best_amounts(conv_row["messages_json"])
+                if best_offer > 0:
+                    offered = str(best_offer)
         except Exception:
             pass
 

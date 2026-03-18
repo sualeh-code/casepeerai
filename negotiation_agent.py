@@ -699,50 +699,68 @@ def _patch_docx_offer_amount(docx_bytes: bytes, offered_amount: str) -> bytes:
     """Patch the offer amount in the DOCX letter.
 
     CasePeer's autoletter renders the wrong amount ($0.00 or full bill).
-    Uses two strategies:
-    1. Regex on raw XML for 'offer $X' in same text node
-    2. Find paragraph containing 'offer' via python-docx and replace the dollar amount
+    Strategies:
+    1. Find paragraph with offer/settle keywords + $ and replace the dollar amount
+    2. Fallback: raw XML replacement for $0.00
     """
     import io
     amount_str = f"${float(offered_amount):,.2f}"
 
-    # Strategy: use python-docx to find the paragraph with "offer" and patch the amount
     from docx import Document
     doc = Document(io.BytesIO(docx_bytes))
     patched = False
 
+    # Keywords that indicate the offer amount paragraph
+    offer_keywords = ["offer", "settle", "settlement", "payment of", "amount of", "resolve"]
+
     for para in doc.paragraphs:
         full_text = para.text
-        # Look for the paragraph containing "allowed us to offer $X"
-        if "offer" in full_text.lower() and "$" in full_text:
-            # Find the dollar amount in this paragraph that follows "offer"
-            match = re.search(r'offer\s+\$[\d,]+\.?\d*', full_text, re.IGNORECASE)
-            if match:
-                wrong_amount = re.search(r'\$[\d,]+\.?\d*', match.group()).group()
-                if wrong_amount != amount_str:
-                    # Replace in the runs
-                    for run in para.runs:
-                        if wrong_amount in run.text:
-                            run.text = run.text.replace(wrong_amount, amount_str)
-                            patched = True
-                            break
-                    # If amount was split across runs or in a single run with "$"
-                    if not patched:
-                        # Try replacing just the numeric part after $
-                        wrong_num = wrong_amount[1:]  # strip $
-                        correct_num = amount_str[1:]
+        text_lower = full_text.lower()
+        # Look for paragraphs containing an offer keyword + dollar amount
+        if "$" in full_text and any(kw in text_lower for kw in offer_keywords):
+            # Find dollar amount near an offer keyword
+            for kw in offer_keywords:
+                pattern = rf'{kw}\s+\$[\d,]+\.?\d*'
+                match = re.search(pattern, full_text, re.IGNORECASE)
+                if match:
+                    wrong_amount = re.search(r'\$[\d,]+\.?\d*', match.group()).group()
+                    if wrong_amount != amount_str:
                         for run in para.runs:
-                            if wrong_num in run.text:
-                                run.text = run.text.replace(wrong_num, correct_num)
+                            if wrong_amount in run.text:
+                                run.text = run.text.replace(wrong_amount, amount_str)
                                 patched = True
                                 break
-                    if patched:
-                        logger.info(f"[DOCX] Patched offer {wrong_amount} → {amount_str}")
-                        break
+                        if not patched:
+                            wrong_num = wrong_amount[1:]
+                            correct_num = amount_str[1:]
+                            for run in para.runs:
+                                if wrong_num in run.text:
+                                    run.text = run.text.replace(wrong_num, correct_num)
+                                    patched = True
+                                    break
+                        if patched:
+                            logger.info(f"[DOCX] Patched offer {wrong_amount} → {amount_str} (keyword: {kw})")
+                            break
+            if patched:
+                break
+
+            # If no keyword+amount pattern matched, try any $ in this paragraph
+            if not patched:
+                dollar_match = re.search(r'\$[\d,]+\.?\d*', full_text)
+                if dollar_match:
+                    wrong_amount = dollar_match.group()
+                    if wrong_amount != amount_str and wrong_amount != "$0.00":
+                        for run in para.runs:
+                            if wrong_amount in run.text:
+                                run.text = run.text.replace(wrong_amount, amount_str)
+                                patched = True
+                                break
+                        if patched:
+                            logger.info(f"[DOCX] Patched {wrong_amount} → {amount_str} (offer keyword paragraph, no keyword+amount pattern)")
+                            break
 
     if not patched:
         logger.warning(f"[DOCX] Could not find offer amount to patch in paragraphs, trying raw XML")
-        # Fallback: raw XML replacement for $0.00 specifically (safe — no provider shows $0.00)
         import zipfile
         in_buf = io.BytesIO(docx_bytes)
         out_buf = io.BytesIO()
@@ -856,11 +874,80 @@ def _find_lien_id_for_provider(case_id: str, provider_name: str) -> tuple:
         return None, None
 
 
+def _extract_all_amounts(messages_json_str: str) -> list:
+    """Extract ALL bill/offer pairs from accumulated messages_json.
+
+    Scans every assistant message that contains parseable JSON with
+    actual_bill and/or offered_bill. Returns list of dicts:
+    [{"bill": float, "offer": float, "intent": str}, ...]
+    in chronological order (oldest first).
+    """
+    results = []
+    try:
+        messages = json.loads(messages_json_str or "[]")
+        for msg in messages:
+            if not isinstance(msg, dict):
+                continue
+            if msg.get("role") != "assistant" or not msg.get("content"):
+                continue
+            try:
+                data = json.loads(msg["content"])
+                if not isinstance(data, dict) or "intent" not in data:
+                    continue  # Not an agent response JSON
+                bill = float(data.get("actual_bill", 0) or 0)
+                offer = float(data.get("offered_bill", 0) or 0)
+                intent = data.get("intent", "")
+                results.append({"bill": bill, "offer": offer, "intent": intent})
+            except (json.JSONDecodeError, ValueError, TypeError):
+                continue
+    except Exception:
+        pass
+    return results
+
+
+def _extract_best_amounts(messages_json_str: str) -> tuple:
+    """Extract the best bill/offer from accumulated messages.
+
+    Returns (max_bill, latest_nonzero_offer) — max bill because the actual
+    bill is constant; latest non-zero offer because it reflects the current
+    negotiation state.
+    """
+    entries = _extract_all_amounts(messages_json_str)
+    if not entries:
+        return 0, 0
+    max_bill = max(e["bill"] for e in entries)
+    # Latest non-zero offer (most recent round's offer)
+    latest_offer = 0
+    for e in reversed(entries):
+        if e["offer"] > 0:
+            latest_offer = e["offer"]
+            break
+    return max_bill, latest_offer
+
+
+def _count_rounds(messages_json_str: str) -> int:
+    """Count the number of negotiation rounds from accumulated messages.
+
+    Each [--- NEW EMAIL ROUND ---] separator + the initial round = total.
+    """
+    try:
+        messages = json.loads(messages_json_str or "[]")
+        rounds = 1  # initial round
+        for msg in messages:
+            if isinstance(msg, dict) and msg.get("role") == "user":
+                content = msg.get("content", "")
+                if "[--- NEW EMAIL ROUND ---]" in content:
+                    rounds += 1
+        return rounds
+    except Exception:
+        return 1
+
+
 def _update_case_stats(case_id: str):
     """Recalculate and update case-level stats from conversation_history.
 
     Uses conversation_history for intent (accepted/rejected) and parses
-    bill/offer amounts from the agent's final response in messages_json.
+    bill/offer amounts from the agent's responses in messages_json.
     Updates: status, fees_taken, savings, emails_sent, emails_received.
     """
     from turso_client import turso
@@ -878,38 +965,26 @@ def _update_case_stats(case_id: str):
         if not email:
             continue
         if email not in providers:
-            providers[email] = {"bill": 0, "offer": 0, "accepted": False}
+            providers[email] = {"bill": 0, "offer": 0, "accepted": False, "rounds": 0}
         if "accepted" in intent:
             providers[email]["accepted"] = True
 
-        # Extract bill/offer from the agent's last assistant message
-        try:
-            messages = json.loads(r.get("messages_json") or "[]")
-            for msg in reversed(messages):
-                if msg.get("role") == "assistant" and msg.get("content"):
-                    try:
-                        data = json.loads(msg["content"])
-                        b = float(data.get("actual_bill", 0) or 0)
-                        o = float(data.get("offered_bill", 0) or 0)
-                        if b > providers[email]["bill"]:
-                            providers[email]["bill"] = b
-                        if o > providers[email]["offer"]:
-                            providers[email]["offer"] = o
-                        break
-                    except (json.JSONDecodeError, ValueError, TypeError):
-                        continue
-        except Exception:
-            pass
+        # Extract bill/offer from ALL assistant messages (accumulated across rounds)
+        bill, offer = _extract_best_amounts(r.get("messages_json") or "")
+        if bill > providers[email]["bill"]:
+            providers[email]["bill"] = bill
+        if offer > 0:
+            providers[email]["offer"] = offer  # latest non-zero offer
+
+        # Count actual rounds from accumulated messages
+        providers[email]["rounds"] = _count_rounds(r.get("messages_json") or "")
 
     if not providers:
         return
 
-    # Count emails from conversation_history
-    total_sent = 0
-    total_received = 0
-    for r in conv_rows:
-        total_received += 1  # each conversation = at least 1 inbound
-        total_sent += 1      # each conversation = at least 1 outbound
+    # Count emails: each round = 1 received + 1 sent (roughly)
+    total_sent = sum(p["rounds"] for p in providers.values())
+    total_received = total_sent  # approximate: each round is 1 inbound + 1 outbound
 
     # Calculate savings: sum of (bill - offer) for accepted providers
     total_savings = 0
@@ -924,8 +999,10 @@ def _update_case_stats(case_id: str):
                 total_savings += saving
             total_fees += p["offer"]
             any_accepted = True
-        elif p["bill"] > 0:
-            all_accepted = False
+        else:
+            # Not fully settled (either not accepted, or missing amounts)
+            if p["bill"] > 0:
+                all_accepted = False
 
     # Determine overall case status
     if not any_accepted:
@@ -1013,6 +1090,9 @@ def _lookup_negotiation_history(provider_email: str) -> str:
 
     A provider can have multiple clients/cases, so we group history per case
     and return all of them so the agent can match the right one.
+
+    With accumulated messages_json, a single row may contain multiple rounds.
+    We extract per-round bill/offer from ALL assistant responses in the row.
     """
     from turso_client import turso
     try:
@@ -1035,52 +1115,52 @@ def _lookup_negotiation_history(provider_email: str) -> str:
         if not rows:
             return json.dumps({"found": False, "message": f"No negotiation history for {provider_email}"})
 
-        # Extract bill/offer from the agent's last assistant message in each conversation
-        def _extract_amounts(messages_json_str):
-            try:
-                messages = json.loads(messages_json_str or "[]")
-                for msg in reversed(messages):
-                    if msg.get("role") == "assistant" and msg.get("content"):
-                        try:
-                            data = json.loads(msg["content"])
-                            bill = float(data.get("actual_bill", 0) or 0)
-                            offer = float(data.get("offered_bill", 0) or 0)
-                            return bill, offer
-                        except (json.JSONDecodeError, ValueError, TypeError):
-                            continue
-            except Exception:
-                pass
-            return 0, 0
-
-        # Group by case_id
+        # Group by case_id — extract ALL rounds from each row's accumulated messages
         cases = {}
         for r in rows:
             cid = str(r.get("case_id", ""))
-            bill, offer = _extract_amounts(r.get("messages_json", ""))
             intent = r.get("last_intent", "")
+
+            # Extract all bill/offer pairs from accumulated messages (one per round)
+            all_amounts = _extract_all_amounts(r.get("messages_json") or "")
+            best_bill, best_offer = _extract_best_amounts(r.get("messages_json") or "")
 
             if cid not in cases:
                 cases[cid] = {
                     "case_id": cid,
-                    "latest_actual_bill": bill,
-                    "latest_offered_bill": offer,
+                    "latest_actual_bill": best_bill,
+                    "latest_offered_bill": best_offer,
                     "history": []
                 }
             else:
-                if bill > (cases[cid]["latest_actual_bill"] or 0):
-                    cases[cid]["latest_actual_bill"] = bill
-                if offer > (cases[cid]["latest_offered_bill"] or 0):
-                    cases[cid]["latest_offered_bill"] = offer
+                if best_bill > (cases[cid]["latest_actual_bill"] or 0):
+                    cases[cid]["latest_actual_bill"] = best_bill
+                if best_offer > 0:
+                    cases[cid]["latest_offered_bill"] = best_offer
 
-            cases[cid]["history"].append({
-                "type": intent,
-                "summary": intent,
-                "actual_bill": bill,
-                "offered_bill": offer,
-                "result": intent,
-                "date": r.get("updated_at", ""),
-                "sent_by_us": False
-            })
+            # Build per-round history entries from accumulated messages
+            if all_amounts:
+                for i, entry in enumerate(all_amounts):
+                    cases[cid]["history"].append({
+                        "type": entry["intent"] or intent,
+                        "summary": entry["intent"] or intent,
+                        "actual_bill": entry["bill"],
+                        "offered_bill": entry["offer"],
+                        "result": entry["intent"],
+                        "date": r.get("updated_at", ""),
+                        "sent_by_us": entry["intent"] in ("bill_confirmation", "initial_offer", "counter_offer", "follow_up", "accepted"),
+                    })
+            else:
+                # No parseable amounts — still record the entry
+                cases[cid]["history"].append({
+                    "type": intent,
+                    "summary": intent,
+                    "actual_bill": 0,
+                    "offered_bill": 0,
+                    "result": intent,
+                    "date": r.get("updated_at", ""),
+                    "sent_by_us": intent in ("bill_confirmation", "initial_offer", "counter_offer", "follow_up", "accepted"),
+                })
 
         cases_list = list(cases.values())
 
@@ -1875,17 +1955,45 @@ def _load_conversation_history(case_id: str, provider_email: str) -> tuple:
 
 def _save_conversation_history(case_id: str, provider_email: str,
                                 messages: List[Dict], tools_used: List[str],
-                                intent: str):
-    """Save the full AI conversation to Turso for next time."""
+                                intent: str, thread_subject: str = ""):
+    """Save the full AI conversation to Turso for next time.
+
+    Messages should already be accumulated (prior rounds + current round)
+    before calling this function.
+    """
     from turso_client import turso
     try:
         key = _get_conversation_key(case_id, provider_email)
+
+        # Merge tools_used with existing (so we accumulate across rounds)
+        existing = turso.fetch_one(
+            "SELECT tools_used, thread_subject FROM conversation_history WHERE id = ?",
+            [key]
+        )
+        # If no exact key match, try domain match (e.g. email changed from leslie@ to alen@)
+        if not existing and case_id:
+            domain = provider_email.lower().split("@")[-1] if "@" in provider_email else ""
+            if domain and domain not in ("gmail.com", "yahoo.com", "hotmail.com", "outlook.com", "aol.com"):
+                existing = turso.fetch_one(
+                    "SELECT tools_used, thread_subject FROM conversation_history WHERE case_id = ? AND sender_email LIKE ? ORDER BY updated_at DESC LIMIT 1",
+                    [case_id, f"%@{domain}"]
+                )
+        if existing:
+            try:
+                prev_tools = json.loads(existing.get("tools_used") or "[]")
+                all_tools = prev_tools + tools_used
+            except (json.JSONDecodeError, TypeError):
+                all_tools = tools_used
+            if not thread_subject:
+                thread_subject = existing.get("thread_subject") or ""
+        else:
+            all_tools = tools_used
+
         # Serialize all messages including tool_calls
         safe_messages = []
         for msg in messages:
             if hasattr(msg, 'model_dump'):
                 dumped = msg.model_dump()
-                # Ensure tool_calls are preserved
                 safe_messages.append(dumped)
             elif isinstance(msg, dict):
                 safe_messages.append(msg)
@@ -1894,9 +2002,9 @@ def _save_conversation_history(case_id: str, provider_email: str,
 
         turso.execute(
             "INSERT OR REPLACE INTO conversation_history (id, case_id, sender_email, thread_subject, messages_json, tools_used, last_intent, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))",
-            [key, case_id, provider_email.lower(), "", messages_json, json.dumps(tools_used), intent]
+            [key, case_id, provider_email.lower(), thread_subject, messages_json, json.dumps(all_tools), intent]
         )
-        logger.info(f"[Agent] Saved {len(safe_messages)} messages to conversation history for case {case_id} | {provider_email}")
+        logger.info(f"[Agent] Saved {len(safe_messages)} messages (accumulated) to conversation history for case {case_id} | {provider_email}")
     except Exception as e:
         logger.warning(f"[Agent] Failed to save conversation history: {e}")
 
@@ -2458,11 +2566,42 @@ IMPORTANT: After using tools and gathering information, you MUST return a final 
                 except Exception as e:
                     logger.error(f"[PostProcess] PDF attachment upload failed: {e}")
 
-        # Save conversation history for future continuity
+        # Accumulate conversation history across rounds (not just latest run)
+        # prev_conversation has all prior messages; merge with current run
+        if prev_conversation:
+            # Keep latest system prompt + all prior non-system msgs + current non-system msgs
+            system_msgs = [m for m in agent_messages if isinstance(m, dict) and m.get("role") == "system"]
+            # Truncate tool results from PRIOR rounds to prevent massive rows
+            # (agent doesn't need full treatment/settlement page data from old rounds)
+            prev_non_system = []
+            for m in prev_conversation:
+                if not isinstance(m, dict) or m.get("role") == "system":
+                    continue
+                if m.get("role") == "tool" and len(m.get("content", "")) > 500:
+                    prev_non_system.append({
+                        **m,
+                        "content": m["content"][:500] + "... [truncated for history]"
+                    })
+                else:
+                    prev_non_system.append(m)
+            accumulated = list(system_msgs)
+            accumulated.extend(prev_non_system)
+            # Round separator so we know where prior session ended
+            accumulated.append({"role": "user", "content": "[--- NEW EMAIL ROUND ---]"})
+            # Add current non-system messages (mix of dicts and OpenAI objects) — full, not truncated
+            for m in agent_messages:
+                if isinstance(m, dict) and m.get("role") == "system":
+                    continue  # already added
+                accumulated.append(m)
+            messages_to_save = accumulated
+        else:
+            messages_to_save = agent_messages
+
         _save_conversation_history(
             discovered_case_id, clean_sender,
-            agent_messages, actions_taken,
+            messages_to_save, actions_taken,
             result.get("intent", "unclear"),
+            thread_subject=thread_subject,
         )
 
         # Update case-level stats (status, savings, fees, email counts)
