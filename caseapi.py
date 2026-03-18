@@ -2089,13 +2089,28 @@ async def get_agent_providers(case_id: str):
     # 3. Enrich with provider names from treatment page
     try:
         from casepeer_helpers import get_treatment_providers
-        treatment = get_treatment_providers(case_id)
+        treatment = await asyncio.to_thread(get_treatment_providers, case_id)
         if not treatment.get("error"):
+            # Build email→name and domain→name maps from treatment page
+            tp_email_map = {}
+            tp_domain_map = {}
             for tp in treatment.get("providers", []):
                 tp_email = (tp.get("email") or "").strip().lower()
                 tp_name = tp.get("provider_name", "")
-                if tp_email and tp_email in providers and tp_name:
-                    providers[tp_email]["provider_name"] = tp_name
+                if tp_email and tp_name:
+                    tp_email_map[tp_email] = tp_name
+                    domain = tp_email.split("@")[-1] if "@" in tp_email else ""
+                    if domain and domain not in ("gmail.com", "yahoo.com", "hotmail.com", "outlook.com"):
+                        tp_domain_map[domain] = tp_name
+
+            # Match by exact email first, then by domain
+            for email, pdata in providers.items():
+                if email in tp_email_map:
+                    pdata["provider_name"] = tp_email_map[email]
+                else:
+                    domain = email.split("@")[-1] if "@" in email else ""
+                    if domain in tp_domain_map:
+                        pdata["provider_name"] = tp_domain_map[domain]
     except Exception as e:
         logger.warning(f"[AgentDashboard] Could not enrich provider names: {e}")
 
@@ -2436,27 +2451,33 @@ async def resend_offer_letter(case_id: str, provider_email: str, request: Reques
     from negotiation_agent import _find_lien_id_for_provider, _generate_casepeer_offer_letter
     from gmail_poller import send_email_with_attachment
 
-    body = await request.json()
-    provider_name = body.get("provider_name", "")
+    # Always resolve provider name from treatment page using the email in the URL
+    from casepeer_helpers import get_treatment_providers
+    provider_name = None
+    try:
+        treatment = await asyncio.to_thread(get_treatment_providers, case_id)
+        if not treatment.get("error"):
+            email_lower = provider_email.strip().lower()
+            for tp in treatment.get("providers", []):
+                tp_email = (tp.get("email") or "").strip().lower()
+                if tp_email == email_lower and tp.get("provider_name"):
+                    provider_name = tp["provider_name"]
+                    break
+    except Exception as e:
+        logger.warning(f"[ResendLetter] Treatment page lookup failed: {e}")
 
     if not provider_name:
-        raise HTTPException(status_code=400, detail="provider_name is required")
-
-    # If provider_name is an email, resolve to actual name from treatment page
-    if "@" in provider_name:
+        # Fallback: try the body
         try:
-            from casepeer_helpers import get_treatment_providers
-            treatment = await asyncio.to_thread(get_treatment_providers, case_id)
-            if not treatment.get("error"):
-                email_lower = provider_name.strip().lower()
-                for tp in treatment.get("providers", []):
-                    tp_email = (tp.get("email") or "").strip().lower()
-                    if tp_email == email_lower and tp.get("provider_name"):
-                        logger.info(f"[ResendLetter] Resolved email '{provider_name}' → '{tp['provider_name']}'")
-                        provider_name = tp["provider_name"]
-                        break
-        except Exception as e:
-            logger.warning(f"[ResendLetter] Could not resolve email to name: {e}")
+            body = await request.json()
+            provider_name = body.get("provider_name", "")
+        except Exception:
+            pass
+
+    if not provider_name:
+        raise HTTPException(status_code=400, detail=f"Could not resolve provider name for email '{provider_email}'")
+
+    logger.info(f"[ResendLetter] Resolved '{provider_email}' → '{provider_name}'")
 
     try:
         # Look up lien_id and template_id
