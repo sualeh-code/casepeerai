@@ -814,6 +814,88 @@ def send_email_with_attachment(gmail_email: str, to_address: str, subject: str,
 
 
 # ---------------------------------------------------------------------------
+# Thread lookup — find existing Gmail thread for a provider email
+# ---------------------------------------------------------------------------
+
+def find_gmail_thread(provider_email: str, subject_hint: str = "") -> dict:
+    """Search Gmail for an existing thread with a provider email.
+
+    Returns: {"thread_id": str, "in_reply_to": str, "references": str, "subject": str}
+    or empty dict if no thread found.
+    """
+    access_token = _get_api_access_token()
+    if not access_token:
+        return {}
+
+    headers = {"Authorization": f"Bearer {access_token}"}
+
+    # Search for threads involving this email
+    query = f"to:{provider_email} OR from:{provider_email}"
+    if subject_hint:
+        query += f" subject:{subject_hint}"
+
+    try:
+        resp = http_requests.get(
+            f"{GMAIL_API_BASE}/messages",
+            headers=headers,
+            params={"q": query, "maxResults": 5},
+            timeout=15,
+        )
+        if resp.status_code != 200 or not resp.json().get("messages"):
+            logger.info(f"[ThreadLookup] No existing thread found for {provider_email}")
+            return {}
+
+        # Get the thread ID from the first (most recent) result
+        msg_data = resp.json()["messages"][0]
+        thread_id = msg_data.get("threadId", "")
+
+        if not thread_id:
+            return {}
+
+        # Fetch the full thread to get the last message's headers
+        thread_resp = http_requests.get(
+            f"{GMAIL_API_BASE}/threads/{thread_id}",
+            headers=headers,
+            params={"format": "metadata", "metadataHeaders": ["Message-ID", "References", "Subject"]},
+            timeout=15,
+        )
+        if thread_resp.status_code != 200:
+            return {"thread_id": thread_id}
+
+        thread_messages = thread_resp.json().get("messages", [])
+        if not thread_messages:
+            return {"thread_id": thread_id}
+
+        # Get headers from the last message in the thread
+        last_msg = thread_messages[-1]
+        header_list = last_msg.get("payload", {}).get("headers", [])
+        header_map = {h["name"].lower(): h["value"] for h in header_list}
+
+        msg_id = header_map.get("message-id", "")
+        references = header_map.get("references", "")
+        subject = header_map.get("subject", "")
+
+        # Build references chain
+        if msg_id:
+            refs = f"{references} {msg_id}".strip() if references else msg_id
+        else:
+            refs = references
+
+        logger.info(f"[ThreadLookup] Found thread for {provider_email}: threadId={thread_id}, subject={subject[:50]}")
+
+        return {
+            "thread_id": thread_id,
+            "in_reply_to": msg_id,
+            "references": refs,
+            "subject": subject,
+        }
+
+    except Exception as e:
+        logger.warning(f"[ThreadLookup] Error searching for thread: {e}")
+        return {}
+
+
+# ---------------------------------------------------------------------------
 # Main polling loop
 # ---------------------------------------------------------------------------
 

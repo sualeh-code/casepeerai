@@ -2490,7 +2490,7 @@ async def refresh_all_case_stats():
 async def resend_offer_letter(case_id: str, provider_email: str, request: Request):
     """Generate and send an offer letter to a provider."""
     from negotiation_agent import _find_lien_id_for_provider, _generate_casepeer_offer_letter
-    from gmail_poller import send_email_with_attachment
+    from gmail_poller import send_email_with_attachment, find_gmail_thread
 
     # Always resolve provider name from treatment page using the email in the URL
     from casepeer_helpers import get_treatment_providers
@@ -2550,15 +2550,28 @@ async def resend_offer_letter(case_id: str, provider_email: str, request: Reques
         filename = f"Offer_Letter_{provider_name.replace(' ', '_')}.{fmt}"
         ct = "application/pdf" if fmt == "pdf" else "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
+        # Look up existing Gmail thread to reply in same thread
+        thread_info = await asyncio.to_thread(find_gmail_thread, provider_email, patient)
+        thread_id = thread_info.get("thread_id", "")
+        in_reply_to = thread_info.get("in_reply_to", "")
+        references = thread_info.get("references", "")
+        # Use the existing thread's subject if found (preserves Re: chain)
+        if thread_info.get("subject"):
+            subject = thread_info["subject"]
+
+        bcc_addr = f"{case_id}@bcc.casepeer.com"
+
         await asyncio.to_thread(
             send_email_with_attachment,
             gmail_email, provider_email, subject,
             f"Please find the attached offer letter regarding {patient}.",
             file_bytes, filename,
-            content_type=ct,
+            in_reply_to=in_reply_to, references=references,
+            thread_id=thread_id,
+            content_type=ct, bcc=bcc_addr,
         )
 
-        return {"success": True, "message": f"Offer letter sent to {provider_email}", "format": fmt}
+        return {"success": True, "message": f"Offer letter sent to {provider_email}" + (f" (thread: {thread_id[:15]})" if thread_id else " (new thread)"), "format": fmt}
     except HTTPException:
         raise
     except Exception as e:
