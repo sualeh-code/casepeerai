@@ -2442,6 +2442,22 @@ async def resend_offer_letter(case_id: str, provider_email: str, request: Reques
     if not provider_name:
         raise HTTPException(status_code=400, detail="provider_name is required")
 
+    # If provider_name is an email, resolve to actual name from treatment page
+    if "@" in provider_name:
+        try:
+            from casepeer_helpers import get_treatment_providers
+            treatment = await asyncio.to_thread(get_treatment_providers, case_id)
+            if not treatment.get("error"):
+                email_lower = provider_name.strip().lower()
+                for tp in treatment.get("providers", []):
+                    tp_email = (tp.get("email") or "").strip().lower()
+                    if tp_email == email_lower and tp.get("provider_name"):
+                        logger.info(f"[ResendLetter] Resolved email '{provider_name}' → '{tp['provider_name']}'")
+                        provider_name = tp["provider_name"]
+                        break
+        except Exception as e:
+            logger.warning(f"[ResendLetter] Could not resolve email to name: {e}")
+
     try:
         # Look up lien_id and template_id
         lien_id, template_id = await asyncio.to_thread(_find_lien_id_for_provider, case_id, provider_name)
@@ -2499,6 +2515,21 @@ async def update_lien_amount(case_id: str, request: Request):
 
     if not provider_name or not amount:
         raise HTTPException(status_code=400, detail="provider_name and amount are required")
+
+    # If provider_name is an email, resolve to actual name from treatment page
+    if "@" in provider_name:
+        try:
+            from casepeer_helpers import get_treatment_providers
+            treatment = await asyncio.to_thread(get_treatment_providers, case_id)
+            if not treatment.get("error"):
+                email_lower = provider_name.strip().lower()
+                for tp in treatment.get("providers", []):
+                    tp_email = (tp.get("email") or "").strip().lower()
+                    if tp_email == email_lower and tp.get("provider_name"):
+                        provider_name = tp["provider_name"]
+                        break
+        except Exception as e:
+            logger.warning(f"[UpdateLien] Could not resolve email to name: {e}")
 
     try:
         success = await asyncio.to_thread(_update_lien_final_cost, case_id, provider_name, amount)
