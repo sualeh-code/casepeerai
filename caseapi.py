@@ -2334,6 +2334,202 @@ async def get_known_cases():
 
 
 # ============================================================================
+# Case-Level Action Endpoints
+# ============================================================================
+
+@app.get("/internal-api/cases/{case_id}/live/treatment")
+async def get_live_treatment(case_id: str):
+    """Fetch live treatment/provider data from CasePeer."""
+    from negotiation_agent import tool_get_treatment_page
+    try:
+        result = await asyncio.to_thread(tool_get_treatment_page, case_id)
+        return json.loads(result)
+    except Exception as e:
+        logger.error(f"Live treatment fetch failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/internal-api/cases/{case_id}/live/settlement")
+async def get_live_settlement(case_id: str):
+    """Fetch live settlement page data from CasePeer."""
+    from negotiation_agent import tool_get_settlement_page
+    try:
+        result = await asyncio.to_thread(tool_get_settlement_page, case_id)
+        return json.loads(result)
+    except Exception as e:
+        logger.error(f"Live settlement fetch failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/internal-api/cases/{case_id}/notes")
+async def add_case_note(case_id: str, request: Request):
+    """Add a note to a CasePeer case."""
+    body = await request.json()
+    note = body.get("note", "").strip()
+    if not note:
+        raise HTTPException(status_code=400, detail="Note text is required")
+    from casepeer_helpers import add_case_note as _add_note
+    try:
+        result = await asyncio.to_thread(_add_note, case_id, note)
+        return result
+    except Exception as e:
+        logger.error(f"Add case note failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/internal-api/cases/{case_id}/refresh-stats")
+async def refresh_case_stats(case_id: str):
+    """Recalculate and update case stats (savings, fees, status)."""
+    from negotiation_agent import _update_case_stats
+    try:
+        await asyncio.to_thread(_update_case_stats, case_id)
+        # Return updated case data
+        row = turso.fetch_one("SELECT * FROM cases WHERE id = ?", [case_id])
+        return {"success": True, "case": row}
+    except Exception as e:
+        logger.error(f"Refresh stats failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/internal-api/cases/refresh-all-stats")
+async def refresh_all_case_stats():
+    """Recalculate stats for all cases."""
+    from negotiation_agent import _update_case_stats
+    rows = turso.fetch_all("SELECT id FROM cases")
+    updated = 0
+    for row in rows:
+        cid = row.get("id")
+        if cid:
+            try:
+                _update_case_stats(cid)
+                updated += 1
+            except Exception as e:
+                logger.warning(f"Failed to update stats for case {cid}: {e}")
+    return {"success": True, "cases_updated": updated}
+
+
+# ============================================================================
+# Provider-Level Action Endpoints
+# ============================================================================
+
+@app.post("/internal-api/cases/{case_id}/providers/{provider_email}/resend-letter")
+async def resend_offer_letter(case_id: str, provider_email: str, request: Request):
+    """Generate and send an offer letter to a provider."""
+    from negotiation_agent import _find_lien_id_for_provider, _generate_casepeer_offer_letter
+    from gmail_poller import send_email_with_attachment
+
+    body = await request.json()
+    provider_name = body.get("provider_name", "")
+
+    if not provider_name:
+        raise HTTPException(status_code=400, detail="provider_name is required")
+
+    try:
+        # Look up lien_id and template_id
+        lien_id, template_id = await asyncio.to_thread(_find_lien_id_for_provider, case_id, provider_name)
+        if not lien_id or not template_id:
+            raise HTTPException(status_code=404, detail=f"Could not find lien for provider '{provider_name}'")
+
+        # Get the latest offered amount from negotiations table
+        neg_row = turso.fetch_one(
+            'SELECT offered_bill FROM negotiations WHERE case_id = ? AND "to" = ? ORDER BY date DESC LIMIT 1',
+            [case_id, provider_email]
+        )
+        offered = str(neg_row.get("offered_bill", "")) if neg_row else ""
+
+        # Generate the letter
+        file_bytes, fmt = await asyncio.to_thread(_generate_casepeer_offer_letter, case_id, lien_id, template_id, offered)
+        if not file_bytes:
+            raise HTTPException(status_code=500, detail="Failed to generate offer letter")
+
+        # Send email with attachment
+        from turso_client import get_setting
+        gmail_email = get_setting("gmail_email", "")
+        if not gmail_email:
+            raise HTTPException(status_code=500, detail="Gmail email not configured in settings")
+
+        case_row = turso.fetch_one("SELECT patient_name FROM cases WHERE id = ?", [case_id])
+        patient = case_row.get("patient_name", "") if case_row else ""
+        subject = f"Offer to Settle Lien - {patient}"
+        filename = f"Offer_Letter_{provider_name.replace(' ', '_')}.{fmt}"
+        ct = "application/pdf" if fmt == "pdf" else "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+        await asyncio.to_thread(
+            send_email_with_attachment,
+            gmail_email, provider_email, subject,
+            f"Please find the attached offer letter regarding {patient}.",
+            file_bytes, filename,
+            content_type=ct,
+        )
+
+        return {"success": True, "message": f"Offer letter sent to {provider_email}", "format": fmt}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Resend offer letter failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/internal-api/cases/{case_id}/providers/update-lien")
+async def update_lien_amount(case_id: str, request: Request):
+    """Update the final_cost (lien amount) for a provider on the settlement page."""
+    from negotiation_agent import _update_lien_final_cost
+
+    body = await request.json()
+    provider_name = body.get("provider_name", "")
+    amount = body.get("amount", "")
+
+    if not provider_name or not amount:
+        raise HTTPException(status_code=400, detail="provider_name and amount are required")
+
+    try:
+        success = await asyncio.to_thread(_update_lien_final_cost, case_id, provider_name, amount)
+        if success:
+            return {"success": True, "message": f"Lien updated to ${amount} for {provider_name}"}
+        else:
+            raise HTTPException(status_code=500, detail=f"Failed to update lien for {provider_name}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Update lien failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/internal-api/cases/{case_id}/providers/accept-lien")
+async def accept_lien(case_id: str, request: Request):
+    """Accept a lien (update final_cost and toggle accept flag)."""
+    from negotiation_agent import tool_accept_lien
+
+    body = await request.json()
+    provider_id = body.get("provider_id", "")
+    offered_amount = body.get("offered_amount", "")
+
+    if not provider_id or not offered_amount:
+        raise HTTPException(status_code=400, detail="provider_id and offered_amount are required")
+
+    try:
+        result = await asyncio.to_thread(tool_accept_lien, case_id, provider_id, offered_amount)
+        return json.loads(result)
+    except Exception as e:
+        logger.error(f"Accept lien failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/internal-api/providers/lookup/{provider_name}")
+async def lookup_provider_contact(provider_name: str):
+    """Look up a provider in CasePeer's contact directory."""
+    from casepeer_helpers import lookup_contact_directory
+    try:
+        from urllib.parse import unquote
+        decoded = unquote(provider_name)
+        contacts = await asyncio.to_thread(lookup_contact_directory, decoded)
+        return {"contacts": contacts, "query": decoded}
+    except Exception as e:
+        logger.error(f"Contact lookup failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
 # Proxy Helper Functions
 # ============================================================================
 

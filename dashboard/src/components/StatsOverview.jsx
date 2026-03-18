@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { DollarSign, Users, Briefcase, Activity, TrendingUp, ArrowUpRight, ArrowDownRight, FileText, Percent, Mail, Phone, Clock } from 'lucide-react';
+import { DollarSign, Users, Briefcase, Activity, TrendingUp, ArrowUpRight, ArrowDownRight, FileText, Percent, Mail, Phone, Clock, Play, Square, Globe, RefreshCw, Loader2, CheckCircle, XCircle } from 'lucide-react';
 import { Button } from "@/components/ui/button";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts';
 import N8nHealth from './N8nHealth';
@@ -27,14 +27,21 @@ const StatsOverview = () => {
     const [n8nExecutions, setN8nExecutions] = useState([]);
     const [vapiStats, setVapiStats] = useState(null);
     const [loading, setLoading] = useState(true);
+    const [pollerStatus, setPollerStatus] = useState(null);
+    const [browserStatus, setBrowserStatus] = useState(null);
+    const [pollerToggling, setPollerToggling] = useState(false);
+    const [refreshingStats, setRefreshingStats] = useState(false);
+    const [reAuthenticating, setReAuthenticating] = useState(false);
 
     useEffect(() => {
         const fetchData = async () => {
             try {
-                const [casesRes, n8nRes, vapiRes] = await Promise.all([
+                const [casesRes, n8nRes, vapiRes, pollerRes, browserRes] = await Promise.all([
                     fetch('/internal-api/cases'),
                     fetch('/internal-api/integrations/n8n/executions'),
-                    fetch('/internal-api/integrations/vapi/calls')
+                    fetch('/internal-api/integrations/vapi/calls'),
+                    fetch('/internal-api/poller/status'),
+                    fetch('/internal-api/browser/status'),
                 ]);
 
                 if (casesRes.ok) {
@@ -105,6 +112,9 @@ const StatsOverview = () => {
                     }
                 }
 
+                if (pollerRes.ok) setPollerStatus(await pollerRes.json());
+                if (browserRes.ok) setBrowserStatus(await browserRes.json());
+
             } catch (error) {
                 console.error("Failed to fetch dashboard data:", error);
             } finally {
@@ -114,6 +124,39 @@ const StatsOverview = () => {
 
         fetchData();
     }, []);
+
+    const togglePoller = async () => {
+        setPollerToggling(true);
+        try {
+            const action = pollerStatus?.running ? 'stop' : 'start';
+            const res = await fetch(`/internal-api/poller/${action}`, { method: 'POST' });
+            if (res.ok) {
+                const statusRes = await fetch('/internal-api/poller/status');
+                if (statusRes.ok) setPollerStatus(await statusRes.json());
+            }
+        } catch (err) { console.error("Poller toggle error:", err); }
+        finally { setPollerToggling(false); }
+    };
+
+    const reAuthenticate = async () => {
+        setReAuthenticating(true);
+        try {
+            const res = await fetch('/internal-api/authenticate', { method: 'POST' });
+            if (res.ok) {
+                const statusRes = await fetch('/internal-api/browser/status');
+                if (statusRes.ok) setBrowserStatus(await statusRes.json());
+            }
+        } catch (err) { console.error("Re-auth error:", err); }
+        finally { setReAuthenticating(false); }
+    };
+
+    const refreshAllStats = async () => {
+        setRefreshingStats(true);
+        try {
+            await fetch('/internal-api/cases/refresh-all-stats', { method: 'POST' });
+        } catch (err) { console.error("Refresh stats error:", err); }
+        finally { setRefreshingStats(false); }
+    };
 
     const kpiCards = [
         { title: "Total Revenue", value: "$" + stats.totalRevenue.toLocaleString(), icon: DollarSign, color: "text-green-500", desc: "Gross revenue" },
@@ -130,7 +173,99 @@ const StatsOverview = () => {
 
     return (
         <div className="space-y-6">
-            <h2 className="text-3xl font-bold tracking-tight">Executive Dashboard</h2>
+            <div className="flex items-center justify-between">
+                <h2 className="text-3xl font-bold tracking-tight">Executive Dashboard</h2>
+                <Button variant="outline" size="sm" disabled={refreshingStats} onClick={refreshAllStats}>
+                    {refreshingStats ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <RefreshCw className="h-4 w-4 mr-2" />}
+                    Refresh All Stats
+                </Button>
+            </div>
+
+            {/* System Controls */}
+            <div className="grid gap-4 md:grid-cols-3">
+                {/* Email Poller */}
+                <Card>
+                    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                        <CardTitle className="text-sm font-medium">Email Poller</CardTitle>
+                        <Mail className="h-4 w-4 text-muted-foreground" />
+                    </CardHeader>
+                    <CardContent>
+                        <div className="flex items-center justify-between">
+                            <div>
+                                <div className={`text-lg font-bold ${pollerStatus?.running ? 'text-green-600' : 'text-muted-foreground'}`}>
+                                    {pollerStatus?.running ? 'Running' : 'Stopped'}
+                                </div>
+                                <p className="text-xs text-muted-foreground">
+                                    {pollerStatus?.emails_processed || 0} emails processed
+                                </p>
+                            </div>
+                            <Button
+                                size="sm"
+                                variant={pollerStatus?.running ? "destructive" : "default"}
+                                disabled={pollerToggling}
+                                onClick={togglePoller}
+                            >
+                                {pollerToggling ? <Loader2 className="h-4 w-4 animate-spin" /> :
+                                 pollerStatus?.running ? <><Square className="h-4 w-4 mr-1" /> Stop</> :
+                                 <><Play className="h-4 w-4 mr-1" /> Start</>}
+                            </Button>
+                        </div>
+                    </CardContent>
+                </Card>
+
+                {/* Browser Session */}
+                <Card>
+                    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                        <CardTitle className="text-sm font-medium">CasePeer Session</CardTitle>
+                        <Globe className="h-4 w-4 text-muted-foreground" />
+                    </CardHeader>
+                    <CardContent>
+                        <div className="flex items-center justify-between">
+                            <div>
+                                <div className={`text-lg font-bold ${browserStatus?.authenticated ? 'text-green-600' : 'text-red-500'}`}>
+                                    {browserStatus?.authenticated ? 'Authenticated' : 'Not Connected'}
+                                </div>
+                                <p className="text-xs text-muted-foreground">
+                                    {browserStatus?.browser_running ? 'Browser active' : 'Browser idle'}
+                                </p>
+                            </div>
+                            <Button
+                                size="sm"
+                                variant="outline"
+                                disabled={reAuthenticating}
+                                onClick={reAuthenticate}
+                            >
+                                {reAuthenticating ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <RefreshCw className="h-4 w-4 mr-1" />}
+                                Re-auth
+                            </Button>
+                        </div>
+                    </CardContent>
+                </Card>
+
+                {/* Quick Stats */}
+                <Card>
+                    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                        <CardTitle className="text-sm font-medium">System Health</CardTitle>
+                        <Activity className="h-4 w-4 text-muted-foreground" />
+                    </CardHeader>
+                    <CardContent>
+                        <div className="space-y-1">
+                            <div className="flex items-center gap-2 text-sm">
+                                {pollerStatus?.running ? <CheckCircle className="h-3 w-3 text-green-500" /> : <XCircle className="h-3 w-3 text-red-500" />}
+                                Email Poller
+                            </div>
+                            <div className="flex items-center gap-2 text-sm">
+                                {browserStatus?.authenticated ? <CheckCircle className="h-3 w-3 text-green-500" /> : <XCircle className="h-3 w-3 text-red-500" />}
+                                CasePeer Auth
+                            </div>
+                            <div className="flex items-center gap-2 text-sm">
+                                {browserStatus?.browser_running ? <CheckCircle className="h-3 w-3 text-green-500" /> : <XCircle className="h-3 w-3 text-red-500" />}
+                                Browser
+                            </div>
+                        </div>
+                    </CardContent>
+                </Card>
+            </div>
 
             {/* Top Row: KPI Cards */}
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">

@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Bot, ChevronLeft, ChevronRight, Wrench, CheckCircle, Clock, AlertTriangle, Send, Inbox, ChevronDown, ChevronUp } from 'lucide-react';
+import { Bot, ChevronLeft, ChevronRight, Wrench, CheckCircle, Clock, AlertTriangle, Send, Inbox, ChevronDown, ChevronUp, Mail, DollarSign, Search, Loader2, XCircle } from 'lucide-react';
 
 const StatusBadge = ({ intent }) => {
     const lower = (intent || '').toLowerCase();
@@ -139,6 +139,9 @@ const AgentActivity = ({ caseId }) => {
     const [providerHistory, setProviderHistory] = useState(null);
     const [loading, setLoading] = useState(true);
     const [loadingHistory, setLoadingHistory] = useState(false);
+    const [actionLoading, setActionLoading] = useState(null);
+    const [actionResult, setActionResult] = useState(null);
+    const [lookupResults, setLookupResults] = useState(null);
 
     useEffect(() => {
         const fetchProviders = async () => {
@@ -173,13 +176,55 @@ const AgentActivity = ({ caseId }) => {
         }
     };
 
+    const resendLetter = async (providerEmail, providerName) => {
+        setActionLoading('resend');
+        setActionResult(null);
+        try {
+            const res = await fetch(`/internal-api/cases/${caseId}/providers/${encodeURIComponent(providerEmail)}/resend-letter`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ provider_name: providerName }),
+            });
+            const data = await res.json();
+            if (res.ok) setActionResult({ status: 'success', message: data.message || 'Letter sent' });
+            else setActionResult({ status: 'error', message: data.detail || 'Failed' });
+        } catch (err) { setActionResult({ status: 'error', message: err.message }); }
+        finally { setActionLoading(null); }
+    };
+
+    const lookupContact = async (providerName) => {
+        setActionLoading('lookup');
+        setActionResult(null);
+        setLookupResults(null);
+        try {
+            const res = await fetch(`/internal-api/providers/lookup/${encodeURIComponent(providerName)}`);
+            if (res.ok) {
+                const data = await res.json();
+                setLookupResults(data.contacts || []);
+            } else { setActionResult({ status: 'error', message: 'Lookup failed' }); }
+        } catch (err) { setActionResult({ status: 'error', message: err.message }); }
+        finally { setActionLoading(null); }
+    };
+
+    // Derive provider name from negotiation history or email
+    const getProviderName = () => {
+        if (!providerHistory) return selectedProvider;
+        // Try to get from timeline
+        for (const item of (providerHistory.timeline || [])) {
+            if (item.provider_name) return item.provider_name;
+        }
+        // Fallback: use the part before @ as rough name
+        return selectedProvider.split('@')[0].replace(/[._]/g, ' ');
+    };
+
     if (loading) return <div className="p-4 text-muted-foreground">Loading agent activity...</div>;
 
     // Provider detail view
     if (selectedProvider && providerHistory) {
+        const providerName = getProviderName();
         return (
             <div className="space-y-4">
-                <Button variant="outline" size="sm" onClick={() => { setSelectedProvider(null); setProviderHistory(null); }}>
+                <Button variant="outline" size="sm" onClick={() => { setSelectedProvider(null); setProviderHistory(null); setActionResult(null); setLookupResults(null); }}>
                     <ChevronLeft className="h-4 w-4 mr-1" /> Back to providers
                 </Button>
 
@@ -191,6 +236,41 @@ const AgentActivity = ({ caseId }) => {
                         </CardTitle>
                     </CardHeader>
                     <CardContent className="space-y-6">
+                        {/* Provider Actions */}
+                        <div>
+                            <h3 className="font-semibold mb-3 text-sm uppercase tracking-wide text-muted-foreground">Actions</h3>
+                            <div className="flex flex-wrap gap-2">
+                                <Button variant="outline" size="sm" disabled={actionLoading === 'resend'} onClick={() => resendLetter(selectedProvider, providerName)}>
+                                    {actionLoading === 'resend' ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Mail className="h-4 w-4 mr-1" />}
+                                    Resend Offer Letter
+                                </Button>
+                                <Button variant="outline" size="sm" disabled={actionLoading === 'lookup'} onClick={() => lookupContact(providerName)}>
+                                    {actionLoading === 'lookup' ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Search className="h-4 w-4 mr-1" />}
+                                    Lookup Contact Info
+                                </Button>
+                            </div>
+                            {actionResult && (
+                                <div className={`mt-2 text-sm px-3 py-2 rounded ${actionResult.status === 'success' ? 'bg-green-50 text-green-700 dark:bg-green-950 dark:text-green-300' : 'bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-300'}`}>
+                                    {actionResult.message}
+                                </div>
+                            )}
+                            {lookupResults && (
+                                <div className="mt-2 border rounded p-3 space-y-2">
+                                    <div className="text-xs font-semibold text-muted-foreground">Contact Directory Results ({lookupResults.length})</div>
+                                    {lookupResults.length === 0 ? (
+                                        <div className="text-sm text-muted-foreground">No contacts found</div>
+                                    ) : lookupResults.map((c, i) => (
+                                        <div key={i} className="text-sm border-b last:border-0 pb-2 last:pb-0">
+                                            <div className="font-medium">{c.name || c[0] || 'Unknown'}</div>
+                                            {c.email && <div className="text-xs text-muted-foreground">Email: {c.email}</div>}
+                                            {c.phone && <div className="text-xs text-muted-foreground">Phone: {c.phone}</div>}
+                                            {c.full_text && <div className="text-xs text-muted-foreground">{c.full_text}</div>}
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+
                         {/* Timeline */}
                         {providerHistory.timeline && providerHistory.timeline.length > 0 && (
                             <div>

@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { ArrowLeft, FileText, Bell, Bot, Trash2, Mail, DollarSign, Phone, Loader2, CheckCircle, XCircle, Zap } from 'lucide-react';
+import { ArrowLeft, FileText, Bell, Bot, Trash2, Mail, DollarSign, Phone, Loader2, CheckCircle, XCircle, Zap, Eye, RefreshCw, StickyNote, ChevronDown, ChevronUp } from 'lucide-react';
 import CaseNotes from './CaseNotes';
 import AgentActivity from './AgentActivity';
 
@@ -22,6 +22,13 @@ const CaseDetails = ({ caseId, onBack }) => {
     const [loading, setLoading] = useState(true);
     const [runningWorkflow, setRunningWorkflow] = useState(null);
     const [workflowResult, setWorkflowResult] = useState(null);
+    const [liveData, setLiveData] = useState(null);
+    const [liveDataType, setLiveDataType] = useState(null);
+    const [loadingLive, setLoadingLive] = useState(null);
+    const [noteText, setNoteText] = useState('');
+    const [addingNote, setAddingNote] = useState(false);
+    const [showNoteInput, setShowNoteInput] = useState(false);
+    const [refreshingStats, setRefreshingStats] = useState(false);
 
     useEffect(() => {
         const fetchData = async () => {
@@ -46,6 +53,53 @@ const CaseDetails = ({ caseId, onBack }) => {
 
         if (caseId) fetchData();
     }, [caseId]);
+
+    const fetchLiveData = async (type) => {
+        setLoadingLive(type);
+        setLiveDataType(type);
+        try {
+            const endpoint = type === 'treatment'
+                ? `/internal-api/cases/${caseId}/live/treatment`
+                : `/internal-api/cases/${caseId}/live/settlement`;
+            const res = await fetch(endpoint);
+            if (res.ok) setLiveData(await res.json());
+            else setLiveData({ error: 'Failed to fetch' });
+        } catch (err) { setLiveData({ error: err.message }); }
+        finally { setLoadingLive(null); }
+    };
+
+    const addNote = async () => {
+        if (!noteText.trim()) return;
+        setAddingNote(true);
+        try {
+            const res = await fetch(`/internal-api/cases/${caseId}/notes`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ note: noteText }),
+            });
+            if (res.ok) {
+                setNoteText('');
+                setShowNoteInput(false);
+                setWorkflowResult({ id: 'add_note', status: 'success', message: 'Note added to CasePeer' });
+            }
+        } catch (err) {
+            setWorkflowResult({ id: 'add_note', status: 'error', message: err.message });
+        } finally { setAddingNote(false); }
+    };
+
+    const refreshStats = async () => {
+        setRefreshingStats(true);
+        try {
+            const res = await fetch(`/internal-api/cases/${caseId}/refresh-stats`, { method: 'POST' });
+            if (res.ok) {
+                const data = await res.json();
+                if (data.case) setCaseData(prev => ({ ...prev, ...data.case }));
+                setWorkflowResult({ id: 'refresh', status: 'success', message: 'Stats refreshed' });
+            }
+        } catch (err) {
+            setWorkflowResult({ id: 'refresh', status: 'error', message: err.message });
+        } finally { setRefreshingStats(false); }
+    };
 
     const triggerWorkflow = async (wf) => {
         setRunningWorkflow(wf.id);
@@ -131,43 +185,160 @@ const CaseDetails = ({ caseId, onBack }) => {
                         Actions
                     </CardTitle>
                 </CardHeader>
-                <CardContent>
-                    <div className="flex flex-wrap gap-3">
-                        {CASE_WORKFLOWS.map((wf) => {
-                            const Icon = wf.icon;
-                            const isRunning = runningWorkflow === wf.id;
-                            const result = workflowResult?.id === wf.id ? workflowResult : null;
-                            return (
-                                <Button
-                                    key={wf.id}
-                                    variant="outline"
-                                    size="sm"
-                                    disabled={isRunning}
-                                    onClick={() => triggerWorkflow(wf)}
-                                    title={wf.description}
-                                    className="gap-2"
-                                >
-                                    {isRunning ? (
-                                        <Loader2 className="h-4 w-4 animate-spin" />
-                                    ) : result?.status === 'success' ? (
-                                        <CheckCircle className="h-4 w-4 text-green-500" />
-                                    ) : result?.status === 'error' ? (
-                                        <XCircle className="h-4 w-4 text-red-500" />
-                                    ) : (
-                                        <Icon className="h-4 w-4" />
-                                    )}
-                                    {wf.name}
-                                </Button>
-                            );
-                        })}
+                <CardContent className="space-y-4">
+                    {/* Workflows */}
+                    <div>
+                        <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Workflows</div>
+                        <div className="flex flex-wrap gap-3">
+                            {CASE_WORKFLOWS.map((wf) => {
+                                const Icon = wf.icon;
+                                const isRunning = runningWorkflow === wf.id;
+                                const result = workflowResult?.id === wf.id ? workflowResult : null;
+                                return (
+                                    <Button
+                                        key={wf.id}
+                                        variant="outline"
+                                        size="sm"
+                                        disabled={isRunning}
+                                        onClick={() => triggerWorkflow(wf)}
+                                        title={wf.description}
+                                        className="gap-2"
+                                    >
+                                        {isRunning ? (
+                                            <Loader2 className="h-4 w-4 animate-spin" />
+                                        ) : result?.status === 'success' ? (
+                                            <CheckCircle className="h-4 w-4 text-green-500" />
+                                        ) : result?.status === 'error' ? (
+                                            <XCircle className="h-4 w-4 text-red-500" />
+                                        ) : (
+                                            <Icon className="h-4 w-4" />
+                                        )}
+                                        {wf.name}
+                                    </Button>
+                                );
+                            })}
+                        </div>
                     </div>
+
+                    {/* Quick Actions */}
+                    <div>
+                        <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Quick Actions</div>
+                        <div className="flex flex-wrap gap-3">
+                            <Button variant="outline" size="sm" disabled={loadingLive === 'treatment'} onClick={() => fetchLiveData('treatment')}>
+                                {loadingLive === 'treatment' ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Eye className="h-4 w-4 mr-1" />}
+                                View Treatment Data
+                            </Button>
+                            <Button variant="outline" size="sm" disabled={loadingLive === 'settlement'} onClick={() => fetchLiveData('settlement')}>
+                                {loadingLive === 'settlement' ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <DollarSign className="h-4 w-4 mr-1" />}
+                                View Settlement Data
+                            </Button>
+                            <Button variant="outline" size="sm" onClick={() => setShowNoteInput(!showNoteInput)}>
+                                <StickyNote className="h-4 w-4 mr-1" />
+                                Add Note
+                                {showNoteInput ? <ChevronUp className="h-3 w-3 ml-1" /> : <ChevronDown className="h-3 w-3 ml-1" />}
+                            </Button>
+                            <Button variant="outline" size="sm" disabled={refreshingStats} onClick={refreshStats}>
+                                {refreshingStats ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <RefreshCw className="h-4 w-4 mr-1" />}
+                                Refresh Stats
+                            </Button>
+                        </div>
+                    </div>
+
+                    {/* Add Note Input */}
+                    {showNoteInput && (
+                        <div className="flex gap-2">
+                            <input
+                                type="text"
+                                className="flex-1 px-3 py-2 text-sm border rounded-md bg-background"
+                                placeholder="Type a note to add to CasePeer..."
+                                value={noteText}
+                                onChange={(e) => setNoteText(e.target.value)}
+                                onKeyDown={(e) => e.key === 'Enter' && addNote()}
+                            />
+                            <Button size="sm" disabled={addingNote || !noteText.trim()} onClick={addNote}>
+                                {addingNote ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Save'}
+                            </Button>
+                        </div>
+                    )}
+
+                    {/* Result message */}
                     {workflowResult && (
-                        <div className={`mt-3 text-sm px-3 py-2 rounded ${workflowResult.status === 'success' ? 'bg-green-50 text-green-700 dark:bg-green-950 dark:text-green-300' : 'bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-300'}`}>
+                        <div className={`text-sm px-3 py-2 rounded ${workflowResult.status === 'success' ? 'bg-green-50 text-green-700 dark:bg-green-950 dark:text-green-300' : 'bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-300'}`}>
                             {workflowResult.message}
                         </div>
                     )}
                 </CardContent>
             </Card>
+
+            {/* Live Data Viewer */}
+            {liveData && (
+                <Card>
+                    <CardHeader className="pb-2">
+                        <CardTitle className="flex items-center justify-between text-lg">
+                            <span>{liveDataType === 'treatment' ? 'Treatment Data' : 'Settlement Data'} (Live)</span>
+                            <Button variant="ghost" size="sm" onClick={() => setLiveData(null)}>
+                                <XCircle className="h-4 w-4" />
+                            </Button>
+                        </CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                        {liveData.error ? (
+                            <div className="text-red-500 text-sm">{liveData.error}</div>
+                        ) : liveDataType === 'treatment' ? (
+                            <div className="space-y-2">
+                                <div className="text-sm text-muted-foreground">{liveData.patient_name}</div>
+                                <Table>
+                                    <TableHeader>
+                                        <TableRow>
+                                            <TableHead>Provider</TableHead>
+                                            <TableHead>Specialty</TableHead>
+                                            <TableHead className="text-right">Bill</TableHead>
+                                            <TableHead className="text-right">Offer (2/3 of 33%)</TableHead>
+                                            <TableHead>Email</TableHead>
+                                        </TableRow>
+                                    </TableHeader>
+                                    <TableBody>
+                                        {(liveData.providers || liveData.providers_calculated || []).map((p, i) => (
+                                            <TableRow key={i}>
+                                                <TableCell className="font-medium">{p.provider_name}</TableCell>
+                                                <TableCell className="text-xs">{p.specialties}</TableCell>
+                                                <TableCell className="text-right">${(p.bill_amount || 0).toLocaleString()}</TableCell>
+                                                <TableCell className="text-right text-blue-600">${(p.offered_amount || 0).toLocaleString()}</TableCell>
+                                                <TableCell className="text-xs">{p.email}</TableCell>
+                                            </TableRow>
+                                        ))}
+                                    </TableBody>
+                                </Table>
+                            </div>
+                        ) : (
+                            <div className="space-y-2">
+                                <Table>
+                                    <TableHeader>
+                                        <TableRow>
+                                            <TableHead>Provider</TableHead>
+                                            <TableHead className="text-right">Original</TableHead>
+                                            <TableHead className="text-right">Final Cost</TableHead>
+                                            <TableHead className="text-right">Still Owed</TableHead>
+                                            <TableHead>Accepted</TableHead>
+                                        </TableRow>
+                                    </TableHeader>
+                                    <TableBody>
+                                        {(liveData.providers || []).map((p, i) => (
+                                            <TableRow key={i}>
+                                                <TableCell className="font-medium">{p.provider_name}</TableCell>
+                                                <TableCell className="text-right">${(p.original_cost || 0).toLocaleString()}</TableCell>
+                                                <TableCell className="text-right text-blue-600">${(p.final_cost || 0).toLocaleString()}</TableCell>
+                                                <TableCell className="text-right">${(p.still_owed || 0).toLocaleString()}</TableCell>
+                                                <TableCell>{p.accepted ? <CheckCircle className="h-4 w-4 text-green-500" /> : '-'}</TableCell>
+                                            </TableRow>
+                                        ))}
+                                    </TableBody>
+                                </Table>
+                            </div>
+                        )}
+                    </CardContent>
+                </Card>
+            )}
 
             <Tabs defaultValue="agent" className="w-full">
                 <TabsList>
