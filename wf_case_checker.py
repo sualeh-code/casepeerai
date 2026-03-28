@@ -70,6 +70,17 @@ async def run_case_checker() -> Dict[str, Any]:
             new_cases.append({"case_id": case_id, "patient_name": patient_name})
             logger.info(f"[CaseChecker] New case: {case_id} ({patient_name})")
 
+            # Auto-trigger provider email calls for the new case
+            try:
+                from turso_client import get_setting
+                auto_call = (get_setting("auto_provider_calls_enabled", "true") or "").lower() == "true"
+                if auto_call:
+                    from workflow_scheduler import trigger_workflow
+                    await trigger_workflow("provider_calls", case_id, triggered_by="case_checker_auto")
+                    logger.info(f"[CaseChecker] Auto-triggered provider calls for case {case_id}")
+            except Exception as call_err:
+                logger.warning(f"[CaseChecker] Failed to auto-trigger provider calls for {case_id}: {call_err}")
+
         except Exception as e:
             logger.error(f"[CaseChecker] Failed to process case {case_id}: {e}")
 

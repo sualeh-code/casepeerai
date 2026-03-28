@@ -1,5 +1,5 @@
 import React from 'react';
-import { LayoutDashboard, Settings, FileText, Terminal, Zap, Brain, DollarSign, LogOut, Phone, Play } from 'lucide-react';
+import { LayoutDashboard, Settings, FileText, Terminal, Zap, Brain, DollarSign, LogOut, Phone, Play, PhoneCall } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const navItems = [
@@ -8,7 +8,8 @@ const navItems = [
     { id: 'automations', label: 'Automations', icon: Play },
     { id: 'n8n', label: 'n8n Executions', icon: Zap },
     { id: 'openai', label: 'OpenAI Usage', icon: Brain },
-    { id: 'vapi', label: 'VAPI Calls', icon: Phone },
+    { id: 'provider-calls', label: 'Provider Calls', icon: PhoneCall },
+    { id: 'vapi', label: 'VAPI Analytics', icon: Phone },
     { id: 'costs', label: 'Costs', icon: DollarSign },
     { id: 'settings', label: 'Settings', icon: Settings },
     { id: 'logs', label: 'System Logs', icon: Terminal },

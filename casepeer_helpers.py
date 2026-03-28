@@ -551,6 +551,7 @@ def get_treatment_providers(case_id: str) -> Dict[str, Any]:
             "max_offer_33pct": max_offer,
             "offer_reason": reason,
             "lien_id": str(lien.get("id", "")),
+            "contact_id": str(contact.get("id", "")),
             "phone": phone,
             "email": email,
             "address": provider_address,

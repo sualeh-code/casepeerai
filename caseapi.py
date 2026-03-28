@@ -37,6 +37,44 @@ logger = logging.getLogger(__name__)
 
 from turso_client import turso
 
+# ---------------------------------------------------------------------------
+# Tracked async task registry — prevents fire-and-forget memory leaks
+# ---------------------------------------------------------------------------
+_background_tasks: set = set()
+
+
+def create_tracked_task(coro, name: str = ""):
+    """Create an asyncio task that is tracked and logs exceptions on failure.
+    Prevents silent exception swallowing and memory accumulation from
+    untracked fire-and-forget tasks.
+    """
+    task = asyncio.create_task(coro, name=name or None)
+    _background_tasks.add(task)
+
+    def _on_done(t):
+        _background_tasks.discard(t)
+        if t.cancelled():
+            return
+        exc = t.exception()
+        if exc:
+            logger.error(f"[BackgroundTask] {name or 'unnamed'} failed: {exc}", exc_info=exc)
+
+    task.add_done_callback(_on_done)
+    return task
+
+
+async def shutdown_background_tasks(timeout: float = 10.0):
+    """Cancel and await all tracked background tasks. Call during app shutdown."""
+    if not _background_tasks:
+        return
+    logger.info(f"[Shutdown] Cancelling {len(_background_tasks)} background tasks...")
+    for t in _background_tasks:
+        t.cancel()
+    results = await asyncio.gather(*_background_tasks, return_exceptions=True)
+    logger.info(f"[Shutdown] {len(results)} tasks cleaned up")
+    _background_tasks.clear()
+
+
 # Global session and token storage
 # TODO: Move to environment variables or secure storage in production
 ACCESS_TOKEN: Optional[str] = None
@@ -130,25 +168,40 @@ async def lifespan(app: FastAPI):
             logger.info("[OK] Workflow scheduler started")
         else:
             logger.info("[SKIP] Workflow scheduler disabled (set workflow_scheduler_enabled=true)")
+
+        # Start scheduled call checker for Vapi provider calls (5-min loop)
+        from workflow_scheduler import start_call_checker
+        provider_calls_enabled = (_gs2("provider_calls_enabled", "true") or "").lower() == "true"
+        if provider_calls_enabled:
+            await start_call_checker()
+            logger.info("[OK] Scheduled call checker started (5min interval)")
+        else:
+            logger.info("[SKIP] Scheduled call checker disabled (set provider_calls_enabled=true)")
     except Exception as e:
         logger.error(f"Failed to start scheduler/keepalive: {e}", exc_info=True)
 
     yield
 
-    # Shutdown: stop the poller, scheduler, and persistent browser
+    # Shutdown: stop the poller, scheduler, call checker, browser, and background tasks
     try:
         from gmail_poller import stop_poller
         await stop_poller()
     except Exception:
         pass
     try:
-        from workflow_scheduler import stop_scheduler
+        from workflow_scheduler import stop_scheduler, stop_call_checker
         await stop_scheduler()
+        await stop_call_checker()
     except Exception:
         pass
     try:
         from browser_manager import close_browser
         await close_browser()
+    except Exception:
+        pass
+    # Cancel all tracked fire-and-forget tasks
+    try:
+        await shutdown_background_tasks(timeout=10.0)
     except Exception:
         pass
     logger.info("Shutting down CasePeer API Wrapper...")
@@ -1770,6 +1823,651 @@ async def get_vapi_analytics(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 # ============================================================================
+# VAPI Webhook + Provider Calls API
+# ============================================================================
+
+@app.post("/internal-api/vapi/webhook")
+async def vapi_webhook(request: Request):
+    """
+    Vapi server-url webhook handler.
+    Receives events: assistant-request, status-update, end-of-call-report,
+    tool-calls, hang, speech-update.
+    """
+    body = await request.json()
+    message = body.get("message", body)
+    message_type = message.get("type", "")
+
+    logger.info(f"[VapiWebhook] Received event: {message_type}")
+
+    if message_type == "assistant-request":
+        return await _vapi_handle_assistant_request(message)
+    elif message_type == "status-update":
+        return await _vapi_handle_status_update(message)
+    elif message_type == "end-of-call-report":
+        return await _vapi_handle_end_of_call(message)
+    elif message_type == "tool-calls":
+        return await _vapi_handle_tool_calls(message)
+    else:
+        return {"status": "ok"}
+
+
+async def _vapi_handle_assistant_request(message: dict):
+    """Handle inbound call: identify caller by phone, return assistant config."""
+    from turso_client import find_provider_by_phone, get_setting
+
+    call_data = message.get("call", {})
+    caller_phone = call_data.get("customer", {}).get("number", "")
+    assistant_id = get_setting("vapi_assistant_id", "")
+
+    match = find_provider_by_phone(caller_phone) if caller_phone else None
+
+    if match:
+        provider_name = match["provider_name"]
+        case_id = match["case_id"]
+        existing_email = match.get("existing_email", "")
+
+        # Get patient context for the assistant
+        patient_name, patient_dob, incident_date = "", "", ""
+        try:
+            from casepeer_helpers import get_treatment_providers
+            treatment_data = get_treatment_providers(case_id)
+            patient_name = treatment_data.get("patient_name", "")
+            patient_dob = treatment_data.get("patient_dob", "")
+            incident_date = treatment_data.get("incident_date", "")
+        except Exception:
+            pass
+
+        if existing_email:
+            first_message = (
+                f"Hello! Thank you for calling Beverly Law back. "
+                f"I was reaching out regarding our client's account with {provider_name}. "
+                f"We have {existing_email} on file. "
+                f"Can you confirm this is the best email to send correspondence to?"
+            )
+        else:
+            first_message = (
+                f"Hello! Thank you for calling Beverly Law back. "
+                f"I was reaching out regarding our client's account with {provider_name}. "
+                f"Could you please provide the best email address to send correspondence to?"
+            )
+
+        # Create an inbound call record
+        from turso_client import create_provider_call
+        new_id = create_provider_call(
+            case_id=case_id,
+            provider_name=provider_name,
+            provider_phone=caller_phone,
+            existing_email=existing_email,
+            call_type="inbound_callback",
+        )
+
+        return {
+            "assistant": {
+                "assistantId": assistant_id,
+                "assistantOverrides": {
+                    "firstMessage": first_message,
+                    "metadata": {
+                        "provider_call_id": str(new_id or match["id"]),
+                        "case_id": case_id,
+                        "provider_name": provider_name,
+                        "provider_phone": caller_phone,
+                        "existing_email": existing_email or "",
+                        "patient_name": patient_name,
+                        "patient_dob": patient_dob,
+                        "incident_date": incident_date,
+                    },
+                },
+            }
+        }
+    else:
+        return {
+            "assistant": {
+                "assistantId": assistant_id,
+                "assistantOverrides": {
+                    "firstMessage": (
+                        "Hello! Thank you for calling Beverly Law's Lien Negotiations Department. "
+                        "How can I help you today?"
+                    ),
+                    "metadata": {"call_type": "unknown_inbound"},
+                },
+            }
+        }
+
+
+async def _vapi_handle_status_update(message: dict):
+    """Map Vapi call status changes to provider_calls records."""
+    from turso_client import update_provider_call_by_vapi_id
+
+    call_data = message.get("call", {})
+    vapi_call_id = call_data.get("id", "")
+    new_status = message.get("status", "")
+
+    status_map = {
+        "ringing": "ringing",
+        "in-progress": "in_progress",
+        "forwarding": "in_progress",
+        "ended": "ended",
+        "queued": "queued",
+    }
+
+    db_status = status_map.get(new_status)
+    if db_status and vapi_call_id:
+        update_provider_call_by_vapi_id(vapi_call_id, status=db_status)
+
+    # Handle no-answer / busy / voicemail immediately (end-of-call-report may not fire)
+    if new_status == "ended":
+        ended_reason = call_data.get("endedReason", "")
+        if ended_reason in ("customer-did-not-answer", "customer-busy",
+                            "no-answer", "busy"):
+            update_provider_call_by_vapi_id(
+                vapi_call_id,
+                status="no_answer",
+                end_reason=ended_reason,
+                email_status="not_obtained",
+            )
+            create_tracked_task(_vapi_schedule_retry(vapi_call_id), "vapi_schedule_retry")
+        elif ended_reason in ("voicemail", "machine-detected"):
+            update_provider_call_by_vapi_id(
+                vapi_call_id,
+                status="voicemail",
+                end_reason=ended_reason,
+                email_status="not_obtained",
+            )
+            create_tracked_task(_vapi_schedule_retry(vapi_call_id), "vapi_schedule_retry")
+        elif ended_reason == "max-duration-reached":
+            update_provider_call_by_vapi_id(
+                vapi_call_id,
+                status="failed",
+                end_reason="max_duration_reached",
+                email_status="not_obtained",
+            )
+            create_tracked_task(_vapi_schedule_retry(vapi_call_id), "vapi_schedule_retry")
+
+    return {"status": "ok"}
+
+
+async def _vapi_handle_end_of_call(message: dict):
+    """Process completed call: extract email, update DB, trigger downstream."""
+    from turso_client import update_provider_call_by_vapi_id
+    from wf_provider_calls import extract_email_from_transcript
+
+    call_data = message.get("call", {})
+    vapi_call_id = call_data.get("id", "")
+    metadata = call_data.get("metadata", {})
+
+    artifact = message.get("artifact", {})
+    transcript = artifact.get("transcript", "")
+
+    recording_url = ""
+    recording = artifact.get("recording", {})
+    if isinstance(recording, dict):
+        recording_url = recording.get("url", recording.get("stereoUrl", ""))
+
+    summary = message.get("summary", artifact.get("summary", ""))
+    cost = call_data.get("cost", 0) or 0
+    ended_reason = call_data.get("endedReason", "")
+
+    # Calculate duration
+    duration = 0
+    started = call_data.get("startedAt", "")
+    ended = call_data.get("endedAt", "")
+    if started and ended:
+        try:
+            from datetime import datetime as dt
+            s = dt.fromisoformat(started.replace("Z", "+00:00"))
+            e = dt.fromisoformat(ended.replace("Z", "+00:00"))
+            duration = max((e - s).total_seconds(), 0)
+        except Exception:
+            pass
+
+    # Extract email
+    email = extract_email_from_transcript(transcript)
+
+    existing_email = metadata.get("existing_email", "")
+    email_status = "not_obtained"
+    if email:
+        if existing_email and email.lower() == existing_email.lower():
+            email_status = "confirmed"
+        else:
+            email_status = "new_email"
+
+    update_provider_call_by_vapi_id(
+        vapi_call_id,
+        status="ended",
+        transcript=transcript,
+        recording_url=recording_url,
+        summary=summary,
+        call_duration_seconds=duration,
+        call_cost=cost,
+        end_reason=ended_reason,
+        confirmed_email=email if email else None,
+        email_status=email_status,
+    )
+
+    # Downstream actions
+    case_id = metadata.get("case_id", "")
+    provider_name = metadata.get("provider_name", "")
+
+    if email_status in ("confirmed", "new_email") and case_id:
+        create_tracked_task(_vapi_on_email_confirmed(case_id, provider_name, email), "vapi_email_confirmed")
+    elif email_status == "not_obtained" and vapi_call_id:
+        create_tracked_task(_vapi_schedule_retry(vapi_call_id), "vapi_schedule_retry")
+
+    return {"status": "ok"}
+
+
+async def _vapi_handle_tool_calls(message: dict):
+    """Handle Vapi assistant tool/function calls."""
+    tool_call_list = message.get("toolCallList", message.get("toolWithToolCallList", []))
+    call_data = message.get("call", {})
+    vapi_call_id = call_data.get("id", "")
+    metadata = call_data.get("metadata", {})
+
+    results = []
+    for tc in tool_call_list:
+        tool_call = tc.get("toolCall", tc)
+        func_name = tool_call.get("function", {}).get("name", tool_call.get("name", ""))
+        args = tool_call.get("function", {}).get("arguments", tool_call.get("parameters", {}))
+        if isinstance(args, str):
+            try:
+                args = json.loads(args)
+            except Exception:
+                args = {}
+        tool_call_id = tool_call.get("id", "")
+
+        if func_name == "schedule_callback":
+            result_str = await _vapi_tool_schedule_callback(vapi_call_id, metadata, args.get("time", ""))
+            results.append({"toolCallId": tool_call_id, "result": result_str})
+
+        elif func_name == "provide_alternate_number":
+            result_str = await _vapi_tool_redirect_number(vapi_call_id, metadata, args.get("phone_number", ""))
+            results.append({"toolCallId": tool_call_id, "result": result_str})
+
+        elif func_name == "confirm_email":
+            result_str = await _vapi_tool_confirm_email(vapi_call_id, metadata, args.get("email", ""))
+            results.append({"toolCallId": tool_call_id, "result": result_str})
+
+        else:
+            results.append({"toolCallId": tool_call_id, "result": f"Unknown function: {func_name}"})
+
+    return {"results": results}
+
+
+async def _vapi_tool_schedule_callback(vapi_call_id: str, metadata: dict, time_str: str):
+    """Tool: schedule a callback at a specific time."""
+    from turso_client import update_provider_call_by_vapi_id, create_provider_call
+    from wf_provider_calls import parse_callback_time
+
+    scheduled_dt = parse_callback_time(time_str)
+    update_provider_call_by_vapi_id(
+        vapi_call_id,
+        metadata_json=json.dumps({"callback_requested": time_str}),
+    )
+    create_provider_call(
+        case_id=metadata.get("case_id", ""),
+        provider_name=metadata.get("provider_name", ""),
+        provider_phone=metadata.get("provider_phone", ""),
+        existing_email=metadata.get("existing_email"),
+        call_type="outbound_followup",
+        scheduled_at=scheduled_dt,
+        attempt_number=1,
+    )
+    return f"Callback scheduled for {scheduled_dt}"
+
+
+async def _vapi_tool_redirect_number(vapi_call_id: str, metadata: dict, alt_number: str):
+    """Tool: provider asked to call a different number."""
+    from turso_client import update_provider_call_by_vapi_id, create_provider_call, normalize_phone
+
+    normalized = normalize_phone(alt_number)
+    update_provider_call_by_vapi_id(
+        vapi_call_id,
+        redirect_number=normalized,
+    )
+    create_provider_call(
+        case_id=metadata.get("case_id", ""),
+        provider_name=metadata.get("provider_name", ""),
+        provider_phone=normalized,
+        existing_email=metadata.get("existing_email"),
+        call_type="outbound_redirect",
+    )
+    return f"Will call {normalized} next"
+
+
+async def _vapi_tool_confirm_email(vapi_call_id: str, metadata: dict, email: str):
+    """Tool: assistant confirmed an email address during the call."""
+    from turso_client import update_provider_call_by_vapi_id
+
+    existing = metadata.get("existing_email", "")
+    if existing and email.lower() == existing.lower():
+        email_status = "confirmed"
+    else:
+        email_status = "new_email"
+
+    update_provider_call_by_vapi_id(
+        vapi_call_id,
+        confirmed_email=email,
+        email_status=email_status,
+    )
+    return f"Email {email} recorded as {email_status}"
+
+
+async def _vapi_on_email_confirmed(case_id: str, provider_name: str, email: str):
+    """After email confirmed via phone, add case note, write back to CasePeer, check if all confirmed."""
+    try:
+        from casepeer_helpers import add_case_note
+        await asyncio.to_thread(
+            add_case_note, case_id,
+            f"Phone call: confirmed email for {provider_name}: {email}"
+        )
+
+        # Write email back to CasePeer contact
+        create_tracked_task(_writeback_email_to_casepeer(case_id, provider_name, email), "casepeer_email_writeback")
+
+        # Check if ALL providers for this case now have emails
+        pending = turso.fetch_all(
+            "SELECT id FROM provider_calls WHERE case_id = ? AND email_status = 'pending'",
+            [case_id]
+        )
+        if not pending:
+            logger.info(f"[VapiWebhook] All emails confirmed for case {case_id}, triggering initial negotiation")
+            from workflow_scheduler import trigger_workflow
+            await trigger_workflow("initial_negotiation", case_id, triggered_by="vapi_auto")
+    except Exception as e:
+        logger.error(f"[VapiWebhook] Error in _vapi_on_email_confirmed: {e}")
+
+
+async def _writeback_email_to_casepeer(case_id: str, provider_name: str, email: str):
+    """Update provider email in CasePeer using the existing update-provider-email flow."""
+    try:
+        from casepeer_helpers import get_treatment_providers
+        treatment_data = await asyncio.to_thread(get_treatment_providers, case_id)
+        providers = treatment_data.get("providers", [])
+
+        # Find the matching provider's contact_id
+        contact_id = ""
+        for p in providers:
+            if p["provider_name"].lower() == provider_name.lower():
+                contact_id = p.get("contact_id", "")
+                break
+        # Fuzzy match if exact didn't work
+        if not contact_id:
+            pname_lower = provider_name.lower()
+            for p in providers:
+                if pname_lower in p["provider_name"].lower() or p["provider_name"].lower() in pname_lower:
+                    contact_id = p.get("contact_id", "")
+                    break
+
+        if not contact_id:
+            logger.warning(f"[VapiWebhook] No contact_id found for {provider_name} in case {case_id}, skipping writeback")
+            return
+
+        # Use the existing update-provider-email internal logic
+        from casepeer_helpers import casepeer_get, casepeer_post_form
+        from bs4 import BeautifulSoup
+        from casepeer_helpers import extract_html
+
+        endpoint = f"case/{case_id}/contact/provider/{contact_id}/"
+        result = await asyncio.to_thread(casepeer_get, endpoint)
+        html = extract_html(result)
+        if not html:
+            logger.warning(f"[VapiWebhook] Could not fetch provider form for contact {contact_id}")
+            return
+
+        soup = BeautifulSoup(html, "html.parser")
+        form = soup.select_one("form")
+        if not form:
+            logger.warning(f"[VapiWebhook] No form found on provider page for contact {contact_id}")
+            return
+
+        # Extract all form fields and update email
+        form_data = {}
+        for inp in form.select("input, select, textarea"):
+            name = inp.get("name", "")
+            if not name:
+                continue
+            if inp.name == "textarea":
+                form_data[name] = inp.get_text()
+            elif inp.get("type") == "checkbox":
+                if inp.get("checked") is not None:
+                    form_data[name] = inp.get("value", "on")
+            elif inp.name == "select":
+                selected = inp.select_one("option[selected]")
+                form_data[name] = selected.get("value", "") if selected else ""
+            else:
+                form_data[name] = inp.get("value", "")
+
+        # Update the email field (physical address email)
+        email_fields = [k for k in form_data if "email" in k.lower() and "physical" in k.lower()]
+        if not email_fields:
+            email_fields = [k for k in form_data if "email" in k.lower()]
+        if email_fields:
+            form_data[email_fields[0]] = email
+        else:
+            logger.warning(f"[VapiWebhook] No email field found in provider form for contact {contact_id}")
+            return
+
+        # Submit the form
+        import urllib.parse
+        form_body = urllib.parse.urlencode(form_data)
+        resp = await asyncio.to_thread(casepeer_post_form, endpoint, form_body)
+        if resp and resp.status_code in (200, 301, 302):
+            logger.info(f"[VapiWebhook] Updated email in CasePeer for {provider_name} (contact {contact_id}) to {email}")
+        else:
+            status = resp.status_code if resp else "no response"
+            logger.warning(f"[VapiWebhook] CasePeer email writeback returned {status} for contact {contact_id}")
+    except Exception as e:
+        logger.error(f"[VapiWebhook] CasePeer email writeback failed for {provider_name}: {e}")
+
+
+HARD_MAX_RETRY_ATTEMPTS = 10  # Absolute ceiling regardless of settings
+
+
+async def _vapi_schedule_retry(vapi_call_id: str):
+    """Schedule a retry for a failed/unanswered call."""
+    from turso_client import create_provider_call, get_setting
+    from datetime import datetime, timedelta
+
+    try:
+        row = turso.fetch_one(
+            "SELECT * FROM provider_calls WHERE vapi_call_id = ?", [vapi_call_id]
+        )
+        if not row:
+            return
+
+        attempt = row.get("attempt_number", 1) or 1
+        max_attempts = min(int(get_setting("provider_calls_max_attempts", "3") or "3"), HARD_MAX_RETRY_ATTEMPTS)
+
+        if attempt >= max_attempts:
+            turso.execute(
+                "UPDATE provider_calls SET status = 'needs_manual' WHERE vapi_call_id = ? AND status != 'needs_manual'",
+                [vapi_call_id]
+            )
+            from casepeer_helpers import add_case_note
+            await asyncio.to_thread(
+                add_case_note, row["case_id"],
+                f"ATTENTION: Could not reach {row['provider_name']} by phone after {attempt} attempts. Manual follow-up needed."
+            )
+            # Send email alert to team
+            create_tracked_task(_send_needs_manual_alert(row), "needs_manual_alert")
+            return
+
+        # Retry schedule: attempt 2 = 2hrs, attempt 3 = next business day 10am PT (17:00 UTC)
+        now = datetime.utcnow()
+        if attempt == 1:
+            retry_at = now + timedelta(hours=2)
+        else:
+            next_day = now + timedelta(days=1)
+            while next_day.weekday() >= 5:
+                next_day += timedelta(days=1)
+            retry_at = next_day.replace(hour=17, minute=0, second=0, microsecond=0)
+
+        create_provider_call(
+            case_id=row["case_id"],
+            provider_name=row["provider_name"],
+            provider_phone=row.get("redirect_number") or row["provider_phone"],
+            existing_email=row.get("existing_email"),
+            call_type="outbound_followup",
+            scheduled_at=retry_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            attempt_number=attempt + 1,
+        )
+        logger.info(f"[VapiWebhook] Retry scheduled for {row['provider_name']} at {retry_at}")
+    except Exception as e:
+        logger.error(f"[VapiWebhook] Error scheduling retry: {e}")
+
+
+async def _send_needs_manual_alert(call_row: dict):
+    """Send email alert to team when a provider call needs manual follow-up."""
+    try:
+        from turso_client import get_setting
+        notification_email = get_setting("notification_email", "")
+        gmail_email = get_setting("gmail_email", "")
+        if not notification_email or not gmail_email:
+            logger.warning("[VapiWebhook] No notification_email or gmail_email configured, skipping alert")
+            return
+
+        provider = call_row.get("provider_name", "Unknown")
+        case_id = call_row.get("case_id", "")
+        phone = call_row.get("provider_phone", "")
+        attempts = call_row.get("attempt_number", 0)
+
+        subject = f"Action Required: Cannot reach {provider} (Case {case_id})"
+        html_body = (
+            f"<h3>Provider Call - Manual Follow-Up Needed</h3>"
+            f'<table style="border-collapse: collapse; font-family: Arial, sans-serif;">'
+            f'<tr><td style="padding: 4px 12px; font-weight: bold;">Provider:</td><td style="padding: 4px 12px;">{provider}</td></tr>'
+            f'<tr><td style="padding: 4px 12px; font-weight: bold;">Case ID:</td><td style="padding: 4px 12px;">{case_id}</td></tr>'
+            f'<tr><td style="padding: 4px 12px; font-weight: bold;">Phone:</td><td style="padding: 4px 12px;">{phone}</td></tr>'
+            f'<tr><td style="padding: 4px 12px; font-weight: bold;">Attempts:</td><td style="padding: 4px 12px;">{attempts}</td></tr>'
+            f'<tr><td style="padding: 4px 12px; font-weight: bold;">Status:</td><td style="padding: 4px 12px; color: red;">Needs Manual Call</td></tr>'
+            f"</table>"
+            f"<p style='margin-top: 16px;'>The AI phone system was unable to reach this provider after {attempts} attempts. "
+            f"Please call them manually to obtain their email address for lien negotiations.</p>"
+        )
+
+        from gmail_poller import _send_via_gmail_api
+        await asyncio.to_thread(
+            _send_via_gmail_api, gmail_email, notification_email, subject, html_body
+        )
+        logger.info(f"[VapiWebhook] Sent needs_manual alert to {notification_email} for {provider}")
+    except Exception as e:
+        logger.error(f"[VapiWebhook] Failed to send needs_manual alert: {e}")
+
+
+# --- Provider Calls REST API ---
+
+@app.get("/internal-api/provider-calls")
+async def list_provider_calls(case_id: str = "", status: str = "", email_status: str = "", limit: int = 100):
+    """List provider calls with optional filters and KPI aggregation."""
+    from turso_client import get_provider_calls
+
+    calls = get_provider_calls(
+        case_id=case_id or None,
+        status=status or None,
+        email_status=email_status or None,
+        limit=limit,
+    )
+
+    total = len(calls)
+    confirmed = sum(1 for c in calls if c.get("email_status") in ("confirmed", "new_email"))
+    pending = sum(1 for c in calls if c.get("email_status") == "pending")
+    failed = sum(1 for c in calls if c.get("status") in ("failed", "needs_manual"))
+    total_cost = sum(c.get("call_cost", 0) or 0 for c in calls)
+
+    return {
+        "calls": calls,
+        "kpi": {
+            "total_calls": total,
+            "emails_confirmed": confirmed,
+            "emails_pending": pending,
+            "calls_failed": failed,
+            "total_cost": round(total_cost, 4),
+        },
+    }
+
+
+@app.get("/internal-api/provider-calls/{case_id}")
+async def get_provider_calls_for_case(case_id: str):
+    """Get all provider call records for a specific case."""
+    from turso_client import get_provider_calls
+    calls = get_provider_calls(case_id=case_id)
+    return {"case_id": case_id, "calls": calls}
+
+
+@app.post("/internal-api/provider-calls/{case_id}/trigger")
+async def trigger_provider_calls(case_id: str):
+    """Manually trigger provider email calls for a case."""
+    from workflow_scheduler import trigger_workflow
+    result = await trigger_workflow("provider_calls", case_id, triggered_by="manual")
+    return result
+
+
+@app.post("/internal-api/provider-calls/{call_id}/retry")
+async def retry_provider_call(call_id: int):
+    """Retry a specific failed call."""
+    row = turso.fetch_one("SELECT * FROM provider_calls WHERE id = ?", [call_id])
+    if not row:
+        raise HTTPException(status_code=404, detail="Call not found")
+
+    from wf_provider_calls import make_provider_call
+    create_tracked_task(make_provider_call(
+        case_id=row["case_id"],
+        provider_name=row["provider_name"],
+        provider_phone=row.get("redirect_number") or row["provider_phone"],
+        existing_email=row.get("existing_email"),
+        call_type="outbound_followup",
+        attempt_number=(row.get("attempt_number", 1) or 1) + 1,
+    ), "retry_provider_call")
+    return {"status": "retry_triggered", "call_id": call_id}
+
+
+@app.post("/internal-api/provider-calls/{call_id}/schedule")
+async def schedule_provider_call(call_id: int, request: Request):
+    """Schedule a call for a specific time."""
+    body = await request.json()
+    scheduled_at = body.get("scheduled_at")
+    if not scheduled_at:
+        raise HTTPException(status_code=400, detail="scheduled_at is required (ISO datetime)")
+
+    from turso_client import update_provider_call
+    update_provider_call(call_id, status="scheduled", scheduled_at=scheduled_at)
+    return {"status": "scheduled", "call_id": call_id, "scheduled_at": scheduled_at}
+
+
+@app.post("/internal-api/provider-calls/{call_id}/manual-email")
+async def manual_email_entry(call_id: int, request: Request):
+    """Manually enter/confirm an email for a provider call without making a phone call."""
+    body = await request.json()
+    email = body.get("email", "").strip()
+    if not email:
+        raise HTTPException(status_code=400, detail="email is required")
+
+    row = turso.fetch_one("SELECT * FROM provider_calls WHERE id = ?", [call_id])
+    if not row:
+        raise HTTPException(status_code=404, detail="Call not found")
+
+    existing = row.get("existing_email", "")
+    email_status = "confirmed" if existing and email.lower() == existing.lower() else "new_email"
+
+    from turso_client import update_provider_call
+    update_provider_call(
+        call_id,
+        confirmed_email=email,
+        email_status=email_status,
+        status="ended",
+        end_reason="manual_entry",
+    )
+
+    # Trigger downstream (case note + check all confirmed)
+    case_id = row.get("case_id", "")
+    provider_name = row.get("provider_name", "")
+    if case_id:
+        create_tracked_task(_vapi_on_email_confirmed(case_id, provider_name, email), "manual_email_confirmed")
+
+    return {"status": "email_recorded", "call_id": call_id, "email": email, "email_status": email_status}
+
+
+# ============================================================================
 # NEW ENDPOINT: Live Negotiation Data (Scraping)
 # ============================================================================
 
@@ -2515,11 +3213,18 @@ async def resend_offer_letter(case_id: str, provider_email: str, request: Reques
         offered = ""
         try:
             from negotiation_agent import _extract_best_amounts
-            # Try exact email match first, then domain fallback
+            # Try primary key lookup first (most reliable)
+            conv_key = f"{case_id}|{provider_email.lower()}"
             conv_row = turso.fetch_one(
-                "SELECT messages_json FROM conversation_history WHERE case_id = ? AND sender_email = ? ORDER BY updated_at DESC LIMIT 1",
-                [case_id, provider_email.lower()]
+                "SELECT messages_json FROM conversation_history WHERE id = ?",
+                [conv_key]
             )
+            if not conv_row:
+                # Fallback: case_id + sender_email columns
+                conv_row = turso.fetch_one(
+                    "SELECT messages_json FROM conversation_history WHERE case_id = ? AND sender_email = ? ORDER BY updated_at DESC LIMIT 1",
+                    [case_id, provider_email.lower()]
+                )
             if not conv_row:
                 # Domain fallback (e.g. email changed from leslie@ to alen@)
                 domain = provider_email.lower().split("@")[-1] if "@" in provider_email else ""
@@ -2532,10 +3237,28 @@ async def resend_offer_letter(case_id: str, provider_email: str, request: Reques
                 _, best_offer = _extract_best_amounts(conv_row["messages_json"])
                 if best_offer > 0:
                     offered = str(best_offer)
-        except Exception:
-            pass
+                    logger.info(f"[ResendLetter] Found offered amount ${best_offer} from conversation_history")
+                else:
+                    logger.warning(f"[ResendLetter] conversation_history found but no offer amount extracted")
+            else:
+                logger.warning(f"[ResendLetter] No conversation_history found for case={case_id}, email={provider_email}")
+        except Exception as e:
+            logger.error(f"[ResendLetter] Error looking up offered amount: {e}")
 
-        # Generate the letter
+        # Update CasePeer's final_cost BEFORE generating the letter
+        # so the autoletter template uses the correct amount natively
+        if offered:
+            from negotiation_agent import _update_lien_final_cost
+            try:
+                updated = await asyncio.to_thread(_update_lien_final_cost, case_id, provider_name, offered)
+                if updated:
+                    logger.info(f"[ResendLetter] Updated CasePeer final_cost to ${offered} for '{provider_name}'")
+                else:
+                    logger.warning(f"[ResendLetter] Failed to update CasePeer final_cost — letter may show wrong amount")
+            except Exception as e:
+                logger.error(f"[ResendLetter] Error updating final_cost: {e}")
+
+        # Generate the letter (CasePeer will now use the correct amount)
         file_bytes, fmt = await asyncio.to_thread(_generate_casepeer_offer_letter, case_id, lien_id, template_id, offered)
         if not file_bytes:
             raise HTTPException(status_code=500, detail="Failed to generate offer letter")

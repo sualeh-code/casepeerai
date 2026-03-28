@@ -2,6 +2,7 @@
 Direct Turso HTTP Client - Replaces broken SQLAlchemy libsql driver.
 Uses Turso's HTTP API (Hrana protocol) for reliable database operations.
 """
+import re
 import requests
 from typing import Any, Dict, List, Optional
 import logging
@@ -23,6 +24,9 @@ class TursoClient:
             "Authorization": f"Bearer {auth_token}",
             "Content-Type": "application/json"
         }
+        # Persistent session for TCP connection reuse (avoids new TLS handshake per query)
+        self._session = requests.Session()
+        self._session.headers.update(self.headers)
     
     def execute(self, sql: str, params: Optional[List] = None) -> Dict[str, Any]:
         """Execute a single SQL statement."""
@@ -38,9 +42,8 @@ class TursoClient:
         }
         
         try:
-            response = requests.post(
+            response = self._session.post(
                 f"{self.db_url}/v2/pipeline",
-                headers=self.headers,
                 json=payload,
                 timeout=30
             )
@@ -76,11 +79,42 @@ class TursoClient:
             {"sql": "CREATE TABLE IF NOT EXISTS known_cases (case_id TEXT PRIMARY KEY, patient_name TEXT, status TEXT, discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP, classification_status TEXT DEFAULT 'pending', initial_negotiation_status TEXT DEFAULT 'pending', last_checked DATETIME)"},
             # Workflow Runs — tracks every automated workflow execution
             {"sql": "CREATE TABLE IF NOT EXISTS workflow_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, workflow_name TEXT NOT NULL, case_id TEXT, status TEXT DEFAULT 'running', started_at DATETIME DEFAULT CURRENT_TIMESTAMP, completed_at DATETIME, result_json TEXT, error TEXT, triggered_by TEXT DEFAULT 'scheduler')"},
+            # Provider Calls — tracks Vapi phone calls to providers for email confirmation
+            {"sql": """CREATE TABLE IF NOT EXISTS provider_calls (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                case_id TEXT NOT NULL,
+                provider_name TEXT NOT NULL,
+                provider_phone TEXT,
+                existing_email TEXT,
+                confirmed_email TEXT,
+                vapi_call_id TEXT,
+                call_type TEXT DEFAULT 'outbound_confirm',
+                status TEXT DEFAULT 'queued',
+                email_status TEXT DEFAULT 'pending',
+                transcript TEXT,
+                recording_url TEXT,
+                summary TEXT,
+                call_duration_seconds REAL,
+                call_cost REAL,
+                end_reason TEXT,
+                scheduled_at TEXT,
+                redirect_number TEXT,
+                attempt_number INTEGER DEFAULT 1,
+                metadata_json TEXT,
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now'))
+            )"""},
         ]
         # Migration: add case_id column if table already exists without it
         migration_stmts = [
             {"sql": "ALTER TABLE conversation_history ADD COLUMN case_id TEXT"},
             {"sql": "DROP TABLE IF EXISTS negotiations"},
+            # Indexes for provider_calls
+            {"sql": "CREATE INDEX IF NOT EXISTS idx_provider_calls_case_id ON provider_calls(case_id)"},
+            {"sql": "CREATE INDEX IF NOT EXISTS idx_provider_calls_vapi_call_id ON provider_calls(vapi_call_id)"},
+            {"sql": "CREATE INDEX IF NOT EXISTS idx_provider_calls_status ON provider_calls(status)"},
+            {"sql": "CREATE INDEX IF NOT EXISTS idx_provider_calls_scheduled ON provider_calls(scheduled_at)"},
+            {"sql": "CREATE INDEX IF NOT EXISTS idx_provider_calls_phone ON provider_calls(provider_phone)"},
         ]
         try:
             self.execute_many(statements)
@@ -115,9 +149,8 @@ class TursoClient:
         payload = {"requests": requests_list}
         
         try:
-            response = requests.post(
+            response = self._session.post(
                 f"{self.db_url}/v2/pipeline",
-                headers=self.headers,
                 json=payload,
                 timeout=30
             )
@@ -313,3 +346,168 @@ def save_session(name: str, session_data: str):
     except Exception as e:
         logger.error(f"save_session failed: {e}")
         return False
+
+
+# ---------------------------------------------------------------------------
+# Phone number normalization
+# ---------------------------------------------------------------------------
+def normalize_phone(phone: str) -> str:
+    """Normalize phone to E.164 format (+1XXXXXXXXXX for US)."""
+    if not phone:
+        return ""
+    cleaned = re.sub(r'[^0-9+]', '', phone)
+    if not cleaned.startswith('+'):
+        if len(cleaned) == 10:
+            cleaned = f'+1{cleaned}'
+        elif len(cleaned) == 11 and cleaned.startswith('1'):
+            cleaned = f'+{cleaned}'
+    return cleaned
+
+
+# ---------------------------------------------------------------------------
+# Provider Calls helpers
+# ---------------------------------------------------------------------------
+def create_provider_call(case_id: str, provider_name: str, provider_phone: str,
+                         existing_email: str = None, call_type: str = "outbound_confirm",
+                         scheduled_at: str = None, attempt_number: int = 1,
+                         metadata_json: str = None) -> Optional[int]:
+    """Create a new provider_calls record. Returns the row id."""
+    try:
+        status = "scheduled" if scheduled_at else "queued"
+        turso.execute(
+            """INSERT INTO provider_calls
+               (case_id, provider_name, provider_phone, existing_email, call_type,
+                status, scheduled_at, attempt_number, metadata_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            [case_id, provider_name, normalize_phone(provider_phone),
+             existing_email, call_type, status, scheduled_at, attempt_number,
+             metadata_json]
+        )
+        # Fetch the id of the row we just inserted
+        row = turso.fetch_one("SELECT last_insert_rowid() as id")
+        return row["id"] if row else None
+    except Exception as e:
+        logger.error(f"create_provider_call failed: {e}")
+        return None
+
+
+def update_provider_call(call_id: int, **fields) -> bool:
+    """Update provider_calls by id with arbitrary fields."""
+    if not fields:
+        return False
+    try:
+        set_parts = []
+        values = []
+        for k, v in fields.items():
+            set_parts.append(f"{k} = ?")
+            values.append(v)
+        set_parts.append("updated_at = datetime('now')")
+        values.append(call_id)
+        turso.execute(
+            f"UPDATE provider_calls SET {', '.join(set_parts)} WHERE id = ?",
+            values
+        )
+        return True
+    except Exception as e:
+        logger.error(f"update_provider_call({call_id}) failed: {e}")
+        return False
+
+
+def update_provider_call_by_vapi_id(vapi_call_id: str, **fields) -> bool:
+    """Update provider_calls by vapi_call_id (for webhook handler)."""
+    if not fields or not vapi_call_id:
+        return False
+    try:
+        set_parts = []
+        values = []
+        for k, v in fields.items():
+            set_parts.append(f"{k} = ?")
+            values.append(v)
+        set_parts.append("updated_at = datetime('now')")
+        values.append(vapi_call_id)
+        turso.execute(
+            f"UPDATE provider_calls SET {', '.join(set_parts)} WHERE vapi_call_id = ?",
+            values
+        )
+        return True
+    except Exception as e:
+        logger.error(f"update_provider_call_by_vapi_id({vapi_call_id}) failed: {e}")
+        return False
+
+
+def get_provider_calls(case_id: str = None, status: str = None,
+                       email_status: str = None, limit: int = 100) -> List[Dict]:
+    """Fetch provider_calls with optional filters."""
+    try:
+        conditions = []
+        params = []
+        if case_id:
+            conditions.append("case_id = ?")
+            params.append(case_id)
+        if status:
+            conditions.append("status = ?")
+            params.append(status)
+        if email_status:
+            conditions.append("email_status = ?")
+            params.append(email_status)
+        where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+        params.append(limit)
+        return turso.fetch_all(
+            f"SELECT * FROM provider_calls{where} ORDER BY created_at DESC LIMIT ?",
+            params
+        )
+    except Exception as e:
+        logger.error(f"get_provider_calls failed: {e}")
+        return []
+
+
+def find_provider_by_phone(phone: str) -> Optional[Dict]:
+    """Find the most relevant provider_calls record by phone number.
+    Prefers active calls, then most recent pending call."""
+    normalized = normalize_phone(phone)
+    if not normalized:
+        return None
+    try:
+        # First try active calls (queued, ringing, in_progress)
+        row = turso.fetch_one(
+            """SELECT * FROM provider_calls
+               WHERE (provider_phone = ? OR redirect_number = ?)
+                 AND status IN ('queued', 'ringing', 'in_progress')
+               ORDER BY created_at DESC LIMIT 1""",
+            [normalized, normalized]
+        )
+        if row:
+            return row
+        # Fallback: most recent pending email status
+        row = turso.fetch_one(
+            """SELECT * FROM provider_calls
+               WHERE (provider_phone = ? OR redirect_number = ?)
+                 AND email_status = 'pending'
+               ORDER BY created_at DESC LIMIT 1""",
+            [normalized, normalized]
+        )
+        if row:
+            return row
+        # Last resort: any recent call from this number
+        return turso.fetch_one(
+            """SELECT * FROM provider_calls
+               WHERE (provider_phone = ? OR redirect_number = ?)
+               ORDER BY created_at DESC LIMIT 1""",
+            [normalized, normalized]
+        )
+    except Exception as e:
+        logger.error(f"find_provider_by_phone({phone}) failed: {e}")
+        return None
+
+
+def get_scheduled_calls_due() -> List[Dict]:
+    """Get all calls where status='scheduled' AND scheduled_at <= now."""
+    try:
+        return turso.fetch_all(
+            """SELECT * FROM provider_calls
+               WHERE status = 'scheduled' AND scheduled_at <= datetime('now')
+               ORDER BY scheduled_at ASC"""
+        )
+    except Exception as e:
+        logger.error(f"get_scheduled_calls_due failed: {e}")
+        return []

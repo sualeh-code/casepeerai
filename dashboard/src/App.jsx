@@ -9,6 +9,7 @@ import CostDashboard from './components/CostDashboard';
 import N8nExecutions from './components/N8nExecutions';
 import OpenAiUsage from './components/OpenAiUsage';
 import VapiAnalytics from './components/VapiAnalytics';
+import ProviderCalls from './components/ProviderCalls';
 import Automations from './components/Automations';
 import LoginPage from './components/LoginPage';
 
@@ -43,6 +44,7 @@ function App() {
       {activeTab === 'automations' && <Automations />}
       {activeTab === 'n8n' && <N8nExecutions />}
       {activeTab === 'openai' && <OpenAiUsage />}
+      {activeTab === 'provider-calls' && <ProviderCalls />}
       {activeTab === 'vapi' && <VapiAnalytics />}
       {activeTab === 'costs' && <CostDashboard />}
       {activeTab === 'settings' && <SettingsForm />}

@@ -12,7 +12,8 @@ const CASE_WORKFLOWS = [
     { id: 'initial_negotiation', name: 'Send Initial Offers', icon: Mail, description: 'Email all providers with initial negotiation offers', endpoint: (caseId) => `/internal-api/workflows/initial-negotiation/${caseId}` },
     { id: 'classification', name: 'Classify Documents', icon: FileText, description: 'AI classify all case documents', endpoint: (caseId) => `/internal-api/workflows/classification/${caseId}` },
     { id: 'thirdparty', name: 'Third-Party Settlement', icon: DollarSign, description: 'Process defendant insurance settlement', endpoint: (caseId) => `/internal-api/workflows/thirdparty/${caseId}` },
-    { id: 'get_mail_sub', name: 'Get Provider Emails', icon: Phone, description: 'Phone providers to get email addresses', endpoint: (caseId) => `/internal-api/workflows/get-mail-sub/${caseId}` },
+    { id: 'get_mail_sub', name: 'Get Provider Emails (Legacy)', icon: Phone, description: 'Phone providers to get email addresses (polling)', endpoint: (caseId) => `/internal-api/workflows/get-mail-sub/${caseId}` },
+    { id: 'provider_calls', name: 'Call Providers for Emails', icon: Phone, description: 'Call all providers to confirm/get email addresses (webhook)', endpoint: (caseId) => `/internal-api/provider-calls/${caseId}/trigger` },
 ];
 
 const CaseDetails = ({ caseId, onBack }) => {
