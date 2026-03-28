@@ -4,9 +4,28 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { ArrowLeft, FileText, Bell, Bot, Trash2, Mail, DollarSign, Phone, Loader2, CheckCircle, XCircle, Zap, Eye, RefreshCw, StickyNote, ChevronDown, ChevronUp } from 'lucide-react';
+import { ArrowLeft, FileText, Bell, Bot, Trash2, Mail, DollarSign, Phone, Loader2, CheckCircle, XCircle, Zap, Eye, RefreshCw, StickyNote, ChevronDown, ChevronUp, PhoneCall, Calendar, AlertTriangle } from 'lucide-react';
 import CaseNotes from './CaseNotes';
 import AgentActivity from './AgentActivity';
+
+const callStatusColors = {
+    queued: 'bg-gray-100 text-gray-800',
+    scheduled: 'bg-purple-100 text-purple-800',
+    ringing: 'bg-yellow-100 text-yellow-800',
+    in_progress: 'bg-blue-100 text-blue-800',
+    ended: 'bg-green-100 text-green-800',
+    failed: 'bg-red-100 text-red-800',
+    no_answer: 'bg-orange-100 text-orange-800',
+    voicemail: 'bg-amber-100 text-amber-800',
+    needs_manual: 'bg-red-200 text-red-900',
+};
+
+const emailStatusColors = {
+    pending: 'bg-yellow-100 text-yellow-800',
+    confirmed: 'bg-green-100 text-green-800',
+    new_email: 'bg-blue-100 text-blue-800',
+    not_obtained: 'bg-red-100 text-red-800',
+};
 
 const CASE_WORKFLOWS = [
     { id: 'initial_negotiation', name: 'Send Initial Offers', icon: Mail, description: 'Email all providers with initial negotiation offers', endpoint: (caseId) => `/internal-api/workflows/initial-negotiation/${caseId}` },
@@ -30,6 +49,21 @@ const CaseDetails = ({ caseId, onBack }) => {
     const [addingNote, setAddingNote] = useState(false);
     const [showNoteInput, setShowNoteInput] = useState(false);
     const [refreshingStats, setRefreshingStats] = useState(false);
+    const [providerCalls, setProviderCalls] = useState([]);
+    const [expandedProvider, setExpandedProvider] = useState(null);
+    const [callActionLoading, setCallActionLoading] = useState(null);
+
+    const fetchProviderCalls = async () => {
+        try {
+            const res = await fetch(`/internal-api/provider-calls/${caseId}`);
+            if (res.ok) {
+                const data = await res.json();
+                setProviderCalls(data.calls || []);
+            }
+        } catch (err) {
+            console.error("Error fetching provider calls:", err);
+        }
+    };
 
     useEffect(() => {
         const fetchData = async () => {
@@ -45,6 +79,17 @@ const CaseDetails = ({ caseId, onBack }) => {
 
                 if (classRes.ok) setClassifications(await classRes.json());
                 if (remRes.ok) setReminders(await remRes.json());
+
+                // Auto-fetch treatment data and provider calls
+                try {
+                    const treatRes = await fetch(`/internal-api/cases/${caseId}/live/treatment`);
+                    if (treatRes.ok) {
+                        setLiveData(await treatRes.json());
+                        setLiveDataType('treatment');
+                    }
+                } catch (e) { /* non-critical */ }
+
+                await fetchProviderCalls();
             } catch (error) {
                 console.error("Error fetching case details:", error);
             } finally {
@@ -65,6 +110,7 @@ const CaseDetails = ({ caseId, onBack }) => {
             const res = await fetch(endpoint);
             if (res.ok) setLiveData(await res.json());
             else setLiveData({ error: 'Failed to fetch' });
+            if (type === 'treatment') fetchProviderCalls();
         } catch (err) { setLiveData({ error: err.message }); }
         finally { setLoadingLive(null); }
     };
@@ -86,6 +132,52 @@ const CaseDetails = ({ caseId, onBack }) => {
         } catch (err) {
             setWorkflowResult({ id: 'add_note', status: 'error', message: err.message });
         } finally { setAddingNote(false); }
+    };
+
+    const handleCallRetry = async (callId) => {
+        setCallActionLoading(callId);
+        try {
+            await fetch(`/internal-api/provider-calls/${callId}/retry`, { method: 'POST' });
+            setTimeout(fetchProviderCalls, 2000);
+        } catch (err) { console.error('Retry failed:', err); }
+        finally { setCallActionLoading(null); }
+    };
+
+    const handleCallSchedule = async (callId) => {
+        const time = prompt('Schedule call for (ISO datetime):');
+        if (!time) return;
+        setCallActionLoading(callId);
+        try {
+            await fetch(`/internal-api/provider-calls/${callId}/schedule`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ scheduled_at: time }),
+            });
+            setTimeout(fetchProviderCalls, 1000);
+        } catch (err) { console.error('Schedule failed:', err); }
+        finally { setCallActionLoading(null); }
+    };
+
+    const handleCallManualEmail = async (callId) => {
+        const email = prompt('Enter confirmed email address:');
+        if (!email || !email.includes('@')) return;
+        setCallActionLoading(callId);
+        try {
+            await fetch(`/internal-api/provider-calls/${callId}/manual-email`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email }),
+            });
+            setTimeout(fetchProviderCalls, 1000);
+        } catch (err) { console.error('Manual email failed:', err); }
+        finally { setCallActionLoading(null); }
+    };
+
+    // Helper: get calls for a specific provider name
+    const getCallsForProvider = (providerName) => {
+        return providerCalls.filter(c =>
+            c.provider_name?.toLowerCase() === providerName?.toLowerCase()
+        );
     };
 
     const refreshStats = async () => {
@@ -287,29 +379,179 @@ const CaseDetails = ({ caseId, onBack }) => {
                             <div className="text-red-500 text-sm">{liveData.error}</div>
                         ) : liveDataType === 'treatment' ? (
                             <div className="space-y-2">
-                                <div className="text-sm text-muted-foreground">{liveData.patient_name}</div>
-                                <Table>
-                                    <TableHeader>
-                                        <TableRow>
-                                            <TableHead>Provider</TableHead>
-                                            <TableHead>Specialty</TableHead>
-                                            <TableHead className="text-right">Bill</TableHead>
-                                            <TableHead className="text-right">Offer (2/3 of 33%)</TableHead>
-                                            <TableHead>Email</TableHead>
-                                        </TableRow>
-                                    </TableHeader>
-                                    <TableBody>
-                                        {(liveData.providers || liveData.providers_calculated || []).map((p, i) => (
-                                            <TableRow key={i}>
-                                                <TableCell className="font-medium">{p.provider_name}</TableCell>
-                                                <TableCell className="text-xs">{p.specialties}</TableCell>
-                                                <TableCell className="text-right">${(p.bill_amount || 0).toLocaleString()}</TableCell>
-                                                <TableCell className="text-right text-blue-600">${(p.offered_amount || 0).toLocaleString()}</TableCell>
-                                                <TableCell className="text-xs">{p.email}</TableCell>
-                                            </TableRow>
-                                        ))}
-                                    </TableBody>
-                                </Table>
+                                <div className="flex items-center justify-between">
+                                    <div className="text-sm text-muted-foreground">{liveData.patient_name}</div>
+                                    <button
+                                        onClick={fetchProviderCalls}
+                                        className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+                                    >
+                                        <RefreshCw className="h-3 w-3" /> Refresh calls
+                                    </button>
+                                </div>
+                                <div className="border rounded-md overflow-auto">
+                                    <table className="w-full text-sm">
+                                        <thead>
+                                            <tr className="bg-muted">
+                                                <th className="p-3 text-left font-medium">Provider</th>
+                                                <th className="p-3 text-left font-medium">Specialty</th>
+                                                <th className="p-3 text-right font-medium">Bill</th>
+                                                <th className="p-3 text-right font-medium">Offer</th>
+                                                <th className="p-3 text-left font-medium">Email (CasePeer)</th>
+                                                <th className="p-3 text-center font-medium">Call Status</th>
+                                                <th className="p-3 text-left font-medium">Confirmed Email</th>
+                                                <th className="p-3 text-center font-medium w-8"></th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {(liveData.providers || liveData.providers_calculated || []).map((p, i) => {
+                                                const calls = getCallsForProvider(p.provider_name);
+                                                const latestCall = calls[0]; // most recent
+                                                const isExpanded = expandedProvider === p.provider_name;
+                                                return (
+                                                    <React.Fragment key={i}>
+                                                        <tr
+                                                            className="border-t hover:bg-muted/50 cursor-pointer"
+                                                            onClick={() => setExpandedProvider(isExpanded ? null : p.provider_name)}
+                                                        >
+                                                            <td className="p-3 font-medium">{p.provider_name}</td>
+                                                            <td className="p-3 text-xs">{p.specialties}</td>
+                                                            <td className="p-3 text-right">${(p.bill_amount || 0).toLocaleString()}</td>
+                                                            <td className="p-3 text-right text-blue-600">${(p.offered_amount || 0).toLocaleString()}</td>
+                                                            <td className="p-3 text-xs">{p.email || '-'}</td>
+                                                            <td className="p-3 text-center">
+                                                                {latestCall ? (
+                                                                    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${callStatusColors[latestCall.status] || 'bg-gray-100'}`}>
+                                                                        {latestCall.status?.replace('_', ' ')}
+                                                                    </span>
+                                                                ) : (
+                                                                    <span className="text-xs text-muted-foreground">no call</span>
+                                                                )}
+                                                            </td>
+                                                            <td className="p-3 text-xs">
+                                                                {latestCall?.confirmed_email ? (
+                                                                    <span className="text-green-600 font-medium">{latestCall.confirmed_email}</span>
+                                                                ) : latestCall?.email_status ? (
+                                                                    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${emailStatusColors[latestCall.email_status] || 'bg-gray-100'}`}>
+                                                                        {latestCall.email_status?.replace('_', ' ')}
+                                                                    </span>
+                                                                ) : '-'}
+                                                            </td>
+                                                            <td className="p-3 text-center">
+                                                                {calls.length > 0 && (
+                                                                    isExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />
+                                                                )}
+                                                            </td>
+                                                        </tr>
+
+                                                        {/* Expanded: show all calls for this provider */}
+                                                        {isExpanded && calls.length > 0 && (
+                                                            <tr>
+                                                                <td colSpan={8} className="bg-muted/30 p-4 border-t">
+                                                                    <div className="space-y-3">
+                                                                        <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                                                                            Call History ({calls.length} call{calls.length > 1 ? 's' : ''})
+                                                                        </div>
+                                                                        {calls.map((call) => (
+                                                                            <div key={call.id} className="bg-background border rounded-md p-3 space-y-2">
+                                                                                <div className="flex items-center justify-between">
+                                                                                    <div className="flex items-center gap-2">
+                                                                                        <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${callStatusColors[call.status] || 'bg-gray-100'}`}>
+                                                                                            {call.status?.replace('_', ' ')}
+                                                                                        </span>
+                                                                                        <span className="text-xs text-muted-foreground">
+                                                                                            Attempt {call.attempt_number || 1} &middot; {call.call_type?.replace('_', ' ')}
+                                                                                        </span>
+                                                                                        {call.call_duration_seconds && (
+                                                                                            <span className="text-xs text-muted-foreground">&middot; {Math.round(call.call_duration_seconds)}s</span>
+                                                                                        )}
+                                                                                        {call.call_cost && (
+                                                                                            <span className="text-xs text-muted-foreground">&middot; ${call.call_cost.toFixed(4)}</span>
+                                                                                        )}
+                                                                                    </div>
+                                                                                    <span className="text-xs text-muted-foreground">
+                                                                                        {call.created_at ? new Date(call.created_at + 'Z').toLocaleString() : ''}
+                                                                                    </span>
+                                                                                </div>
+
+                                                                                {call.confirmed_email && (
+                                                                                    <div className="text-sm">
+                                                                                        <span className="text-muted-foreground">Confirmed: </span>
+                                                                                        <span className="text-green-600 font-medium">{call.confirmed_email}</span>
+                                                                                    </div>
+                                                                                )}
+
+                                                                                {call.redirect_number && (
+                                                                                    <div className="text-sm">
+                                                                                        <span className="text-muted-foreground">Redirect #: </span>
+                                                                                        <span>{call.redirect_number}</span>
+                                                                                    </div>
+                                                                                )}
+
+                                                                                {call.summary && (
+                                                                                    <div className="text-xs text-muted-foreground">{call.summary}</div>
+                                                                                )}
+
+                                                                                {call.end_reason && (
+                                                                                    <div className="text-xs text-muted-foreground">End: {call.end_reason}</div>
+                                                                                )}
+
+                                                                                {call.recording_url && (
+                                                                                    <audio controls src={call.recording_url} className="w-full h-8" />
+                                                                                )}
+
+                                                                                {/* Actions */}
+                                                                                <div className="flex gap-2 pt-1">
+                                                                                    {(call.status === 'failed' || call.status === 'no_answer' || call.status === 'voicemail' || call.status === 'needs_manual') && (
+                                                                                        <button
+                                                                                            onClick={() => handleCallRetry(call.id)}
+                                                                                            disabled={callActionLoading === call.id}
+                                                                                            className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs hover:bg-muted disabled:opacity-50"
+                                                                                        >
+                                                                                            {callActionLoading === call.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+                                                                                            Retry
+                                                                                        </button>
+                                                                                    )}
+                                                                                    {(call.status === 'failed' || call.status === 'no_answer' || call.status === 'needs_manual') && (
+                                                                                        <button
+                                                                                            onClick={() => handleCallSchedule(call.id)}
+                                                                                            className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs hover:bg-muted"
+                                                                                        >
+                                                                                            <Calendar className="h-3 w-3" />
+                                                                                            Schedule
+                                                                                        </button>
+                                                                                    )}
+                                                                                    {call.email_status !== 'confirmed' && call.email_status !== 'new_email' && (
+                                                                                        <button
+                                                                                            onClick={() => handleCallManualEmail(call.id)}
+                                                                                            disabled={callActionLoading === call.id}
+                                                                                            className="inline-flex items-center gap-1 rounded-md bg-blue-600 text-white px-2 py-1 text-xs hover:bg-blue-700 disabled:opacity-50"
+                                                                                        >
+                                                                                            <Mail className="h-3 w-3" />
+                                                                                            Enter Email
+                                                                                        </button>
+                                                                                    )}
+                                                                                </div>
+                                                                            </div>
+                                                                        ))}
+                                                                    </div>
+                                                                </td>
+                                                            </tr>
+                                                        )}
+
+                                                        {/* Expanded but no calls */}
+                                                        {isExpanded && calls.length === 0 && (
+                                                            <tr>
+                                                                <td colSpan={8} className="bg-muted/30 p-4 border-t text-center text-sm text-muted-foreground">
+                                                                    No calls made yet for this provider.
+                                                                </td>
+                                                            </tr>
+                                                        )}
+                                                    </React.Fragment>
+                                                );
+                                            })}
+                                        </tbody>
+                                    </table>
+                                </div>
                             </div>
                         ) : (
                             <div className="space-y-2">
