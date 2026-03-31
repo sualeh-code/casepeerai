@@ -2102,6 +2102,10 @@ async def _vapi_handle_tool_calls(message: dict):
             result_str = await _vapi_tool_confirm_email(vapi_call_id, metadata, args.get("email", ""))
             results.append({"toolCallId": tool_call_id, "result": result_str})
 
+        elif func_name == "update_balance":
+            result_str = await _vapi_tool_update_balance(vapi_call_id, metadata, args.get("amount", ""), args.get("balance_type", "original"))
+            results.append({"toolCallId": tool_call_id, "result": result_str})
+
         else:
             results.append({"toolCallId": tool_call_id, "result": f"Unknown function: {func_name}"})
 
@@ -2165,6 +2169,68 @@ async def _vapi_tool_confirm_email(vapi_call_id: str, metadata: dict, email: str
         email_status=email_status,
     )
     return f"Email {email} recorded as {email_status}"
+
+
+async def _vapi_tool_update_balance(vapi_call_id: str, metadata: dict, amount: str, balance_type: str = "original"):
+    """Tool: provider gave a corrected balance amount during the call."""
+    from turso_client import update_provider_call_by_vapi_id
+    import re
+
+    case_id = metadata.get("case_id", "")
+    provider_name = metadata.get("provider_name", "")
+
+    if not amount or not case_id or not provider_name:
+        return "Missing required information (amount, case_id, or provider_name)"
+
+    # Clean the amount
+    clean_amount = re.sub(r'[^0-9.]', '', str(amount))
+    if not clean_amount:
+        return f"Invalid amount: {amount}"
+
+    # Store in metadata on the call record
+    update_provider_call_by_vapi_id(
+        vapi_call_id,
+        metadata_json=json.dumps({
+            "balance_update": {
+                "amount": clean_amount,
+                "balance_type": balance_type,
+                "provider_name": provider_name,
+            }
+        }),
+    )
+
+    # Update CasePeer in background
+    create_tracked_task(
+        _vapi_update_casepeer_balance(case_id, provider_name, clean_amount, balance_type),
+        f"vapi_balance_update_{provider_name}"
+    )
+
+    return f"Balance ${clean_amount} recorded. CasePeer will be updated."
+
+
+async def _vapi_update_casepeer_balance(case_id: str, provider_name: str, amount: str, balance_type: str):
+    """Background task: update the balance on CasePeer and add a case note."""
+    try:
+        if balance_type == "final" or balance_type == "settlement":
+            from negotiation_agent import _update_lien_final_cost
+            success = await asyncio.to_thread(_update_lien_final_cost, case_id, provider_name, amount)
+            field_name = "final_cost"
+        else:
+            from negotiation_agent import _update_lien_original_cost
+            success = await asyncio.to_thread(_update_lien_original_cost, case_id, provider_name, amount)
+            field_name = "original_cost"
+
+        if success:
+            logger.info(f"[VapiWebhook] Updated {field_name} to ${amount} for '{provider_name}' on case {case_id}")
+            from casepeer_helpers import add_case_note
+            await asyncio.to_thread(
+                add_case_note, case_id,
+                f"Phone call: {provider_name} reported corrected {field_name}: ${amount}"
+            )
+        else:
+            logger.warning(f"[VapiWebhook] Failed to update {field_name} for '{provider_name}' on case {case_id}")
+    except Exception as e:
+        logger.error(f"[VapiWebhook] Error updating balance for '{provider_name}': {e}")
 
 
 async def _vapi_on_email_confirmed(case_id: str, provider_name: str, email: str):

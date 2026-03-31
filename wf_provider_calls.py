@@ -135,6 +135,7 @@ async def run_provider_calls(case_id: str) -> Dict[str, Any]:
         name = p["provider_name"]
         phone = p.get("phone", "")
         email = p.get("email", "")
+        bill_amount = p.get("bill_amount", 0)
 
         # Skip excluded providers
         if any(excl in name.lower() for excl in EXCLUDED_PROVIDERS):
@@ -188,7 +189,7 @@ async def run_provider_calls(case_id: str) -> Dict[str, Any]:
                 _initiate_vapi_call,
                 vapi_api_key, vapi_assistant_id, vapi_phone_id,
                 case_id, name, patient_name, phone, email, call_db_id,
-                patient_dob, incident_date,
+                patient_dob, incident_date, bill_amount,
             )
             if vapi_call_id:
                 update_provider_call(call_db_id, vapi_call_id=vapi_call_id, status="ringing")
@@ -256,11 +257,18 @@ async def make_provider_call(case_id: str, provider_name: str,
         logger.error("[ProviderCalls] Vapi settings not configured for make_provider_call")
         return None
 
-    # Get patient context
+    # Get patient context and bill amount
     treatment_data = await asyncio.to_thread(get_treatment_providers, case_id)
     patient_name = treatment_data.get("patient_name", "our client")
     patient_dob = treatment_data.get("patient_dob", "")
     incident_date = treatment_data.get("incident_date", "")
+
+    # Find bill amount for this specific provider
+    bill_amount = 0
+    for p in treatment_data.get("providers", []):
+        if p.get("provider_name", "").lower() == provider_name.lower():
+            bill_amount = p.get("bill_amount", 0)
+            break
 
     call_db_id = create_provider_call(
         case_id=case_id,
@@ -279,7 +287,7 @@ async def make_provider_call(case_id: str, provider_name: str,
         vapi_api_key, vapi_assistant_id, vapi_phone_id,
         case_id, provider_name, patient_name,
         provider_phone, existing_email or "", call_db_id,
-        patient_dob, incident_date,
+        patient_dob, incident_date, bill_amount,
     )
 
     if vapi_call_id:
@@ -294,7 +302,8 @@ def _initiate_vapi_call(api_key: str, assistant_id: str, phone_id: str,
                         case_id: str, provider_name: str, patient_name: str,
                         phone: str, existing_email: str,
                         provider_call_db_id: int,
-                        patient_dob: str = "", incident_date: str = "") -> Optional[str]:
+                        patient_dob: str = "", incident_date: str = "",
+                        bill_amount: float = 0) -> Optional[str]:
     """
     Initiate a Vapi outbound call. Returns vapi_call_id or None.
     Does NOT wait for completion — webhook handles the rest.
@@ -359,6 +368,7 @@ def _initiate_vapi_call(api_key: str, assistant_id: str, phone_id: str,
                 "patient_name": patient_name,
                 "patient_dob": patient_dob,
                 "incident_date": incident_date,
+                "bill_amount": str(bill_amount) if bill_amount else "",
             },
         },
     }
