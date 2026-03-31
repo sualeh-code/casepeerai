@@ -413,6 +413,21 @@ def update_provider_call(call_id: int, **fields) -> bool:
         return False
 
 
+def get_provider_call_by_vapi_id(vapi_call_id: str) -> Optional[Dict]:
+    """Fetch a single provider_calls record by vapi_call_id."""
+    if not vapi_call_id:
+        return None
+    try:
+        rows = turso.fetch_all(
+            "SELECT * FROM provider_calls WHERE vapi_call_id = ? LIMIT 1",
+            [vapi_call_id]
+        )
+        return rows[0] if rows else None
+    except Exception as e:
+        logger.error(f"get_provider_call_by_vapi_id({vapi_call_id}) failed: {e}")
+        return None
+
+
 def update_provider_call_by_vapi_id(vapi_call_id: str, **fields) -> bool:
     """Update provider_calls by vapi_call_id (for webhook handler)."""
     if not fields or not vapi_call_id:

@@ -2020,16 +2020,31 @@ async def _vapi_handle_end_of_call(message: dict):
         except Exception:
             pass
 
-    # Extract email
-    email = extract_email_from_transcript(transcript)
+    # Check if confirm_email tool already saved an email during the call
+    from turso_client import get_provider_call_by_vapi_id
+    existing_record = get_provider_call_by_vapi_id(vapi_call_id)
+    already_confirmed_email = None
+    already_confirmed_status = None
+    if existing_record and existing_record.get("email_status") in ("confirmed", "new_email"):
+        already_confirmed_email = existing_record.get("confirmed_email")
+        already_confirmed_status = existing_record.get("email_status")
+        logger.info(f"[VapiWebhook] Email already confirmed by tool call: {already_confirmed_email} ({already_confirmed_status})")
 
-    existing_email = metadata.get("existing_email", "")
+    # Extract email from transcript as fallback
+    email = None
     email_status = "not_obtained"
-    if email:
-        if existing_email and email.lower() == existing_email.lower():
-            email_status = "confirmed"
-        else:
-            email_status = "new_email"
+    if already_confirmed_email:
+        # Tool call already got the email — preserve it
+        email = already_confirmed_email
+        email_status = already_confirmed_status
+    else:
+        email = extract_email_from_transcript(transcript)
+        existing_email = metadata.get("existing_email", "")
+        if email:
+            if existing_email and email.lower() == existing_email.lower():
+                email_status = "confirmed"
+            else:
+                email_status = "new_email"
 
     update_provider_call_by_vapi_id(
         vapi_call_id,
