@@ -31,8 +31,7 @@ const CASE_WORKFLOWS = [
     { id: 'initial_negotiation', name: 'Send Initial Offers', icon: Mail, description: 'Email all providers with initial negotiation offers', endpoint: (caseId) => `/internal-api/workflows/initial-negotiation/${caseId}` },
     { id: 'classification', name: 'Classify Documents', icon: FileText, description: 'AI classify all case documents', endpoint: (caseId) => `/internal-api/workflows/classification/${caseId}` },
     { id: 'thirdparty', name: 'Third-Party Settlement', icon: DollarSign, description: 'Process defendant insurance settlement', endpoint: (caseId) => `/internal-api/workflows/thirdparty/${caseId}` },
-    { id: 'get_mail_sub', name: 'Get Provider Emails (Legacy)', icon: Phone, description: 'Phone providers to get email addresses (polling)', endpoint: (caseId) => `/internal-api/workflows/get-mail-sub/${caseId}` },
-    { id: 'provider_calls', name: 'Call Providers for Emails', icon: Phone, description: 'Call all providers to confirm/get email addresses (webhook)', endpoint: (caseId) => `/internal-api/provider-calls/${caseId}/trigger` },
+    { id: 'provider_calls', name: 'Call Providers for Emails', icon: PhoneCall, description: 'Call all providers to confirm/get email addresses', endpoint: (caseId) => `/internal-api/provider-calls/${caseId}/trigger` },
 ];
 
 const CaseDetails = ({ caseId, onBack }) => {
@@ -132,6 +131,22 @@ const CaseDetails = ({ caseId, onBack }) => {
         } catch (err) {
             setWorkflowResult({ id: 'add_note', status: 'error', message: err.message });
         } finally { setAddingNote(false); }
+    };
+
+    const handleCallSingleProvider = async (providerName, providerPhone, existingEmail) => {
+        setCallActionLoading(providerName);
+        try {
+            const res = await fetch(`/internal-api/provider-calls/${caseId}/trigger-single`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ provider_name: providerName, provider_phone: providerPhone, existing_email: existingEmail || '' }),
+            });
+            if (res.ok) {
+                setWorkflowResult({ id: 'single_call', status: 'success', message: `Call triggered for ${providerName}` });
+                setTimeout(fetchProviderCalls, 3000);
+            }
+        } catch (err) { console.error('Single call failed:', err); }
+        finally { setCallActionLoading(null); }
     };
 
     const handleCallRetry = async (callId) => {
@@ -399,7 +414,7 @@ const CaseDetails = ({ caseId, onBack }) => {
                                                 <th className="p-3 text-left font-medium">Email (CasePeer)</th>
                                                 <th className="p-3 text-center font-medium">Call Status</th>
                                                 <th className="p-3 text-left font-medium">Confirmed Email</th>
-                                                <th className="p-3 text-center font-medium w-8"></th>
+                                                <th className="p-3 text-center font-medium">Actions</th>
                                             </tr>
                                         </thead>
                                         <tbody>
@@ -437,9 +452,22 @@ const CaseDetails = ({ caseId, onBack }) => {
                                                                 ) : '-'}
                                                             </td>
                                                             <td className="p-3 text-center">
-                                                                {calls.length > 0 && (
-                                                                    isExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />
-                                                                )}
+                                                                <div className="flex items-center gap-1 justify-center">
+                                                                    {p.phone && (
+                                                                        <button
+                                                                            onClick={(e) => { e.stopPropagation(); handleCallSingleProvider(p.provider_name, p.phone, p.email); }}
+                                                                            disabled={callActionLoading === p.provider_name}
+                                                                            className="inline-flex items-center gap-1 rounded-md bg-green-600 text-white px-2 py-0.5 text-xs font-medium hover:bg-green-700 disabled:opacity-50"
+                                                                            title={`Call ${p.phone}`}
+                                                                        >
+                                                                            {callActionLoading === p.provider_name ? <Loader2 className="h-3 w-3 animate-spin" /> : <PhoneCall className="h-3 w-3" />}
+                                                                            Call
+                                                                        </button>
+                                                                    )}
+                                                                    {calls.length > 0 && (
+                                                                        isExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />
+                                                                    )}
+                                                                </div>
                                                             </td>
                                                         </tr>
 

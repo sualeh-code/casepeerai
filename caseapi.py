@@ -2402,6 +2402,28 @@ async def trigger_provider_calls(case_id: str):
     return result
 
 
+@app.post("/internal-api/provider-calls/{case_id}/trigger-single")
+async def trigger_single_provider_call(case_id: str, request: Request):
+    """Trigger a call for a single provider on a case."""
+    body = await request.json()
+    provider_name = body.get("provider_name", "").strip()
+    provider_phone = body.get("provider_phone", "").strip()
+    existing_email = body.get("existing_email", "").strip()
+    if not provider_name or not provider_phone:
+        raise HTTPException(status_code=400, detail="provider_name and provider_phone are required")
+
+    from wf_provider_calls import make_provider_call
+    create_tracked_task(make_provider_call(
+        case_id=case_id,
+        provider_name=provider_name,
+        provider_phone=provider_phone,
+        existing_email=existing_email or None,
+        call_type="outbound_confirm",
+        attempt_number=1,
+    ), f"single_call_{provider_name}")
+    return {"status": "call_triggered", "case_id": case_id, "provider_name": provider_name}
+
+
 @app.post("/internal-api/provider-calls/{call_id}/retry")
 async def retry_provider_call(call_id: int):
     """Retry a specific failed call."""
