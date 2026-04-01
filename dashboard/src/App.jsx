@@ -5,12 +5,9 @@ import CaseTable from './components/CaseTable';
 import SettingsForm from './components/SettingsForm';
 import SystemLogs from './components/SystemLogs';
 import CaseDetails from './components/CaseDetails';
-import CostDashboard from './components/CostDashboard';
-import N8nExecutions from './components/N8nExecutions';
-import OpenAiUsage from './components/OpenAiUsage';
-import VapiAnalytics from './components/VapiAnalytics';
 import ProviderCalls from './components/ProviderCalls';
 import Automations from './components/Automations';
+import MonitoringDashboard from './components/MonitoringDashboard';
 import LoginPage from './components/LoginPage';
 
 function App() {
@@ -42,11 +39,8 @@ function App() {
         )
       )}
       {activeTab === 'automations' && <Automations />}
-      {activeTab === 'n8n' && <N8nExecutions />}
-      {activeTab === 'openai' && <OpenAiUsage />}
       {activeTab === 'provider-calls' && <ProviderCalls />}
-      {activeTab === 'vapi' && <VapiAnalytics />}
-      {activeTab === 'costs' && <CostDashboard />}
+      {activeTab === 'costs' && <MonitoringDashboard />}
       {activeTab === 'settings' && <SettingsForm />}
       {activeTab === 'logs' && <SystemLogs />}
     </DashboardLayout>
