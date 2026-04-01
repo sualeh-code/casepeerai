@@ -1982,6 +1982,16 @@ async def _vapi_handle_status_update(message: dict):
                 email_status="not_obtained",
             )
             create_tracked_task(_vapi_schedule_retry(vapi_call_id), "vapi_schedule_retry")
+        elif ended_reason in ("silence-timed-out", "assistant-not-found",
+                              "assistant-not-valid", "pipeline-error-openai-llm-failed"):
+            # Call timed out on hold / IVR or hit a system error — no human contact
+            update_provider_call_by_vapi_id(
+                vapi_call_id,
+                status="no_answer",
+                end_reason=ended_reason,
+                email_status="not_obtained",
+            )
+            create_tracked_task(_vapi_schedule_retry(vapi_call_id), "vapi_schedule_retry")
 
     return {"status": "ok"}
 
@@ -2030,7 +2040,7 @@ async def _vapi_handle_end_of_call(message: dict):
         already_confirmed_status = existing_record.get("email_status")
         logger.info(f"[VapiWebhook] Email already confirmed by tool call: {already_confirmed_email} ({already_confirmed_status})")
 
-    # Extract email from transcript as fallback
+    # Determine final email + status
     email = None
     email_status = "not_obtained"
     if already_confirmed_email:
@@ -2038,12 +2048,21 @@ async def _vapi_handle_end_of_call(message: dict):
         email = already_confirmed_email
         email_status = already_confirmed_status
     else:
-        email = extract_email_from_transcript(transcript)
+        # Fallback: extract email from transcript
+        # IMPORTANT: Only count as confirmed/new if a DIFFERENT email was found.
+        # If the extracted email matches the existing one, the bot just echoed it back
+        # in its opening message — a human didn't confirm it. Only the confirm_email
+        # tool call (handled above) can properly confirm the existing email.
+        extracted = extract_email_from_transcript(transcript)
         existing_email = metadata.get("existing_email", "")
-        if email:
-            if existing_email and email.lower() == existing_email.lower():
-                email_status = "confirmed"
+        if extracted:
+            if existing_email and extracted.lower() == existing_email.lower():
+                # Same email the bot already knew — NOT a human confirmation
+                logger.info(f"[VapiWebhook] Transcript email matches existing ({extracted}) — ignoring (bot echo)")
+                email_status = "not_obtained"
             else:
+                # Genuinely new email found in transcript
+                email = extracted
                 email_status = "new_email"
 
     update_provider_call_by_vapi_id(
