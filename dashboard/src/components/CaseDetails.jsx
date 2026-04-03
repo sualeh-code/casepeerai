@@ -382,14 +382,17 @@ const CaseDetails = ({ caseId, onBack }) => {
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {(liveData.providers || liveData.providers_calculated || []).map((p, i) => {
+                                    {[...(liveData.providers || liveData.providers_calculated || [])]
+                                    .sort((a, b) => (b.bill_amount || 0) - (a.bill_amount || 0))
+                                    .map((p, i) => {
                                         const calls = getCallsForProvider(p.provider_name);
                                         const latestCall = calls[0];
                                         const isExpanded = expandedProvider === p.provider_name;
                                         const confirmedEmail = latestCall?.confirmed_email;
+                                        const isZeroBill = !(p.bill_amount > 0);
                                         return (
                                             <React.Fragment key={i}>
-                                                <tr className="border-t hover:bg-muted/50 cursor-pointer"
+                                                <tr className={`border-t hover:bg-muted/50 cursor-pointer ${isZeroBill ? 'opacity-50' : ''}`}
                                                     onClick={() => setExpandedProvider(isExpanded ? null : p.provider_name)}>
                                                     <td className="p-3">
                                                         <div className="font-medium">{p.provider_name}</div>

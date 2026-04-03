@@ -2913,14 +2913,29 @@ async def get_agent_providers(case_id: str):
                 edata["provider_name"] = ""
                 edata["lien_id"] = ""
 
-    # Group by provider_name (unresolved emails get their own group)
+    # Group by provider_name; unresolved emails group by domain
     grouped = {}
     for email, edata in email_data.items():
         pname = edata["provider_name"]
-        group_key = pname if pname else f"_unknown_{email}"
+        if pname:
+            group_key = pname
+        else:
+            # Group unknown emails by domain (so alen@nourianmd.com + leslie@nourianmd.com merge)
+            domain = email.split("@")[-1] if "@" in email else ""
+            if domain and domain not in GENERIC_DOMAINS:
+                group_key = f"_domain_{domain}"
+            else:
+                group_key = f"_unknown_{email}"
+
         if group_key not in grouped:
+            # For domain-grouped unknowns, derive a display name from the domain
+            display_name = pname
+            if not display_name and group_key.startswith("_domain_"):
+                domain_part = group_key.replace("_domain_", "")
+                # Turn "nourianmd.com" into "nourianmd.com" (keep as-is, readable enough)
+                display_name = domain_part
             grouped[group_key] = {
-                "provider_name": pname,
+                "provider_name": display_name,
                 "lien_id": edata.get("lien_id", ""),
                 "emails": [],
                 "total_negotiations": 0,
