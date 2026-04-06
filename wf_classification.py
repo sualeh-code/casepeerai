@@ -129,10 +129,10 @@ async def run_classification(case_id: str) -> Dict[str, Any]:
         except Exception as e:
             logger.warning(f"[Classification] Failed to log to Turso: {e}")
 
-    # 4. Update known_cases classification status
+    # 4. Update cases classification status
     try:
         turso.execute(
-            "UPDATE known_cases SET classification_status = 'completed' WHERE case_id = ?",
+            "UPDATE cases SET classification_status = 'completed' WHERE id = ?",
             [case_id]
         )
     except Exception:

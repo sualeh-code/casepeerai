@@ -1,24 +1,51 @@
 """
 Workflow: CasePeer New Case Checker
 
-Replicates the n8n CasePeer New Case Checker workflow.
 Runs daily to detect new cases in CasePeer and trigger classification.
 
 Flow:
-1. Fetch "My Cases" page from CasePeer
-2. Extract case IDs from HTML
-3. Compare against known_cases table in Turso (replaces Google Sheets)
-4. For new cases: store in Turso + trigger classification workflow
+1. Fetch cases from CasePeer API (/api/v1/case/my/)
+2. Compare against cases table in Turso
+3. For new cases: store in Turso + trigger classification workflow
 """
 
 import asyncio
+import json
 import logging
-import re
 from typing import Dict, Any, List
 
-from casepeer_helpers import casepeer_get, extract_html, extract_case_ids_from_html
+from casepeer_helpers import casepeer_get
 
 logger = logging.getLogger(__name__)
+
+
+def _fetch_all_my_cases() -> List[Dict[str, Any]]:
+    """Fetch all cases from the CasePeer API, handling pagination."""
+    all_cases = []
+    url = "api/v1/case/my/"
+
+    while url:
+        result = casepeer_get(url)
+        raw = result.get("response", "")
+        try:
+            data = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            logger.error(f"[CaseChecker] Failed to parse API response: {raw[:200]}")
+            break
+
+        all_cases.extend(data.get("results", []))
+        # Handle pagination — 'next' is a full URL or null
+        next_url = data.get("next")
+        if next_url:
+            # Extract relative path from full URL
+            if "casepeer.com/" in next_url:
+                url = next_url.split("casepeer.com/", 1)[1]
+            else:
+                url = next_url
+        else:
+            url = None
+
+    return all_cases
 
 
 async def run_case_checker() -> Dict[str, Any]:
@@ -30,28 +57,39 @@ async def run_case_checker() -> Dict[str, Any]:
 
     logger.info("[CaseChecker] Starting scan for new cases")
 
-    # 1. Fetch "My Cases" page from CasePeer
-    result = await asyncio.to_thread(casepeer_get, "report/R/my-cases/?page=1")
-    html = extract_html(result)
-    if not html:
-        # Try the raw response if it's a string
-        html = str(result) if result else ""
+    # 1. Fetch cases from CasePeer API
+    cases = await asyncio.to_thread(_fetch_all_my_cases)
 
-    if not html:
-        return {"error": "Failed to fetch My Cases page", "new_cases": 0}
+    if not cases:
+        logger.info("[CaseChecker] No cases returned from API")
+        return {"new_cases": 0, "total_from_api": 0, "message": "No cases returned from API"}
 
-    # 2. Extract case IDs from HTML
-    extracted_ids = extract_case_ids_from_html(html)
+    # Filter out test/internal cases (primary_contact = "Saleh Ai")
+    EXCLUDED_CONTACTS = {"saleh ai"}
+    real_cases = [c for c in cases if c.get("primary_contact", "").strip().lower() not in EXCLUDED_CONTACTS]
+    logger.info(f"[CaseChecker] {len(cases)} total from API, {len(real_cases)} after excluding test contacts")
 
-    if not extracted_ids:
-        logger.info("[CaseChecker] No case IDs found on page")
-        return {"new_cases": 0, "total_on_page": 0, "message": "No case IDs found"}
+    if not real_cases:
+        return {"new_cases": 0, "total_from_api": len(cases), "filtered": len(cases) - len(real_cases), "message": "All cases excluded by contact filter"}
 
-    logger.info(f"[CaseChecker] Found {len(extracted_ids)} case IDs on page")
+    # Build lookups from API data
+    case_info = {
+        str(c["id"]): {
+            "name": c.get("_casename", "Unknown"),
+            "status": c.get("casestatus", ""),
+            "casetype": c.get("casetype", ""),
+            "primary_contact": c.get("primary_contact", ""),
+            "doi": c.get("doi", ""),
+        }
+        for c in real_cases
+    }
+    extracted_ids = list(case_info.keys())
 
-    # 3. Compare against known_cases in Turso
-    known_rows = turso.fetch_all("SELECT case_id FROM known_cases")
-    known_ids = {str(r.get("case_id", "")) for r in known_rows}
+    logger.info(f"[CaseChecker] Found {len(extracted_ids)} real case IDs")
+
+    # 3. Compare against cases in Turso
+    known_rows = turso.fetch_all("SELECT id FROM cases")
+    known_ids = {str(r.get("id", "")) for r in known_rows}
 
     new_ids = [cid for cid in extracted_ids if cid not in known_ids]
     logger.info(f"[CaseChecker] {len(new_ids)} new case(s) detected (out of {len(extracted_ids)} total)")
@@ -60,15 +98,19 @@ async def run_case_checker() -> Dict[str, Any]:
     new_cases = []
     for case_id in new_ids:
         try:
-            # Try to get patient name from case page
-            patient_name = await _get_patient_name(case_id)
+            info = case_info.get(case_id, {})
+            patient_name = info.get("name", "Unknown")
+            case_status = info.get("status", "")
+            case_type = info.get("casetype", "")
+            primary_contact = info.get("primary_contact", "")
+            doi = info.get("doi", "")
 
             turso.execute(
-                "INSERT OR IGNORE INTO known_cases (case_id, patient_name, status, classification_status) VALUES (?, ?, 'new', 'pending')",
-                [case_id, patient_name]
+                "INSERT OR IGNORE INTO cases (id, patient_name, status, classification_status, casetype, casestatus, primary_contact, doi) VALUES (?, ?, 'new', 'pending', ?, ?, ?, ?)",
+                [case_id, patient_name, case_type, case_status, primary_contact, doi]
             )
-            new_cases.append({"case_id": case_id, "patient_name": patient_name})
-            logger.info(f"[CaseChecker] New case: {case_id} ({patient_name})")
+            new_cases.append({"case_id": case_id, "patient_name": patient_name, "casestatus": case_status, "casetype": case_type, "primary_contact": primary_contact})
+            logger.info(f"[CaseChecker] New case: {case_id} ({patient_name}) - {case_status}")
 
             # Auto-trigger provider email calls for the new case
             try:
@@ -86,13 +128,15 @@ async def run_case_checker() -> Dict[str, Any]:
 
     # Update last_checked for all known cases
     try:
-        turso.execute("UPDATE known_cases SET last_checked = datetime('now') WHERE case_id IN (SELECT case_id FROM known_cases)")
+        turso.execute("UPDATE cases SET last_checked = datetime('now')")
     except Exception:
         pass
 
     result = {
-        "total_on_page": len(extracted_ids),
-        "known_cases": len(known_ids),
+        "total_from_api": len(cases),
+        "filtered_out": len(cases) - len(real_cases),
+        "real_cases": len(extracted_ids),
+        "already_known": len(known_ids),
         "new_cases": len(new_cases),
         "new_case_details": new_cases,
     }
@@ -100,19 +144,3 @@ async def run_case_checker() -> Dict[str, Any]:
     return result
 
 
-async def _get_patient_name(case_id: str) -> str:
-    """Try to get the patient name from the case page."""
-    try:
-        from bs4 import BeautifulSoup
-        result = await asyncio.to_thread(casepeer_get, f"case/{case_id}/")
-        html = extract_html(result)
-        if html:
-            soup = BeautifulSoup(html, "html.parser")
-            title = soup.select_one("title")
-            if title:
-                match = re.match(r'(.*?)\s*-\s*Home', title.get_text())
-                if match:
-                    return match.group(1).strip()
-    except Exception as e:
-        logger.warning(f"[CaseChecker] Could not get patient name for {case_id}: {e}")
-    return "Unknown"

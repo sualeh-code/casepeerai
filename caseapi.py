@@ -3223,7 +3223,7 @@ async def get_workflow_runs(limit: int = 50, workflow: str = ""):
 @app.get("/internal-api/workflows/known-cases")
 async def get_known_cases():
     """Get all tracked cases from the case checker."""
-    rows = turso.fetch_all("SELECT * FROM known_cases ORDER BY discovered_at DESC LIMIT 100")
+    rows = turso.fetch_all("SELECT * FROM cases ORDER BY discovered_at DESC LIMIT 100")
     return {"cases": rows}
 
 

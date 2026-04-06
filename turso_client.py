@@ -75,8 +75,6 @@ class TursoClient:
             {"sql": "CREATE TABLE IF NOT EXISTS case_metrics (id INTEGER PRIMARY KEY AUTOINCREMENT, case_name TEXT, status TEXT, emails_received INTEGER DEFAULT 0, emails_sent INTEGER DEFAULT 0, savings REAL DEFAULT 0, revenue REAL DEFAULT 0, start_date DATETIME, end_date DATETIME, completion_time TEXT)"},
             # Conversation History — full AI chat per sender/thread for continuity
             {"sql": "CREATE TABLE IF NOT EXISTS conversation_history (id TEXT PRIMARY KEY, case_id TEXT, sender_email TEXT, thread_subject TEXT, messages_json TEXT, tools_used TEXT, last_intent TEXT, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP)"},
-            # Known Cases — replaces Google Sheets for case tracking
-            {"sql": "CREATE TABLE IF NOT EXISTS known_cases (case_id TEXT PRIMARY KEY, patient_name TEXT, status TEXT, discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP, classification_status TEXT DEFAULT 'pending', initial_negotiation_status TEXT DEFAULT 'pending', last_checked DATETIME)"},
             # Workflow Runs — tracks every automated workflow execution
             {"sql": "CREATE TABLE IF NOT EXISTS workflow_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, workflow_name TEXT NOT NULL, case_id TEXT, status TEXT DEFAULT 'running', started_at DATETIME DEFAULT CURRENT_TIMESTAMP, completed_at DATETIME, result_json TEXT, error TEXT, triggered_by TEXT DEFAULT 'scheduler')"},
             # Provider Calls — tracks Vapi phone calls to providers for email confirmation
@@ -115,6 +113,19 @@ class TursoClient:
             {"sql": "CREATE INDEX IF NOT EXISTS idx_provider_calls_status ON provider_calls(status)"},
             {"sql": "CREATE INDEX IF NOT EXISTS idx_provider_calls_scheduled ON provider_calls(scheduled_at)"},
             {"sql": "CREATE INDEX IF NOT EXISTS idx_provider_calls_phone ON provider_calls(provider_phone)"},
+            # Merge known_cases into cases: add new columns to cases
+            {"sql": "ALTER TABLE cases ADD COLUMN discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP"},
+            {"sql": "ALTER TABLE cases ADD COLUMN classification_status TEXT DEFAULT 'pending'"},
+            {"sql": "ALTER TABLE cases ADD COLUMN initial_negotiation_status TEXT DEFAULT 'pending'"},
+            {"sql": "ALTER TABLE cases ADD COLUMN last_checked DATETIME"},
+            {"sql": "ALTER TABLE cases ADD COLUMN casetype TEXT"},
+            {"sql": "ALTER TABLE cases ADD COLUMN casestatus TEXT"},
+            {"sql": "ALTER TABLE cases ADD COLUMN primary_contact TEXT"},
+            {"sql": "ALTER TABLE cases ADD COLUMN doi TEXT"},
+            # Migrate any existing known_cases data into cases
+            {"sql": "INSERT OR IGNORE INTO cases (id, patient_name, status, discovered_at, classification_status, initial_negotiation_status, last_checked) SELECT case_id, patient_name, status, discovered_at, classification_status, initial_negotiation_status, last_checked FROM known_cases"},
+            # Drop known_cases table
+            {"sql": "DROP TABLE IF EXISTS known_cases"},
         ]
         try:
             self.execute_many(statements)
