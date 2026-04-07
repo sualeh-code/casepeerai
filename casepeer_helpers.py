@@ -139,6 +139,26 @@ def casepeer_post_form(endpoint: str, form_body: str, timeout: int = 90) -> req.
     return session.post(url, data=form_body, headers=headers_copy, timeout=timeout, allow_redirects=True)
 
 
+def casepeer_patch(endpoint: str, data: Dict = None, timeout: int = 90) -> Dict[str, Any]:
+    """PATCH to CasePeer as multipart/form-data (used for document rename/category updates)."""
+    try:
+        session, headers, base_url, csrf_token = _get_session()
+        url = f"{base_url}/{endpoint.lstrip('/')}"
+        form = dict(data or {})
+        if csrf_token:
+            form["csrfmiddlewaretoken"] = csrf_token
+        headers_copy = dict(headers)
+        headers_copy.pop("Content-Type", None)
+        resp = session.patch(url, data=form, headers=headers_copy, timeout=timeout, allow_redirects=True)
+        try:
+            return resp.json()
+        except Exception:
+            return {"response": resp.text, "status_code": resp.status_code}
+    except Exception as e:
+        logger.error(f"CasePeer PATCH {endpoint} failed: {e}")
+        return {"error": str(e)}
+
+
 def casepeer_get_raw(endpoint: str, timeout: int = 90) -> req.Response:
     """GET and return the raw response object (for binary downloads etc.)."""
     session, headers, base_url, _ = _get_session()

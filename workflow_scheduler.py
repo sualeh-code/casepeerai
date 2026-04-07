@@ -205,6 +205,9 @@ async def trigger_workflow(workflow_name: str, case_id: str = "",
             elif workflow_name == "provider_calls":
                 from wf_provider_calls import run_provider_calls
                 result = await run_provider_calls(case_id)
+            elif workflow_name == "sync_providers":
+                from wf_sync_providers import run_sync_providers
+                result = await run_sync_providers(case_id)
             else:
                 result = {"error": f"Unknown workflow: {workflow_name}"}
                 try:

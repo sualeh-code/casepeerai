@@ -87,14 +87,23 @@ async def run_case_checker() -> Dict[str, Any]:
 
     logger.info(f"[CaseChecker] Found {len(extracted_ids)} real case IDs")
 
-    # 3. Compare against cases in Turso
-    known_rows = turso.fetch_all("SELECT id FROM cases")
+    # 3. Compare against cases already tracked by the case checker
+    # Only compare against cases that were discovered by this workflow (have discovered_at set)
+    # — not cases inserted by other workflows (negotiation, etc.) with different ID formats.
+    known_rows = turso.fetch_all("SELECT id FROM cases WHERE discovered_at IS NOT NULL")
     known_ids = {str(r.get("id", "")) for r in known_rows}
 
     new_ids = [cid for cid in extracted_ids if cid not in known_ids]
     logger.info(f"[CaseChecker] {len(new_ids)} new case(s) detected (out of {len(extracted_ids)} total)")
 
-    # 4. Store new cases in Turso and trigger classification
+    # First-run detection: if no cases have been discovered yet, do a silent seed
+    # (save all current cases as known without triggering any automation)
+    is_first_run = len(known_ids) == 0
+
+    if is_first_run:
+        logger.info("[CaseChecker] First run detected — seeding all current cases silently (no workflows triggered)")
+
+    # 4. Store new cases in Turso and optionally trigger workflows
     new_cases = []
     for case_id in new_ids:
         try:
@@ -106,22 +115,31 @@ async def run_case_checker() -> Dict[str, Any]:
             doi = info.get("doi", "")
 
             turso.execute(
-                "INSERT OR IGNORE INTO cases (id, patient_name, status, classification_status, casetype, casestatus, primary_contact, doi) VALUES (?, ?, 'new', 'pending', ?, ?, ?, ?)",
+                "INSERT OR IGNORE INTO cases (id, patient_name, status, classification_status, casetype, casestatus, primary_contact, doi, discovered_at) VALUES (?, ?, 'new', 'pending', ?, ?, ?, ?, datetime('now'))",
                 [case_id, patient_name, case_type, case_status, primary_contact, doi]
             )
+
+            if is_first_run:
+                # Silent seed — just record, don't trigger workflows
+                logger.info(f"[CaseChecker] Seeded: {case_id} ({patient_name})")
+                continue
+
             new_cases.append({"case_id": case_id, "patient_name": patient_name, "casestatus": case_status, "casetype": case_type, "primary_contact": primary_contact})
             logger.info(f"[CaseChecker] New case: {case_id} ({patient_name}) - {case_status}")
 
-            # Auto-trigger provider email calls for the new case
+            # Auto-trigger classification + provider calls for the new case
             try:
                 from turso_client import get_setting
+                from workflow_scheduler import trigger_workflow
+                await trigger_workflow("classification", case_id, triggered_by="case_checker_auto")
+                logger.info(f"[CaseChecker] Auto-triggered classification for case {case_id}")
+
                 auto_call = (get_setting("auto_provider_calls_enabled", "true") or "").lower() == "true"
                 if auto_call:
-                    from workflow_scheduler import trigger_workflow
                     await trigger_workflow("provider_calls", case_id, triggered_by="case_checker_auto")
                     logger.info(f"[CaseChecker] Auto-triggered provider calls for case {case_id}")
             except Exception as call_err:
-                logger.warning(f"[CaseChecker] Failed to auto-trigger provider calls for {case_id}: {call_err}")
+                logger.warning(f"[CaseChecker] Failed to auto-trigger workflows for {case_id}: {call_err}")
 
         except Exception as e:
             logger.error(f"[CaseChecker] Failed to process case {case_id}: {e}")
@@ -139,6 +157,7 @@ async def run_case_checker() -> Dict[str, Any]:
         "already_known": len(known_ids),
         "new_cases": len(new_cases),
         "new_case_details": new_cases,
+        "first_run_seed": is_first_run,
     }
     logger.info(f"[CaseChecker] Complete: {result}")
     return result
